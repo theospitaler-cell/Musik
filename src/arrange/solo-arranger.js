@@ -1,31 +1,21 @@
-// Solo-Noten: Fassung für EIN Instrument (melodisch) oder ein Schlagzeug-Solo-Chart.
-// Form: Intro (Hook) – Thema (mit eigenen Fill-Ins) – Variation – ausgeschriebenes
-// Solo über die Akkorde – Reprise als Höhepunkt – Coda.
+// Solo-Noten zum Mitspielen (Play-along): EINE Stimme – Instrument oder Schlagzeug –
+// 1:1 wie die Vorlage. Gleiche Taktzahl, gleicher Ablauf, gleiche Tonhöhen (nur eine
+// Oktavlage für das Instrument), gleiches Tempo/Timing – kein zusätzliches Intro,
+// keine Umstellung. Beim Schlagzeug kommen auf Wunsch Fills dazu, die im Groove bleiben.
 import { DIV } from '../core/constants.js';
 import { Rng } from '../core/rng.js';
-import { buildChord } from '../theory/chords.js';
 import { keyName, keyNameDe } from '../theory/keys.js';
-import {
-  normalizeChords,
-  sliceMelody,
-  sliceChords,
-  songMeasureTicks,
-  pickupNotes,
-  transposeSong,
-} from '../model/song.js';
+import { normalizeChords, songMeasureTicks } from '../model/song.js';
 import { getStyle } from './styles.js';
-import { getInstrument, withRange } from './instruments.js';
-import { chooseTransposition, ROLE_NAMES } from './planner.js';
+import { getInstrument, withRange, fitOctave } from './instruments.js';
+import { ROLE_NAMES } from './planner.js';
 import { difficultyRange, levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
-import { BlockCtx, cleanLine, shiftEvents, ev, addArt, placePc } from './context.js';
-import { placeMelody } from './gen/melody.js';
-import { genCounter } from './gen/counter.js';
-import { genSolo } from './gen/solo.js';
-import { genDrumsSegment, genDrumSolo, genDrumHits } from './gen/drums.js';
+import { BlockCtx, cleanLine, ev } from './context.js';
+import { articulate } from './gen/melody.js';
+import { genDrumsSegment, drumsFromNotes, addGrooveFills } from './gen/drums.js';
 import {
   enforceRange,
   insertBreaths,
-  decorate,
   applyDynamics,
   spellAll,
   simplifyForReading,
@@ -35,223 +25,123 @@ import {
   keyAtFactory,
 } from './post.js';
 
-function chordsPerBar(list, mt) {
-  return list.map((c, i) => ({ start: i * mt, dur: mt, chord: c }));
+function letterOf(n) {
+  return n < 26 ? String.fromCharCode(65 + n) : String.fromCharCode(65 + (n % 26)) + (Math.floor(n / 26) + 1);
 }
 
-// Fill-Ins in Melodie-Lücken in dieselbe Linie einbauen (Solist füllt selbst)
-function mergeFills(mel, fills, beat) {
-  const out = mel.map((e) => ({ ...e, art: [...e.art], fx: [...e.fx] }));
-  const attacks = out.map((e) => e.start);
-  const keep = [];
-  for (const f of fills) {
-    const end = f.start + f.dur;
-    if (attacks.some((a) => a >= f.start && a < end)) continue; // nie in eine Melodienote hinein
-    const held = out.find((m) => m.start < f.start && m.start + m.dur > f.start);
-    if (held) {
-      if (f.start - held.start < beat) continue; // Melodieton soll erst klingen
-      held.dur = f.start - held.start;
-    }
-    keep.push({ ...f, role: 'fill' });
-  }
-  return cleanLine([...out, ...keep]);
-}
-
-export function arrangeSolo(songIn, opts) {
+export function arrangeSolo(song, opts) {
   const style = getStyle(opts.style);
   const isDrums = opts.soloInstrument === 'drums';
   const lv = levelFor({ difficulty: opts.difficulty, voiceDifficulty: opts.voiceDifficulty }, 0);
   const instId = isDrums ? null : opts.soloInstrument || 'trumpet';
-  const shift = isDrums ? 0 : chooseTransposition(songIn, [instId], opts);
-  const song = transposeSong(songIn, shift);
-  const key = song.key;
+  const key = song.key; // keine Transposition: klingt wie die Datei
   const mt = songMeasureTicks(song);
   const M = song.measureCount;
-  const length = opts.length || 'normal';
   const rng = new Rng(opts.seed || 1);
-  let tempo = opts.tempo || null;
-  if (!tempo && song.tempo && style.tempoRange && song.tempo >= style.tempoRange[0] && song.tempo <= style.tempoRange[1]) tempo = song.tempo;
-  tempo = Math.round(tempo || style.defaultTempo);
-  const beat = song.meter.beatType === 8 && song.meter.beats % 3 === 0 && song.meter.beats > 3 ? (DIV * 3) / 2 : (DIV * 4) / song.meter.beatType;
+  // Tempo wie die Vorlage (zum Üben gibt es den Tempo-Regler im Player)
+  const tempo = Math.round(song.tempo || style.defaultTempo);
+  const compound = song.meter.beatType === 8 && song.meter.beats % 3 === 0 && song.meter.beats > 3;
+  const beat = compound ? (DIV * 3) / 2 : (DIV * 4) / song.meter.beatType;
   const inst = isDrums ? null : withRange(difficultyRange(getInstrument(instId), lv), opts.ranges ? opts.ranges[0] : null);
+  // Auftakt -> eigener Vorlauf-Takt, danach Takt 1 der Vorlage
+  const leadBars = song.pickup > 0 ? Math.ceil(song.pickup / mt) : 0;
+  const off = leadBars * mt;
+  const totalBars = M + leadBars;
   const sections = song.sections.length ? song.sections : [{ label: 'A', start: 0, length: M }];
-  const T = buildChord(key.tonicLof, key.mode === 'minor' ? 'minor' : style.id === 'funk' || style.id === 'secondline' ? 'dominant' : 'major');
-  const V7 = buildChord(key.tonicLof + 1, 'dominant');
-  const withImpro = opts.solo !== 'none' && length !== 'short';
 
-  // ---- Formplan (ca. Originallänge) ----
-  // Intro (kurz) – jeder Formteil einmal: erstes Auftreten = Thema mit Fill-Ins,
-  // Wiederholungen = Variation, instrumentaler/mittlerer Teil = Solo, letzter = Höhepunkt
+  // ---- Formteile = Abschnitte der Vorlage (nur Probenbuchstaben, keine Umstellung) ----
   const blocks = [];
-  const add = (b) => blocks.push({ keyShift: 0, key, intensity: 0.55, ...b });
-  const motif = sliceMelody(song, 0, Math.min(2, M));
-  const secInfo = sections.map((sec) => {
-    const mel = sliceMelody(song, sec.start, sec.start + sec.length);
-    return { sec, mel, instrumental: mel.length < Math.max(2, sec.length / 2) };
+  if (leadBars) blocks.push({ type: 'intro', name: 'Auftakt', heading: '', measures: leadBars, startBar: 0, rehearsal: null, dyn: style.dyn.theme, intensity: 0.5, key, keyShift: 0 });
+  sections.forEach((sec, i) => {
+    blocks.push({
+      type: 'theme',
+      name: `Teil ${sec.label}`,
+      heading: sec.label !== letterOf(i) ? `wie ${sec.label}` : '',
+      label: sec.label,
+      measures: sec.length,
+      startBar: leadBars + sec.start,
+      rehearsal: letterOf(i),
+      dyn: style.dyn.theme,
+      intensity: 0.6,
+      key,
+      keyShift: 0,
+      source: sec,
+    });
   });
-  let first = 0;
-  if (secInfo.length && secInfo[0].instrumental && secInfo[0].sec.length >= 2) {
-    const s0 = secInfo[0].sec;
-    add({ type: 'intro', name: 'Intro', measures: s0.length, chords: sliceChords(song, s0.start, s0.start + s0.length), role: isDrums ? 'groove-build' : 'hook', dyn: style.dyn.intro });
-    first = 1;
-  } else {
-    const introBars = M <= 12 ? 2 : 4;
-    add({ type: 'intro', name: 'Intro', measures: introBars, chords: chordsPerBar(introBars === 2 ? [T, V7] : [T, T, T, V7], mt), role: isDrums ? 'groove-build' : 'hook', dyn: style.dyn.intro });
-  }
-  const n = secInfo.length;
-  let soloAt = -1;
-  if (withImpro && n - first >= 3) {
-    const mid = (first + n - 1) / 2;
-    const cands = [];
-    for (let i = first + 1; i < n - 1; i++) cands.push(i);
-    const instr = cands.filter((i) => secInfo[i].instrumental);
-    const reps = cands.filter((i) => secInfo.slice(0, i).some((x) => x.sec.label === secInfo[i].sec.label));
-    const pick = (arr) => arr.sort((x, y) => Math.abs(x - mid) - Math.abs(y - mid))[0];
-    soloAt = instr.length ? pick(instr) : reps.length ? pick(reps) : n - first >= 4 ? pick(cands) : -1;
-  }
-  const seen = new Set();
-  for (let i = first; i < n; i++) {
-    const { sec, mel, instrumental } = secInfo[i];
-    const chords = sliceChords(song, sec.start, sec.start + sec.length);
-    const isLast = i === n - 1;
-    if (i === soloAt || (instrumental && !isLast && !isDrums)) {
-      add({ type: 'solo', name: isDrums ? 'Drum-Solo' : `Solo (${sec.label})`, measures: sec.length, chords, role: isDrums ? 'drumsolo' : 'solo', intensity: 0.75, dyn: style.dyn.solo === 'mp' ? 'mf' : style.dyn.solo, showChords: true, source: sec });
-    } else if (isLast && n - first >= 2) {
-      add({ type: 'shout', name: `Höhepunkt ${sec.label}`, measures: sec.length, chords, melody: mel, role: isDrums ? 'hits' : 'melodyClimax', source: sec, intensity: 0.95, dyn: style.dyn.shout });
-    } else if (seen.has(sec.label)) {
-      add({ type: 'variation', name: `Variation ${sec.label}`, measures: sec.length, chords, melody: mel, role: isDrums ? 'groove-hot' : 'melodyVar', source: sec, intensity: 0.7, dyn: style.dyn.variation || style.dyn.theme });
-    } else {
-      add({ type: 'theme', name: `Thema ${sec.label}`, measures: sec.length, chords, melody: mel, role: isDrums ? 'groove' : 'melody', source: sec, dyn: style.dyn.theme, leadIn: sec.start === 0 ? pickupNotes(song) : null });
-    }
-    seen.add(sec.label);
-  }
-  // Schluss: 2 Takte Schlussklang
-  add({
-    type: 'coda',
-    name: 'Schluss',
-    measures: 2,
-    chords: [{ start: 0, dur: 2 * mt, chord: buildChord(key.tonicLof, key.mode === 'minor' ? 'minor' : 'major') }],
-    melody: [],
-    role: isDrums ? 'hits' : 'melody',
-    tagBars: 0,
-    intensity: 0.9,
-    dyn: style.dyn.coda,
-  });
-  let bar = 0;
-  let letter = 0;
+  const songChords = normalizeChords(song.chords, M * mt);
   for (const b of blocks) {
-    b.startBar = bar;
-    if (b.type === 'intro') b.rehearsal = null;
-    else {
-      const n = letter++;
-      b.rehearsal = n < 26 ? String.fromCharCode(65 + n) : String.fromCharCode(65 + (n % 26)) + (Math.floor(n / 26) + 1);
-    }
-    b.chords = normalizeChords(b.chords, b.measures * mt);
-    // Segmente (für Notensatz/Dynamik): eine Rolle pro Stimme
-    const roleName = b.role === 'melodyVar' || b.role === 'melodyClimax' ? 'melody' : b.role;
-    if (b.type === 'coda' && !isDrums) b.segments = b.tagBars ? [{ bars: b.tagBars, roles: ['melody'], startBar: 0 }, { bars: 2, roles: ['final'], startBar: b.tagBars }] : [{ bars: 2, roles: ['final'], startBar: 0 }];
-    else b.segments = [{ bars: b.measures, roles: [isDrums ? 'rest' : roleName], startBar: 0, climax: b.type === 'shout' }];
-    bar += b.measures;
+    const a = (b.startBar - leadBars) * mt;
+    const e = a + b.measures * mt;
+    b.chords = normalizeChords(
+      songChords.filter((c) => c.start < e && c.start + c.dur > a).map((c) => ({ start: Math.max(0, c.start - a), dur: Math.min(e, c.start + c.dur) - Math.max(a, c.start), chord: c.chord })),
+      b.measures * mt,
+    );
+    if (!b.chords.length && songChords.length) b.chords = [{ start: 0, dur: b.measures * mt, chord: songChords[0].chord }];
+    b.segments = [{ bars: b.measures, roles: [isDrums ? 'rest' : 'melody'], startBar: 0 }];
   }
-  const totalBars = bar;
+  const chordTrack = normalizeChords(
+    songChords.map((c) => ({ ...c, start: c.start + off })).concat(leadBars && songChords.length ? [{ start: 0, dur: off, chord: songChords[0].chord }] : []),
+    totalBars * mt,
+  );
 
-  // ---- Generierung ----
-  const voices = isDrums ? [] : [{ inst, events: [], dirs: [], label: 'Solo' }];
-  const drumEvents = [];
-  const chordTrack = [];
-  const prevState = [{}];
-  const songMotif = motif;
-  const adapt = opts.adapt ?? 1;
-  const easy = lv !== null && lv <= 2;
-  for (const [bi, b] of blocks.entries()) {
-    const t0 = b.startBar * mt;
-    for (const c of b.chords) chordTrack.push({ start: c.start + t0, dur: c.dur, chord: c.chord });
-    const ctx = new BlockCtx({ style, rng: rng.fork(`s${bi}`), key, meter: song.meter, measures: b.measures, chords: b.chords, tempo, inst: [inst], block: b, intensity: b.intensity, songMotif, prevState });
-    ctx.melodyVoice = 0;
-    if (isDrums) {
-      let evs;
-      if (b.role === 'drumsolo') evs = genDrumSolo(ctx, b.measures);
-      else if (b.role === 'hits') {
-        evs = genDrumHits(ctx, b.melody || [], b.measures);
-        if (b.type === 'coda') evs = evs.filter((e) => e.start < (b.measures - 2) * mt).concat(genDrumsSegment(ctx, { mode: 'final', bars: 2, isBlockStart: false, isBlockEnd: true, hitsLine: [{ start: 0, dur: mt }, { start: mt, dur: 12, finalHit: true }], intensity: 1 }).map((e) => ({ ...e, start: e.start + (b.measures - 2) * mt })));
-      } else {
-        const hot = b.role === 'groove-hot';
-        ctx.intensity = hot ? 0.85 : b.role === 'groove-build' ? 0.4 : 0.6;
-        evs = genDrumsSegment(ctx, { mode: 'groove', bars: b.measures, isBlockStart: b.type !== 'intro', isBlockEnd: true, intensity: ctx.intensity });
-        if (b.role === 'groove-build') evs = evs.filter((e) => e.start >= mt || ['hh', 'ride', 'hhPedal'].includes(e.drum));
-      }
-      drumEvents.push(...evs.map((e) => ({ ...e, start: e.start + t0 })));
-      continue;
-    }
-    let line = [];
-    if (b.role === 'hook') {
-      line = placeMelody(ctx, 0, songMotif, { adapt: Math.max(1, adapt) }).line;
-      if (b.measures > 2) {
-        const sctx = Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, { chords: normalizeChords(sliceChordsRel(b.chords, 2 * mt, b.measures * mt), (b.measures - 2) * mt), measures: b.measures - 2, len: (b.measures - 2) * mt });
-        line = line.concat(shiftEvents(genSolo(sctx, 0, { lyrical: true }), 2 * mt));
-      }
-    } else if (b.role === 'melody' || b.role === 'melodyVar' || b.role === 'melodyClimax') {
-      const climax = b.role === 'melodyClimax';
-      const placed = placeMelody(ctx, 0, b.melody || [], { adapt: b.role === 'melodyVar' ? 2 : adapt, climax, preferUp: climax || b.role === 'melodyVar' });
-      line = placed.line;
-      b.melodyShift = placed.shift;
-      if (!easy) {
-        ctx.melodyLine = line;
-        const fills = genCounter(ctx, 0, line, { mode: 'fill', above: false });
-        line = mergeFills(line, fills, beat);
-      }
-      if (b.type === 'coda') {
-        // Schlusston
-        const fin = b.tagBars * mt;
-        line = line.filter((e) => e.start < fin);
-        const ch = b.chords[b.chords.length - 1].chord;
-        const target = Math.round((inst.comfort[0] + inst.comfort[1]) / 2 + (style.id === 'ballad' ? 0 : 4));
-        const m = placePc(ch.rootPc, target, inst.comfort[0], inst.range[1] - 1);
-        const hold = ev(fin, style.id === 'ballad' || style.id === 'classical' ? 2 * mt : mt - beat / 2, m, ch.rootLof);
-        hold.finalHold = true;
-        hold.role = 'final';
-        line.push(hold);
-        if (!(style.id === 'ballad' || style.id === 'classical')) {
-          const hit = ev(fin + mt, beat / 2, m, ch.rootLof);
-          addArt(hit, 'accent');
-          addArt(hit, 'staccato');
-          hit.finalHit = true;
-          hit.role = 'final';
-          line.push(hit);
-        }
-      }
-    } else if (b.role === 'solo') {
-      line = genSolo(ctx, 0, { lyrical: easy || style.id === 'ballad' || style.id === 'classical' });
-    }
-    const roleName = b.role === 'melodyVar' || b.role === 'melodyClimax' ? 'melody' : b.role;
-    voices[0].events.push(...shiftEvents(line, t0).map((e) => ({ ...e, role: e.role || roleName })));
-  }
-  // Auftakt ins Intro-Ende
+  // ---- Stimme ----
+  const voices = [];
+  let octave = 0;
   if (!isDrums) {
-    const th = blocks.find((b) => b.leadIn && b.leadIn.length);
-    if (th) {
-      const start = th.startBar * mt;
-      const notes = th.leadIn.map((n) => ({ start: start + n.start, dur: n.dur, pitches: [n.midi + (th.melodyShift || 0)], lofs: [n.lof], art: [], fx: [], role: 'melody' }));
-      const from = Math.min(...notes.map((n) => n.start));
-      const v = voices[0];
-      v.events = v.events.filter((e) => !(e.start >= from && e.start < start)).map((e) => (e.start < from && e.start + e.dur > from ? { ...e, dur: from - e.start } : e));
-      v.events.push(...notes);
+    const mel = song.melody.filter((n) => n.start + off >= 0 && n.start < M * mt);
+    octave = fitOctave(mel, inst).shift; // eine Oktavlage für das ganze Stück
+    const ctx = new BlockCtx({ style, rng: rng.fork('mel'), key, meter: song.meter, measures: totalBars, chords: chordTrack, tempo, inst: [inst], block: blocks[0], prevState: [{}] });
+    let line = cleanLine(mel.map((n) => ev(n.start + off, n.dur, n.midi + octave, n.lof)));
+    articulate(ctx, line, inst);
+    line = line.map((e) => ({ ...e, role: 'melody' }));
+    voices.push({ inst, events: line, dirs: [], label: 'Solo' });
+  }
+
+  // ---- Schlagzeug ----
+  let drumEvents = [];
+  let drumSource = null;
+  if (isDrums) {
+    const total = totalBars * mt;
+    if (song.drumNotes && song.drumNotes.length) {
+      drumEvents = drumsFromNotes(song.drumNotes, { offset: off, totalTicks: total, beat });
+      drumSource = song.source === 'audio' ? 'audio' : 'file';
+    }
+    if (!drumEvents.length) {
+      // Vorlage ohne Schlagzeug: Stil-Groove über exakt dieselben Takte
+      drumSource = 'style';
+      sections.forEach((sec, i) => {
+        const ctx = new BlockCtx({ style, rng: rng.fork(`d${i}`), key, meter: song.meter, measures: sec.length, chords: [], tempo, inst: [null], block: blocks[0], prevState: [{}] });
+        const evs = genDrumsSegment(ctx, { mode: 'groove', bars: sec.length, isBlockStart: true, isBlockEnd: i < sections.length - 1, intensity: 0.6 });
+        drumEvents.push(...evs.map((e) => ({ ...e, start: e.start + (leadBars + sec.start) * mt })));
+      });
+      // Letzter Takt: Schlussschlag (Crash + Bass Drum auf "1"), kein Fill ins Leere
+      const lastBar = (totalBars - 1) * mt;
+      drumEvents = drumEvents.filter((e) => e.start < lastBar);
+      const fin = genDrumsSegment(new BlockCtx({ style, rng: rng.fork('fin'), key, meter: song.meter, measures: 1, chords: [], tempo, inst: [null], block: blocks[0], prevState: [{}] }), { mode: 'final', bars: 1, isBlockStart: false, isBlockEnd: true, hitsLine: [{ start: 0, dur: mt, finalHit: true }], intensity: 1 });
+      drumEvents.push(...fin.map((e) => ({ ...e, start: e.start + lastBar })));
+    } else if (opts.drumFills !== false && lv !== 1) {
+      // Fills im Groove: am Ende jedes Formteils (2 Schläge) und nach 8-Takt-Phrasen (1 Schlag)
+      const fillBars = [];
+      sections.forEach((sec, i) => {
+        const s0 = leadBars + sec.start;
+        for (let k = 7; k < sec.length - 1; k += 8) fillBars.push({ bar: s0 + k, beats: 1 });
+        if (i < sections.length - 1) fillBars.push({ bar: s0 + sec.length - 1, beats: lv && lv <= 2 ? 1 : 2 });
+      });
+      drumEvents = addGrooveFills(drumEvents, { mt, beat, fillBars, lv });
     }
   }
 
-  // ---- Nachbearbeitung ----
+  // ---- Nachbearbeitung (ohne Verzierungen – Töne & Rhythmus bleiben wie in der Vorlage) ----
   const report = newReport();
-  for (const v of voices) v.events = cleanLine(v.events);
-  const arr = { voices, blocks, mt, beat, style, rng: rng.fork('post'), chordTrack: normalizeChords(chordTrack, totalBars * mt), keyAt: keyAtFactory(blocks, mt), tempo, levels: [lv] };
+  const arr = { voices, blocks, mt, beat, style, rng: rng.fork('post'), chordTrack, keyAt: keyAtFactory(blocks, mt), tempo, levels: [lv] };
   for (const v of voices) {
     enforceRange(v.events, v.inst, report);
     if (lv && lv < 4) {
       v.events = limitLeaps(simplifyRhythm(v.events, lv, mt, beat), lv, v.inst);
       enforceRange(v.events, v.inst, report);
     }
-    insertBreaths(v, v.inst, tempo, report, easy ? 0.75 : 1);
+    insertBreaths(v, v.inst, tempo, report, lv && lv <= 2 ? 0.75 : 1);
   }
-  decorate(arr, report);
   applyDynamics(arr);
   simplifyForReading(arr, song.meter);
   addPerformanceMarks(arr);
@@ -259,23 +149,29 @@ export function arrangeSolo(songIn, opts) {
   for (const v of voices) v.dirs.sort((a, b) => a.t - b.t);
   const drums = isDrums ? { name: 'Schlagzeug', events: dedupeDrums(simplifyDrums(drumEvents, lv)), dirs: [] } : null;
   if (drums) addPerformanceMarks({ ...arr, voices: [] }, drums);
+  // Pausentakte dürfen nicht "sim." bekommen – leere Takte bleiben leer
   const th = tempoHeading(style, tempo);
+  const warnings = [];
+  if (drumSource === 'style') warnings.push('Die Vorlage enthält kein Schlagzeug – der Groove ist im gewählten Stil über exakt dieselben Takte geschrieben.');
+  if (drumSource === 'audio') warnings.push('Schlagzeug aus der Aufnahme erkannt (Bass Drum, Snare, Hi-Hat je Formteil) – bitte mit dem Original anhören.');
+  if (!isDrums && octave) warnings.push(`Melodie für ${inst.name} um ${Math.abs(octave / 12)} Oktave${Math.abs(octave) > 12 ? 'n' : ''} ${octave > 0 ? 'höher' : 'tiefer'} gesetzt (gleiche Töne wie die Vorlage).`);
+  report.notes = (report.notes || []).concat(warnings);
   return {
     meta: {
       title: song.title,
       composer: song.composer,
-      arranger: 'Arr.: NoteCode',
-      subtitle: `${style.name} – Solo für ${isDrums ? 'Schlagzeug' : inst.name}`,
-      keyName: keyName(song.key),
-      keyNameDe: keyNameDe(song.key),
+      arranger: 'Play-along: NoteCode',
+      subtitle: `Solo für ${isDrums ? 'Schlagzeug' : inst.name} – Originalablauf`,
+      keyName: keyName(key),
+      keyNameDe: keyNameDe(key),
       tempo,
       tempoText: th.text,
       styleHint: th.hint,
-      swing: style.feel === 'swing8',
+      swing: !!song.swing || style.feel === 'swing8',
     },
     song,
     style,
-    key: song.key,
+    key,
     meter: song.meter,
     mt,
     beat,
@@ -285,27 +181,32 @@ export function arrangeSolo(songIn, opts) {
     voices,
     drums,
     blocks,
-    chordTrack: arr.chordTrack,
+    chordTrack,
     keyAt: arr.keyAt,
     keyChanges: [{ bar: 0, key }],
-    transposeShift: shift,
+    transposeShift: 0,
     form: { repeats: [], segnoBar: null, toCodaBar: null, dsBar: null, skip: null, codaBar: null },
     report,
     options: opts,
     levels: [lv],
     soloMode: true,
+    playAlong: true,
+    // Zeitbezug zur Vorlage: Takt "leadBars" = Takt 1 der Datei
+    sourceOffset: off,
+    timing: song.timing || null,
+    backing: playAlongBacking(song, off, isDrums),
     roleNames: ROLE_NAMES,
   };
 }
 
-function sliceChordsRel(chords, a, b) {
-  const out = [];
-  for (const c of chords) {
-    const s = Math.max(a, c.start);
-    const e = Math.min(b, c.start + c.dur);
-    if (e > s) out.push({ start: s - a, dur: e - s, chord: c.chord });
-  }
-  return out;
+// Original zum Mitspielen: Audio (über song.timing synchron) oder die Noten aller Spuren
+function playAlongBacking(song, off, isDrums) {
+  if (song.source === 'audio') return { kind: 'audio' };
+  const notes = (song.backing?.notes || []).map((n) => ({ ...n, start: n.start + off }));
+  const drums = (song.drumNotes || []).map((n) => ({ ...n, start: n.start + off }));
+  if (!notes.length && !drums.length) return null;
+  void isDrums;
+  return { kind: 'notes', notes, drums };
 }
 
 function dedupeDrums(events) {

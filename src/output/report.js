@@ -46,7 +46,7 @@ export function buildPlan(arr) {
       `Tonumfang-Korrekturen: ${r.rangeFixes}`,
       `Spezialeffekte: ${fxList.length ? fxList.join(', ') : '–'}`,
     ],
-    warnings: arr.song.warnings || [],
+    warnings: [...(arr.song.warnings || []), ...(r.notes || [])],
   };
 }
 

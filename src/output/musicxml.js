@@ -331,7 +331,7 @@ function blockAtBar(arr, m) {
 }
 
 function blockHeading(arr, b, voiceIdx) {
-  if (arr.soloMode) return b.name;
+  if (arr.soloMode) return b.heading ?? b.name;
   const seg = b.segments[0];
   const soloSeg = b.segments.find((sg) => sg.roles.includes('solo'));
   if (voiceIdx === null || voiceIdx === undefined) {
@@ -660,10 +660,11 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
           w.close('direction-type');
           w.close('direction');
         }
-        if (k > 0) {
+        const heading = k > 0 ? blockHeading(arr, block, isPart ? ps.idx : null) : '';
+        if (heading) {
           w.open('direction', { placement: 'above' });
           w.open('direction-type');
-          w.el('words', blockHeading(arr, block, isPart ? ps.idx : null), { 'font-size': 10, 'font-style': 'italic' });
+          w.el('words', heading, { 'font-size': 10, 'font-style': 'italic' });
           w.close('direction-type');
           w.close('direction');
         }
@@ -1141,10 +1142,11 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle
           w.close('direction-type');
           w.close('direction');
         }
-        if (k > 0) {
+        const heading = k > 0 ? (arr.soloMode ? block.heading ?? block.name : block.name) : '';
+        if (heading) {
           w.open('direction', { placement: 'above' });
           w.open('direction-type');
-          w.el('words', block.name, { 'font-size': 10, 'font-style': 'italic' });
+          w.el('words', heading, { 'font-size': 10, 'font-style': 'italic' });
           w.close('direction-type');
           w.close('direction');
         }

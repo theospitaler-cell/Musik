@@ -104,16 +104,60 @@ test('Schwierigkeit: Stufe 1 ohne 16tel & Effekte, Stufe pro Stimme', () => {
   assert.ok(easyHi <= Math.max(...pro.voices[0].events.flatMap((e) => e.pitches)), 'leichte Stufe nicht höher als Profi');
 });
 
-test('Solo-Noten: ein Instrument bzw. Schlagzeug-Chart', () => {
+test('Solo-Noten (Play-along): gleiche Länge, gleiche Töne & Rhythmen wie die Vorlage', () => {
   const grace = demoSong('grace');
-  const t = arrange(grace, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1 });
+  const t = arrange(grace, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1, style: 'funk' });
   assert.equal(t.voices.length, 1);
   assert.equal(t.drums, null);
-  assert.ok(t.voices[0].events.length > 30);
-  assert.ok(t.totalBars <= grace.measureCount + 6);
-  assert.ok(t.blocks.some((b) => b.type === 'solo'));
+  const lead = grace.pickup > 0 ? 1 : 0;
+  assert.equal(t.totalBars, grace.measureCount + lead, 'exakt so viele Takte wie die Datei');
+  // jede Melodienote an derselben Stelle, gleiche Tonhöhenklasse, eine einzige Oktavlage
+  const off = lead * t.mt;
+  const ev = t.voices[0].events;
+  const shifts = new Set();
+  for (const n of grace.melody) {
+    const e = ev.find((x) => x.start === n.start + off);
+    assert.ok(e, `Note bei ${n.start} vorhanden`);
+    shifts.add(e.pitches[0] - n.midi);
+  }
+  assert.equal(shifts.size, 1);
+  assert.equal([...shifts][0] % 12, 0);
+  assert.equal(ev.length, grace.melody.length, 'keine zusätzlichen Töne');
+  // Schlagzeug ohne Drum-Spur: Groove über exakt dieselben Takte
   const d = arrange(grace, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
   assert.equal(d.voices.length, 0);
+  assert.equal(d.totalBars, grace.measureCount + lead);
   assert.ok(d.drums.events.length > 100);
-  assert.ok(d.blocks.some((b) => b.name === 'Drum-Solo'));
+  assert.ok(d.drums.events.every((e) => e.start < d.totalBars * d.mt));
+});
+
+test('Schlagzeug-Play-along: Drum-Spur 1:1, Fills nur im Groove ergänzt', () => {
+  const sg = demoSong('ode');
+  const mt = 96;
+  const drumNotes = [];
+  for (let bar = 0; bar < sg.measureCount; bar++) {
+    for (let k = 0; k < 8; k++) drumNotes.push({ start: bar * mt + k * 12, dur: 6, midi: 42, vel: 80 });
+    drumNotes.push({ start: bar * mt, dur: 6, midi: 36, vel: 100 }, { start: bar * mt + 48, dur: 6, midi: 36, vel: 100 });
+    drumNotes.push({ start: bar * mt + 24, dur: 6, midi: 38, vel: 100 }, { start: bar * mt + 72, dur: 6, midi: 38, vel: 100 });
+    drumNotes.push({ start: bar * mt + 30, dur: 6, midi: 60, vel: 100 }); // Bongo -> wird nicht notiert
+  }
+  const song = { ...sg, pickup: 0, melody: sg.melody.filter((n) => n.start >= 0), drumNotes, sections: [{ label: 'A', start: 0, length: 8 }, { label: 'B', start: 8, length: sg.measureCount - 8 }] };
+  const plain = arrange(song, { ensemble: 'solo', soloInstrument: 'drums', drumFills: false });
+  assert.equal(plain.totalBars, song.measureCount);
+  const kit = drumNotes.filter((n) => n.midi !== 60);
+  assert.equal(plain.drums.events.length, kit.length, '1:1 übernommen');
+  for (const n of kit) assert.ok(plain.drums.events.some((e) => e.start === n.start && e.pitches[0] === n.midi));
+  const filled = arrange(song, { ensemble: 'solo', soloInstrument: 'drums' });
+  assert.equal(filled.totalBars, song.measureCount);
+  const fillBar = 7; // Ende von Teil A
+  const toms = filled.drums.events.filter((e) => e.start >= fillBar * mt && e.start < (fillBar + 1) * mt && [48, 45, 41].includes(e.pitches[0]));
+  assert.ok(toms.length >= 1, 'Fill am Formteil-Ende');
+  // Füße laufen im Fill weiter (gleicher Groove)
+  assert.ok(filled.drums.events.some((e) => e.start === fillBar * mt + 48 && e.pitches[0] === 36));
+  // Raster des Grooves (Achtel) bleibt erhalten
+  for (const e of filled.drums.events) assert.equal(e.start % 6, 0);
+  assert.ok(filled.drums.events.some((e) => e.start === 8 * mt && e.pitches[0] === 49), 'Crash nach dem Fill');
+  // außerhalb der Fill-Takte unverändert
+  const sig = (a, bar) => a.drums.events.filter((e) => e.start >= bar * mt && e.start < (bar + 1) * mt).map((e) => `${e.start}:${e.pitches[0]}`).sort().join();
+  assert.equal(sig(filled, 3), sig(plain, 3));
 });

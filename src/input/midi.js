@@ -136,12 +136,21 @@ export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
   const allNotes = parsed.tracks.filter((t) => !t.drum).flatMap((t) => toEvents(t.notes));
   const meter = parsed.meta.timeSig || { beats: 4, beatType: 4 };
   const key = parsed.meta.keySig ? makeKey(parsed.meta.keySig.fifths, parsed.meta.keySig.minor ? 'minor' : 'major') : null;
-  // Melodie-Start: führende Leertakte entfernen
+  // Zeitachse bleibt 1:1 wie in der Datei (wichtig zum Mitspielen)
   const mt = (meter.beats * DIV * 4) / meter.beatType;
-  const firstStart = Math.min(...melody.map((n) => n.start));
-  const shift = Math.floor(firstStart / mt) * mt;
-  for (const n of melody) n.start -= shift;
-  for (const n of allNotes) n.start -= shift;
+  // Schlagzeug (Kanal 10) und Original-Noten aller Spuren für die Wiedergabe
+  const drumNotes = [];
+  const backingNotes = [];
+  parsed.tracks.forEach((t) => {
+    for (const n of t.notes) {
+      const s0 = Math.round(quantizeTick(conv(n.start), DIV));
+      let e0 = Math.round(quantizeTick(conv(n.end), DIV));
+      if (e0 <= s0) e0 = s0 + DIV / 4;
+      if (n.ch === 9) drumNotes.push({ start: s0, dur: Math.min(e0 - s0, DIV / 2), midi: n.key, vel: n.vel });
+      else backingNotes.push({ start: s0, dur: e0 - s0, midi: n.key, vel: n.vel, program: t.program ?? 0 });
+    }
+  });
+  const lastEnd = Math.max(0, ...[...backingNotes, ...drumNotes].map((n) => n.start + n.dur));
   const song = {
     title: title || parsed.tracks.find((t) => t.name && !/^Spur/.test(t.name))?.name || 'MIDI-Import',
     composer: null,
@@ -150,12 +159,14 @@ export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
     tempo: parsed.meta.tempo ? Math.round(parsed.meta.tempo) : 100,
     swing: false,
     pickup: 0,
-    measureCount: 0,
+    measureCount: Math.max(1, Math.ceil(lastEnd / mt - 0.01)),
     melody,
     chords: [],
     sections: [],
     warnings: ['MIDI enthält keine Akkordsymbole – Harmonik wurde automatisch analysiert.'],
     source: 'midi',
+    drumNotes,
+    backing: { notes: backingNotes },
     parts: desc,
     melodyPart: melIdx,
   };

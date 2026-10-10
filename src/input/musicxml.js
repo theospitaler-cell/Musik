@@ -111,7 +111,14 @@ export function scanScore(xmlText) {
   let composer = null;
   for (const c of root.find('creator')) if (c.attrs.type === 'composer') composer = c.text;
   const partInfo = {};
-  for (const sp of root.find('score-part')) partInfo[sp.attrs.id] = { name: sp.val('part-name') || sp.attrs.id };
+  for (const sp of root.find('score-part')) {
+    const unp = {};
+    for (const mi of sp.all('midi-instrument')) {
+      const u = mi.num('midi-unpitched');
+      if (u) unp[mi.attrs.id] = u - 1;
+    }
+    partInfo[sp.attrs.id] = { name: sp.val('part-name') || sp.attrs.id, unpitched: unp };
+  }
 
   const parts = [];
   let meter = null;
@@ -197,6 +204,15 @@ export function scanScore(xmlText) {
             if (el.has('rest')) break;
             if (el.has('unpitched')) {
               unpitchedCount++;
+              const instId = el.child('instrument')?.attrs.id;
+              let gm = instId ? partInfo[part.attrs.id]?.unpitched?.[instId] : undefined;
+              if (gm === undefined) {
+                const ds = el.val('unpitched/display-step');
+                const dO = el.num('unpitched/display-octave', 4);
+                gm = { F4: 36, E4: 36, C5: 38, B4: 38, G5: 42, A5: 49, F5: 51, E5: 48, D5: 45, A4: 41, D4: 44 }[`${ds}${dO}`] ?? 38;
+              }
+              mm.drums = mm.drums || [];
+              mm.drums.push({ start: Math.round((start * DIV) / divisions), dur: Math.round((dur * DIV) / divisions), midi: gm, vel: 90 });
               break;
             }
             const step = el.val('pitch/step');
@@ -358,6 +374,15 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
   }
   const melody = staff1.filter((n) => n.voice === melVoice).map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, lof: n.lof }));
 
+  // Schlagzeug & Original-Noten (für Play-along-Wiedergabe)
+  const drumNotes = [];
+  scan.parts.forEach((p) => {
+    order.forEach((mIdx, k) => {
+      for (const d of p.measures[mIdx]?.drums || []) drumNotes.push({ ...d, start: starts[k] + d.start });
+    });
+  });
+  const backingNotes = merged.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, vel: 80, program: 0 }));
+
   // Akkorde: erste Stimme mit Harmonien
   const chords = [];
   for (const p of scan.parts) {
@@ -389,6 +414,8 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
     sections,
     warnings,
     source: 'musicxml',
+    drumNotes,
+    backing: { notes: backingNotes },
     parts: describeParts(scan),
     melodyPart: melIdx,
   };
