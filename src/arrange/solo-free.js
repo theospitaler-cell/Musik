@@ -19,6 +19,7 @@ import { difficultyRange, levelFor, simplifyRhythm, limitLeaps, simplifyDrums, f
 import { BlockCtx, cleanLine, ev, addArt, addFx } from './context.js';
 import { articulate } from './gen/melody.js';
 import { embellishLine } from './embellish.js';
+import { reduceSyllableRepeats } from './rules.js';
 import { genDrumsSegment, genDrumHits } from './gen/drums.js';
 import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, newReport, keyAtFactory } from './post.js';
 
@@ -183,7 +184,15 @@ export function arrangeSoloFree(songIn, opts) {
       v.events = limitLeaps(simplifyRhythm(v.events, lv, mt, beat), lv, v.inst);
       enforceRange(v.events, v.inst, report);
     }
-    insertBreaths(v, v.inst, tempo, report, lv && lv <= 2 ? 0.75 : 1);
+    // Gesangslinie lesbar (Silbenwiederholungen -> längere Töne mit Tenuto), Atem spätestens nach 4 Takten
+    if (!isDrums) {
+      const r = reduceSyllableRepeats(v.events, lv, beat);
+      if (r.merged) {
+        v.events = r.events;
+        report.syllables = (report.syllables || 0) + r.merged;
+      }
+    }
+    insertBreaths(v, v.inst, tempo, report, lv && lv <= 2 ? 0.75 : 1, 4 * mt);
     decorateSolo(v, { style, mt, beat, lv, rng: rng.fork('fx'), report });
   }
   applyDynamics(arr);

@@ -212,3 +212,42 @@ for (const c of CORPUS) {
     else assert.deepEqual(marks, [], `unerwartete Tempoangaben ${marks}`);
   });
 }
+
+test('Lokale KI + Signalanalyse: Tonwiederholungen werden getrennt, Schlagzeug-Transienten nicht', async () => {
+  const { fuseMelody } = await import('../src/input/ai-pitch.js');
+  // Analyse: ein langer Ton 67 (0–1,2 s) und Melodie drumherum; KI: Neuanschlag bei 0,6 s
+  const mel = [
+    { s: 0, e: 1.2, midi: 67 },
+    { s: 1.2, e: 1.8, midi: 69 },
+    { s: 1.8, e: 2.4, midi: 71 },
+    { s: 2.4, e: 3.0, midi: 72 },
+    { s: 3.0, e: 3.6, midi: 74 },
+  ];
+  const ai = [
+    { start: 0.01, end: 0.58, midi: 67, amp: 0.75 },
+    { start: 0.61, end: 1.18, midi: 67, amp: 0.74 },
+    { start: 1.21, end: 1.78, midi: 69, amp: 0.76 },
+    { start: 1.81, end: 2.38, midi: 71, amp: 0.75 },
+    { start: 2.41, end: 2.98, midi: 72, amp: 0.73 },
+    { start: 3.01, end: 3.58, midi: 74, amp: 0.77 },
+  ];
+  const yes = fuseMelody(mel, ai, { reattack: () => true });
+  assert.equal(yes.melody.filter((n) => n.midi === 67).length, 2, 'Tonwiederholung erkannt');
+  const no = fuseMelody(mel, ai, { reattack: () => false });
+  assert.equal(no.melody.filter((n) => n.midi === 67).length, 1, 'kein echter Neuanschlag -> nicht teilen');
+  // Oktavfehler der Analyse wird mit sicherer KI korrigiert
+  const oct = fuseMelody([{ s: 0, e: 0.5, midi: 79 }, ...mel.slice(1)], [{ start: 0.01, end: 0.5, midi: 67, amp: 0.8 }, ...ai.slice(2)]);
+  assert.equal(oct.melody[0].midi, 67);
+});
+
+test('Lokale KI (Basic Pitch) läuft lokal und liefert Melodie, Bass & Begleitung', async () => {
+  const { runBasicPitch, aiNotes } = await import('../src/input/ai-pitch.js');
+  const s = synthSong({ groove: 'rock8', bars: 4, bpm: 120, seed: 2 });
+  const notes = aiNotes(await runBasicPitch(s.audio));
+  // jede Melodienote wird gehört (Einsatz ±70 ms, gleiche Tonhöhe)
+  const hit = s.melody.filter((t) => notes.some((n) => Math.abs(n.start - t.sec) < 0.07 && n.midi === t.midi)).length;
+  assert.ok(hit / s.melody.length >= 0.9, `KI-Melodie ${hit}/${s.melody.length}`);
+  assert.ok(notes.some((n) => n.midi < 50), 'Bass gehört');
+  const song = transcribe(s.audio, { ai: notes });
+  assert.ok(song.tracks.some((t) => t.id === 'ai-bass') && song.tracks.some((t) => t.id === 'ai-melody'));
+});

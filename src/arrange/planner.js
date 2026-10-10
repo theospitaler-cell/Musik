@@ -41,7 +41,9 @@ export function chooseTransposition(song, voices, opts) {
   if (opts.transpose !== 'auto') return 0;
   const insts = voices.map(getInstrument);
   const transposing = insts.filter((i) => i.transpose.semis % 12 !== 0 || i.family === 'brass' || i.family === 'sax');
-  if (!transposing.length) return 0;
+  // Gitarren-Kreuztonarten (E, H, Fis, Cis …) sind für alle Bläser unbequem -> auch Holzbläser
+  const sharpKey = song.key.fifths >= 4 || song.key.fifths <= -6;
+  if (!transposing.length && !(sharpKey && insts.some((i) => i.family === 'woodwind'))) return 0;
   let best = { shift: 0, cost: Infinity };
   for (const shift of [0, -1, 1, -2, 2]) {
     const k = transposeKey(song.key, shift);
@@ -96,10 +98,10 @@ function melodyFits(notes, inst) {
   return f.outOfRange === 0 && f.penalty < 3;
 }
 
-function soloIndex(opt) {
+function soloIndex(opt, count = 4) {
   if (opt === 'none' || opt === 'rotate') return null;
   const n = typeof opt === 'number' ? opt : Number(String(opt).replace(/\D/g, '')) - 1;
-  return Number.isFinite(n) && n >= 0 && n < 4 ? n : 0;
+  return Number.isFinite(n) && n >= 0 && n < count ? n : 0;
 }
 
 // Rollen für einen Themenabschnitt mit Melodie in Stimme mv
@@ -123,18 +125,119 @@ function soloRoles(sv, insts) {
   return roles;
 }
 
+// ---- Besetzung 2–8: vier musikalische Funktionen auf die echten Stimmen ----
+// Lead (immer Stimme 1, oben), obere & untere Mittelstimme (Guide-Tones), Bass; weitere
+// Stimmen verdoppeln/teilen je nach Dichte des Formteils.
+const center = (inst) => (inst.comfort[0] + inst.comfort[1]) / 2;
+export function voiceSlots(insts) {
+  const n = insts.length;
+  const lead = 0;
+  const rest = insts.map((_, i) => i).filter((i) => i !== lead);
+  // Bass: tiefstes bass-taugliches Instrument, sonst tiefstes überhaupt
+  let bass = null;
+  if (rest.length) {
+    const cands = rest.filter((i) => insts[i].bassCapable);
+    const pool = cands.length ? cands : rest;
+    bass = pool.reduce((a, b) => (center(insts[b]) < center(insts[a]) ? b : a), pool[0]);
+  }
+  const middles = rest.filter((i) => i !== bass).sort((a, b) => center(insts[b]) - center(insts[a]) || a - b);
+  const upper = middles[0] ?? null;
+  const lower = middles[1] ?? null;
+  const extras = middles.slice(2);
+  // Klangreihenfolge von oben nach unten (für homophone Sätze)
+  const order = [lead, ...middles, ...(bass !== null ? [bass] : [])];
+  return { n, lead, upper, lower, bass, extras, order, slotVoice: [lead, upper, lower, bass] };
+}
+
+const LEAD_SLOT_ROLES = ['melody', 'hook', 'subject', 'solo'];
+const GROUP_ROLES = ['tutti', 'hits', 'riff', 'final'];
+const HARMONY_ROLES = ['comp', 'pad', 'stabs', 'background'];
+
+// 4 Funktions-Rollen -> Rollen für n Stimmen
+export function expandRoles(r4, slots, insts, density = null) {
+  const out = new Array(slots.n).fill('rest');
+  slots.slotVoice.forEach((v, s) => {
+    if (v !== null && v !== undefined) out[v] = r4[s];
+  });
+  // weggefallene Mittelstimmen (Duo/Trio): Führungsrollen nicht verlieren
+  for (const s of [1, 2]) {
+    if (slots.slotVoice[s] !== null || !LEAD_SLOT_ROLES.includes(r4[s])) continue;
+    const target = !LEAD_SLOT_ROLES.includes(out[slots.lead]) ? slots.lead : slots.upper;
+    if (target !== null) out[target] = r4[s];
+  }
+  if (slots.n === 3 && slots.lower === null && r4[1] === 'rest' && r4[2] !== 'rest' && slots.upper !== null && !LEAD_SLOT_ROLES.includes(out[slots.upper])) out[slots.upper] = r4[2];
+  // Duo ohne Bassinstrument: zweite Stimme als Gegenstimme statt Basslinie
+  if (slots.n === 2 && slots.bass !== null && r4[3] === 'bass' && !insts[slots.bass].bassCapable) out[slots.bass] = r4[0] === 'melody' ? 'counter' : r4[1] !== 'rest' ? r4[1] : 'counter';
+  const group = r4.find((r) => GROUP_ROLES.includes(r) && r !== 'riff') || (r4.filter((r) => r === 'riff').length >= 2 ? 'riff' : null);
+  const harm = HARMONY_ROLES.includes(r4[2]) ? r4[2] : HARMONY_ROLES.includes(r4[1]) ? r4[1] : null;
+  slots.extras.forEach((v, k) => {
+    if (group) out[v] = group;
+    else if (r4.includes('solo')) out[v] = harm && k < 2 ? harm : 'rest';
+    else if (density === 'thin') out[v] = 'rest';
+    else if (density === 'build') out[v] = k < 2 ? 'pad' : 'rest';
+    else if (density === 'full' && r4[0] === 'melody' && k === 0) out[v] = 'double';
+    else out[v] = harm || 'rest';
+  });
+  return out;
+}
+
+// Funktion/Dichte der Formteile wie in professionellen Arrangements:
+// Strophe dünn (Melodie + Bass + Einwürfe), Pre-Chorus aufbauend (Vorhalte, Gegenbewegung),
+// Refrain voll (breite Akkorde). Refrain = häufigster gesungener Formteil.
+export function sectionDensity(sections, song) {
+  const n = sections.length;
+  const sung = sections.map((sec) => sliceMelody(song, sec.start, sec.start + sec.length).length >= Math.max(2, sec.length / 2));
+  const count = {};
+  sections.forEach((sec, i) => {
+    if (sung[i]) count[sec.label] = (count[sec.label] || 0) + 1;
+  });
+  const meanPitch = (label) => {
+    const ns = sections.filter((x) => x.label === label).flatMap((x) => sliceMelody(song, x.start, x.start + x.length));
+    return ns.length ? ns.reduce((a, b) => a + b.midi, 0) / ns.length : 0;
+  };
+  const labels = Object.keys(count).filter((l) => count[l] >= 2);
+  labels.sort((a, b) => count[b] - count[a] || meanPitch(b) - meanPitch(a));
+  const chorus = labels[0] || null;
+  const out = new Array(n).fill('full');
+  const seen = {};
+  sections.forEach((sec, i) => {
+    const occ = (seen[sec.label] = (seen[sec.label] || 0) + 1) - 1;
+    if (!chorus) out[i] = i < n / 3 ? 'thin' : i < (2 * n) / 3 ? 'build' : 'full';
+    else if (sections[0].label === chorus) {
+      // Strophenlied/AABA: erst dünn, dann aufbauen, ab der 3. Wiederholung voll
+      out[i] = sec.label === chorus ? (occ === 0 ? 'thin' : occ === 1 ? 'build' : 'full') : 'build';
+    } else if (sec.label === chorus) out[i] = 'full';
+    else if (sections[i + 1] && sections[i + 1].label === chorus) out[i] = occ === 0 && i === 0 ? 'thin' : 'build';
+    else out[i] = occ === 0 ? 'thin' : 'build';
+  });
+  return { density: out, chorus };
+}
+
+// Rollen (4 Funktionen) je Dichte, stilgerecht
+function densityRoles(density, style) {
+  const harm = style.id === 'ballad' || style.id === 'classical' ? 'pad' : style.id === 'funk' || style.id === 'secondline' ? 'stabs' : 'comp';
+  if (density === 'thin') return ['melody', 'fill', 'rest', 'bass'];
+  if (density === 'build') return ['melody', 'pad', 'counter', 'bass'];
+  return ['melody', harm, harm === 'pad' ? 'pad' : 'comp', 'bass'];
+}
+
 // ---- Hauptfunktion -----------------------------------------------------
 export function planArrangement(songIn, opts) {
   const style = getStyle(opts.style);
   // Schwierigkeit (Lage) zuerst, eigener Tonumfang hat Vorrang
-  const insts = opts.voices.map((id, i) => withRange(difficultyRange(getInstrument(id), levelFor(opts, i)), opts.ranges ? opts.ranges[i] : null));
+  const realInsts = opts.voices.map((id, i) => withRange(difficultyRange(getInstrument(id), levelFor(opts, i)), opts.ranges ? opts.ranges[i] : null));
+  const slots = voiceSlots(realInsts);
+  // Planung mit 4 Funktionen; fehlende Funktionen (Duo/Trio) leihen sich ein vorhandenes Instrument
+  const insts = slots.slotVoice.map((v, s) => realInsts[v ?? (s === 2 ? slots.upper ?? slots.lead : s === 1 ? slots.lead : slots.bass ?? slots.lead)]);
   const shift = chooseTransposition(songIn, opts.voices, opts);
   const song = transposeSong(songIn, shift);
   const key = song.key;
   const mt = songMeasureTicks(song);
   const M = song.measureCount;
   const length = opts.length || 'normal';
-  const soloPref = soloIndex(opts.solo ?? 0);
+  // Solist: echte Stimme -> Funktion (Zusatzstimmen solieren als obere Mittelstimme)
+  const soloReal = soloIndex(opts.solo ?? 0, realInsts.length);
+  const soloPref = soloReal === null ? null : Math.max(0, slots.slotVoice.indexOf(soloReal)) || (soloReal === slots.lead ? 0 : 1);
   const rotate = opts.solo === 'rotate';
   const noSolo = opts.solo === 'none';
   const steps = mt / 6;
@@ -258,15 +361,9 @@ export function planArrangement(songIn, opts) {
       let name = `Thema ${sec.label}`;
       let intensity = 0.5;
       if (mode === 'theme') {
-        if (i === 0) mv = 0;
-        else if (!firstOfLabel.has(sec.label)) {
-          // neue Formteil-Farbe: Solist oder Tenor
-          mv = soloPref !== null && soloPref !== 0 && ![...firstOfLabel.values()].includes(soloPref) ? soloPref : rotation[(++rotIdx) % 4];
-        } else {
-          mv = rotation[(++rotIdx) % 4];
-        }
-        if (mv === prevVoice) mv = rotation[(++rotIdx) % 4];
-        intensity = 0.45 + 0.1 * (i / Math.max(1, sections.length - 1));
+        // Stimme 1 = Lead/Melodie, immer oben (wie in Verlagsarrangements)
+        mv = 0;
+        intensity = { thin: 0.42, build: 0.58, full: 0.78 }[dens.density[i]] ?? 0.5;
       } else if (mode === 'trio') {
         mv = 2;
         type = 'trio';
@@ -289,20 +386,18 @@ export function planArrangement(songIn, opts) {
           intensity = 0.95;
         }
       }
-      // passt die Melodie in das Instrument?
-      const tryOrder = [mv, ...rotation.filter((x) => x !== mv)];
-      mv = tryOrder.find((v) => melodyFits(melody, insts[v])) ?? 0;
+      // passt die Melodie gar nicht in Stimme 1, übernimmt eine andere Stimme
+      if (!melodyFits(melody, insts[mv])) {
+        const tryOrder = [mv, ...rotation.filter((x) => x !== mv)];
+        mv = tryOrder.find((v) => melodyFits(melody, insts[v])) ?? 0;
+      }
       if (mode === 'theme' && !firstOfLabel.has(sec.label)) firstOfLabel.set(sec.label, mv);
       if (type === 'shout') roles = ['tutti', 'tutti', 'tutti', 'bass'];
+      else if (mode === 'theme' && mv === 0) roles = densityRoles(dens.density[i], style);
       else roles = themeRoles(mv, insts, i + pass);
-      // Steigerung: im allerersten Themenabschnitt spielt die Gegenstimme zunächst nur
-      // Liegeklänge (voller Satz, aber Raum für die Melodie) – erst danach Gegenmelodien
-      if (mode === 'theme' && i === 0 && sections.length >= 2) {
-        const idle = roles.findIndex((r, k) => k !== mv && (r === 'counter' || r === 'fill'));
-        if (idle >= 0) roles = roles.map((r, k) => (k === idle ? 'pad' : r));
-      }
       if (type === 'shout') mv = 0;
       prevVoice = mv;
+      const density = mode === 'theme' ? dens.density[i] : null;
       const block = {
         type,
         name,
@@ -310,7 +405,10 @@ export function planArrangement(songIn, opts) {
         chords,
         melody,
         melodyVoice: mv,
-        segments: [{ bars: sec.length, roles }],
+        density,
+        // erste Vorstellung eines Formteils: Melodie exakt wie im Original (Wiedererkennung)
+        firstStatement: mode === 'theme' && (firstOfLabel.get(sec.label) === mv && !res.some((x) => x.source.label === sec.label)),
+        segments: [{ bars: sec.length, roles, density, susp: density === 'build' }],
         intensity,
         dyn: style.dyn[type === 'trio' ? 'theme' : type] || style.dyn.theme,
         keyShift,
@@ -382,7 +480,7 @@ export function planArrangement(songIn, opts) {
       let i = 0;
       for (let b = 0; b < bars; b += segLen, i++) {
         const sv = order[i % 4];
-        segs.push({ bars: Math.min(segLen, bars - b), roles: soloRoles(sv, insts), soloVoice: sv, note: `Solo: Stimme ${sv + 1} (${insts[sv].name})` });
+        segs.push({ bars: Math.min(segLen, bars - b), roles: soloRoles(sv, insts), soloVoice: sv, note: `Solo: ${insts[sv].name}` });
       }
     } else {
       const sv = soloPref ?? 0;
@@ -452,6 +550,7 @@ export function planArrangement(songIn, opts) {
   // einen instrumentalen oder wiederholten Mittelteil, der letzte Refrain wird zum
   // Shout Chorus; dazu nur ein kurzes Intro und ein kurzer Schluss.
   const form = { segnoBlock: null, toCodaBlock: null, dsAfterBlock: null, codaBlock: null };
+  const dens = sectionDensity(sections, song);
   const theme = themeBlocks(0, 0, 'theme');
   for (const b of theme) b.instrumental = (b.melody || []).length < Math.max(2, b.measures / 2);
   const labelCount = {};
@@ -515,6 +614,24 @@ export function planArrangement(songIn, opts) {
   });
   add(codaBlock(0, { finalOnly: true }));
 
+  // Dynamik nach Dichte: Strophe mf (Ballade mp), Aufbau mf, Refrain f
+  const LEVELS = ['pp', 'p', 'mp', 'mf', 'f', 'ff'];
+  const up = (d, k) => LEVELS[Math.max(0, Math.min(LEVELS.length - 1, LEVELS.indexOf(d) + k))] || d;
+  for (const b of blocks) {
+    if (b.type !== 'theme' || !b.density) continue;
+    const base = style.dyn.theme || 'mf';
+    b.dyn = b.density === 'full' ? up(base, 1) : b.density === 'thin' && style.id === 'ballad' ? up(base, -1) : base;
+  }
+  // Rollen der 4 Funktionen auf die echten Stimmen (2–8) verteilen
+  for (const b of blocks) {
+    for (const seg of b.segments) {
+      seg.slotRoles = seg.roles;
+      seg.roles = expandRoles(seg.roles, slots, realInsts, seg.density ?? b.density ?? null);
+      if (seg.soloVoice !== undefined && seg.soloVoice !== null) seg.soloVoice = slots.slotVoice[seg.soloVoice] ?? slots.lead;
+    }
+    if (b.melodyVoice !== undefined && b.melodyVoice !== null) b.melodyVoice = slots.slotVoice[b.melodyVoice] ?? slots.lead;
+  }
+
   // Probenbuchstaben & Taktpositionen
   let bar = 0;
   let letter = 0;
@@ -535,7 +652,7 @@ export function planArrangement(songIn, opts) {
       s += seg.bars;
     }
   }
-  return { blocks, song, key, shift, style, insts, totalBars: bar, mt, form };
+  return { blocks, song, key, shift, style, insts: realInsts, slots, totalBars: bar, mt, form };
 }
 
 export function describeKeyShift(semis) {

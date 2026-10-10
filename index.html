@@ -42,11 +42,16 @@
     <main>
       <!-- ====================== ARRANGIEREN ====================== -->
       <section class="view active" id="view-arrange">
-        <div class="arrange-grid">
-          <aside class="steps">
-            <!-- Schritt 1 -->
-            <div class="card step" id="step-source">
-              <div class="step-head"><span class="step-num">1</span><h2>Vorlage</h2></div>
+        <!-- Geöffnete Lieder als Tabs -->
+        <div class="song-tabs" id="song-tabs">
+          <div class="song-tab-list" id="song-tab-list" role="tablist" aria-label="Geöffnete Projekte"></div>
+          <button class="song-tab-add" id="tab-add" title="Neues Projekt in neuem Tab" aria-label="Neues Projekt"><svg><use href="#i-plus" /></svg></button>
+        </div>
+        <div class="arrange-grid" id="arrange-grid">
+          <aside class="steps" id="steps">
+            <!-- 1 Vorlage -->
+            <section class="card step" id="step-source">
+              <div class="step-head"><span class="step-num">1</span><div class="step-title"><h2>Vorlage</h2><p>Song als Datei oder als ABC-Text</p></div></div>
               <div class="segmented" role="tablist" id="source-tabs">
                 <button class="seg active" data-src="file">Datei</button>
                 <button class="seg" data-src="abc">Text (ABC)</button>
@@ -64,46 +69,52 @@
                 <div class="row-end"><button class="btn ghost small" id="abc-load">Übernehmen</button></div>
               </div>
               <div class="analysis hidden" id="analysis"></div>
-            </div>
+            </section>
 
-            <!-- Schritt 2 -->
-            <div class="card step" id="step-band">
-              <div class="step-head"><span class="step-num">2</span><h2>Besetzung</h2></div>
+            <!-- 2 Besetzung -->
+            <section class="card step" id="step-band">
+              <div class="step-head"><span class="step-num">2</span><div class="step-title"><h2>Besetzung</h2><p>Wer spielt – und wie viele?</p></div></div>
               <div class="segmented" id="ensemble-tabs">
                 <button class="seg active" data-ens="quartet">Mehrere</button>
                 <button class="seg" data-ens="solo">Solo</button>
                 <button class="seg" data-ens="drums">Schlagzeug</button>
               </div>
-              <div class="ens-panel" data-enspanel="drums">
-                <label class="field"><span>Schwierigkeit</span><select id="opt-drum-difficulty"></select></label>
-                <div class="segmented small drum-mode" id="drum-mode">
-                  <button class="seg active" data-mode="original">1:1 wie im Original</button>
-                  <button class="seg" data-mode="own">Eigener Rhythmus</button>
-                </div>
-                <p class="muted small" id="drum-mode-info">Das Schlagzeug der Aufnahme bzw. Datei wird Takt für Takt übernommen – Grooves, Fills, Crashes.</p>
-                <label class="toggle-row" id="drum-fills-row">
-                  <span><strong>Zusätzliche Fills</strong><small>eigene Fills im Groove an Formteil-Enden</small></span>
-                  <input type="checkbox" class="switch" id="opt-drum-fills" />
-                </label>
-                <p class="muted small">Schlagzeug-Noten gibt es immer mit Playback: das Original läuft im Mischpult synchron mit.</p>
-              </div>
+
               <div class="ens-panel active" data-enspanel="quartet">
-                <div class="chips" id="preset-chips"></div>
-                <div class="voice-grid single" id="voice-grid"></div>
+                <div class="sub-block">
+                  <div class="sub-label"><span>Anzahl Stimmen</span><span class="sub-note" id="voice-count-name">Quartett</span></div>
+                  <div class="segmented count-seg" id="voice-count" role="radiogroup" aria-label="Anzahl Stimmen"></div>
+                </div>
+                <div class="sub-block">
+                  <div class="sub-label"><span>Vorlage</span></div>
+                  <div class="chips" id="preset-chips"></div>
+                </div>
+                <div class="sub-block">
+                  <div class="sub-label"><span>Instrumente</span></div>
+                  <div class="voice-list" id="voice-grid"></div>
+                </div>
+                <div class="sub-block">
+                  <div class="sub-label"><span>Arrangement</span></div>
+                  <div class="segmented two" id="arr-mode" role="radiogroup" aria-label="Arrangement">
+                    <button class="seg active" data-orig="0">Neu arrangieren</button>
+                    <button class="seg" data-orig="1">Original übernehmen</button>
+                  </div>
+                  <p class="muted small hint" id="arr-mode-info"></p>
+                </div>
                 <label class="toggle-row">
                   <span><strong>Schlagzeug</strong><small>zusätzliche Drum-Stimme</small></span>
                   <input type="checkbox" class="switch" id="opt-drums" />
                 </label>
               </div>
+
               <div class="ens-panel" data-enspanel="solo">
-                <label class="field solo-diff"><span>Schwierigkeit</span><select id="opt-solo-difficulty"></select></label>
                 <label class="toggle-row playback-row">
                   <span><strong>Playback</strong><small>zum Mitspielen: 1:1 wie die Datei – gleiche Länge, gleiche Töne, das Original läuft synchron mit</small></span>
                   <input type="checkbox" class="switch" id="opt-playback" />
                 </label>
                 <div class="solo-free" id="solo-free">
-                  <div class="voice-grid single" id="solo-grid"></div>
-                  <p class="muted small">Freies Solo-Arrangement: Intro, Thema mit eigenen Fill-Ins, Variation, ausgeschriebenes Solo über die Akkorde, Höhepunkt und Schluss – mit Akkordsymbolen. Beim Schlagzeug: Drum-Chart mit Grooves, Fills, Hits und Drum-Solo.</p>
+                  <div class="voice-list" id="solo-grid"></div>
+                  <p class="muted small hint">Freies Solo-Arrangement: Intro, Thema mit eigenen Fill-Ins, Variation, ausgeschriebenes Solo über die Akkorde, Höhepunkt und Schluss – mit Akkordsymbolen. Beim Schlagzeug: Drum-Chart mit Grooves, Fills, Hits und Drum-Solo.</p>
                 </div>
                 <div class="solo-playback hidden" id="solo-playback">
                   <div class="pb-head">
@@ -117,44 +128,82 @@
                   </label>
                 </div>
               </div>
-            </div>
 
-            <!-- Schritt 3 -->
-            <div class="card step" id="step-style">
-              <div class="step-head"><span class="step-num">3</span><h2>Stil &amp; Solo</h2></div>
+              <div class="ens-panel" data-enspanel="drums">
+                <div class="segmented two drum-mode" id="drum-mode">
+                  <button class="seg active" data-mode="original">1:1 wie im Original</button>
+                  <button class="seg" data-mode="own">Eigener Rhythmus</button>
+                </div>
+                <p class="muted small hint" id="drum-mode-info">Das Schlagzeug der Aufnahme bzw. Datei wird Takt für Takt übernommen – Grooves, Fills, Crashes.</p>
+                <label class="toggle-row" id="drum-fills-row">
+                  <span><strong>Zusätzliche Fills</strong><small>eigene Fills im Groove an Formteil-Enden</small></span>
+                  <input type="checkbox" class="switch" id="opt-drum-fills" />
+                </label>
+                <p class="muted small hint">Schlagzeug-Noten gibt es immer mit Playback: das Original läuft im Mischpult synchron mit.</p>
+              </div>
+
+              <label class="field free-only arr-only" id="solo-field"><span id="solo-label">Hauptsolo</span><select id="opt-solo"></select></label>
+            </section>
+
+            <!-- 3 Stil & Tempo -->
+            <section class="card step" id="step-style">
+              <div class="step-head"><span class="step-num">3</span><div class="step-title"><h2>Stil &amp; Tempo</h2><p>Charakter, Tempo und Tonart</p></div></div>
               <div class="style-grid" id="style-grid"></div>
-              <div class="field-grid">
-                <label class="field free-only"><span id="solo-label">Hauptsolo</span><select id="opt-solo"></select></label>
-                <label class="field"><span>Schwierigkeit</span><select id="opt-difficulty"></select></label>
-                <label class="field free-only"><span>Anpassung des Songs</span>
-                  <select id="opt-adapt"><option value="0">Nah am Original</option><option value="1" selected>Stilisiert</option><option value="2">Frei</option></select>
-                </label>
-                <label class="field free-only"><span>Form</span>
-                  <select id="opt-form"><option value="compact" selected>Kompakt (Wdh., D.S. al Coda)</option><option value="full">Ausgeschrieben</option></select>
-                </label>
-                <label class="field free-only"><span>Tempo (BPM)</span>
+              <p class="muted small hint playback-only hidden">Playback: Tempo, Tonart, Länge und Ablauf kommen 1:1 aus der Datei. Der Stil bestimmt nur die Tempo-Bezeichnung und – falls die Datei kein Schlagzeug hat – den Groove.</p>
+              <div class="field-grid free-only">
+                <label class="field"><span>Tempo (BPM)</span>
                   <span class="input-btn"><input type="number" id="opt-tempo" min="40" max="260" placeholder="Automatisch" /><button type="button" class="chip small" id="tempo-auto" title="Tempo wieder automatisch">Auto</button></span>
                 </label>
-                <label class="field free-only"><span>Tonart</span>
-                  <select id="opt-transpose"></select>
+                <label class="field"><span>Tonart</span><select id="opt-transpose"></select></label>
+              </div>
+            </section>
+
+            <!-- 4 Schwierigkeit -->
+            <section class="card step" id="step-level">
+              <div class="step-head"><span class="step-num">4</span><div class="step-title"><h2>Schwierigkeit</h2><p>Für alle Stimmen – einzeln anpassbar</p></div></div>
+              <label class="field"><span>Schwierigkeit</span><select id="opt-difficulty"></select></label>
+              <details class="fine" id="fine-box">
+                <summary><span class="fine-text"><span>Je Stimme anpassen</span><small id="fine-sub">Schwierigkeit &amp; Tonumfang</small></span><svg class="chev"><use href="#i-chevron" /></svg></summary>
+                <div class="fine-list" id="fine-list"></div>
+              </details>
+            </section>
+
+            <!-- Erweitert -->
+            <details class="card step adv free-only" id="step-adv">
+              <summary class="step-head"><span class="step-num ghost"><svg><use href="#i-sliders" /></svg></span><div class="step-title"><h2>Erweitert</h2><p>Anpassung, Form, Variante</p></div><svg class="chev"><use href="#i-chevron" /></svg></summary>
+              <div class="field-grid">
+                <label class="field arr-only"><span>Anpassung des Songs</span>
+                  <select id="opt-adapt"><option value="0">Nah am Original</option><option value="1" selected>Stilisiert</option><option value="2">Frei</option></select>
+                </label>
+                <label class="field"><span>Form</span>
+                  <select id="opt-form"><option value="compact" selected>Kompakt (Wdh., D.S. al Coda)</option><option value="full">Ausgeschrieben</option></select>
                 </label>
               </div>
-              <p class="muted small playback-only hidden">Playback: Tempo, Tonart, Länge und Ablauf kommen 1:1 aus der Datei. Der Stil bestimmt nur die Tempo-Bezeichnung und – falls die Datei kein Schlagzeug hat – den Groove.</p>
-              <div class="seed-row free-only">
+              <div class="seed-row">
                 <span class="muted">Variante</span>
                 <input type="number" id="opt-seed" value="1" min="1" />
                 <button class="icon-btn" id="dice" title="Neue Variante würfeln"><svg><use href="#i-dice" /></svg></button>
               </div>
-              <button class="btn primary big" id="generate" disabled><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
-            </div>
+            </details>
+
+            <button class="btn primary big" id="generate" disabled><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
           </aside>
 
           <!-- Arbeitsbereich -->
           <section class="workspace card">
             <div class="empty-state" id="empty-state">
               <div class="empty-art"><img src="icon.svg" alt="" /></div>
-              <h1>Lade einen Song – NoteCode schreibt die Noten</h1>
-              <p>MP3 oder MuseScore-/MIDI-Datei laden, Besetzung &amp; Stil wählen: Quartett-Arrangement mit Intro, Gegenstimmen, Solo und Schluss – oder Solo-Noten, auf Wunsch als Playback 1:1 zum Mitspielen. Mit Wiedergabe, Mischpult und Export als PDF, Bild oder für MuseScore.</p>
+              <h1 id="es-title">Neues Projekt</h1>
+              <p id="es-text">Wähle, wie viele Instrumente spielen, und lade einen Song – NoteCode schreibt die Noten: Arrangement mit Intro, Gegenstimmen, Solo und Schluss, Solo-Noten oder Playback 1:1 zum Mitspielen.</p>
+              <div class="count-chooser" id="count-chooser">
+                <div class="cc-label">Wie viele Instrumente?</div>
+                <div class="cc-grid" id="cc-grid" role="radiogroup" aria-label="Anzahl Instrumente"></div>
+              </div>
+              <div class="es-actions">
+                <button class="btn primary" id="es-file"><svg><use href="#i-upload" /></svg><span>Song wählen …</span></button>
+                <button class="btn primary hidden" id="es-generate"><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
+                <span class="muted small" id="es-hint">oder Datei hierher ziehen</span>
+              </div>
               <div class="feature-row">
                 <span class="feature"><svg><use href="#i-music" /></svg>Echter Kontrapunkt</span>
                 <span class="feature"><svg><use href="#i-sliders" /></svg>Mischpult</span>
@@ -217,13 +266,23 @@
       <!-- ====================== BIBLIOTHEK ====================== -->
       <section class="view" id="view-library">
         <div class="page-head">
-          <div>
-            <h1>Bibliothek</h1>
+          <div class="lib-head-text">
+            <nav class="crumbs hidden" id="lib-crumbs" aria-label="Ordnerpfad">
+              <button class="crumb-back" id="lib-back"><svg><use href="#i-chevron-left" /></svg><span>Bibliothek</span></button>
+            </nav>
+            <h1 id="library-title">Bibliothek</h1>
             <p class="muted" id="library-sub">Deine gespeicherten Arrangements</p>
           </div>
-          <div class="head-actions">
+          <div class="head-actions" id="lib-actions">
             <button class="btn ghost" id="sync-now"><svg><use href="#i-sync" /></svg><span>Jetzt synchronisieren</span></button>
+            <button class="btn ghost" id="lib-folder-new"><svg><use href="#i-folder-plus" /></svg><span>Neuer Ordner</span></button>
             <button class="btn primary" id="lib-new"><svg><use href="#i-plus" /></svg><span>Neues Arrangement</span></button>
+          </div>
+          <div class="head-actions hidden" id="folder-actions">
+            <button class="btn primary" id="folder-new-arr"><svg><use href="#i-plus" /></svg><span>Neues Arrangement</span></button>
+            <button class="btn ghost" id="folder-rename"><svg><use href="#i-pen" /></svg><span>Umbenennen</span></button>
+            <button class="btn ghost" id="folder-keep"><svg><use href="#i-folder-plus" /></svg><span>Als eigenen Ordner behalten</span></button>
+            <button class="btn ghost danger" id="folder-delete"><svg><use href="#i-trash" /></svg><span>Ordner löschen</span></button>
           </div>
         </div>
         <div class="library-grid" id="library-grid"></div>
@@ -241,6 +300,10 @@
           </div>
           <div class="card">
             <h3>Standard für neue Arrangements</h3>
+            <div class="sub-block">
+              <div class="sub-label"><span>Anzahl Stimmen</span><span class="sub-note" id="set-voice-count-name">Quartett</span></div>
+              <div class="segmented count-seg" id="set-voice-count" role="radiogroup" aria-label="Anzahl Stimmen"></div>
+            </div>
             <div class="voice-grid" id="set-voices"></div>
             <div class="field-grid">
               <label class="field"><span>Stil</span><select id="set-style"></select></label>
@@ -335,6 +398,23 @@
       </form>
     </dialog>
 
+    <dialog id="move-dialog" aria-labelledby="move-title">
+      <form method="dialog" class="move-form">
+        <div class="move-head">
+          <div>
+            <h2 id="move-title">In Ordner verschieben</h2>
+            <p class="muted small" id="move-sub"></p>
+          </div>
+          <button class="icon-btn" value="cancel" aria-label="Schließen"><svg><use href="#i-x" /></svg></button>
+        </div>
+        <div class="move-list" id="move-list"></div>
+        <div class="move-new">
+          <input type="text" id="move-new-name" placeholder="Neuer Ordner …" aria-label="Name des neuen Ordners" maxlength="80" />
+          <button type="button" class="btn ghost small" id="move-new-btn"><svg><use href="#i-folder-plus" /></svg><span>Anlegen &amp; verschieben</span></button>
+        </div>
+      </form>
+    </dialog>
+
     <div class="progress-dock hidden" id="progress" role="status" aria-live="polite">
       <div class="pg-top"><strong id="pg-title">Bitte warten</strong><span id="pg-pct">0 %</span></div>
       <div class="pg-bar"><i id="pg-fill"></i></div>
@@ -367,6 +447,14 @@
         <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-wave" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 10v4M7 7v10M11 4v16M15 8v8M19 10v4M23 11v2" /></symbol>
         <symbol id="i-follow" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h11M3 11h7M3 16h5M18 3v13" /><path d="M14.5 13 18 16.5 21.5 13M8 21h13" /></g></symbol>
+        <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+        <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v6M9 13h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-folder-move" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 13h6M13 10.5l2.5 2.5-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-drum" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="10" rx="8" ry="3" /><path d="M4 10v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6M8 12.7v6M16 12.7v6M7 3l4 6M17 3l-4 6" /></g></symbol>
+        <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-trash" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></symbol>
       </defs>
     </svg>

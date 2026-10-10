@@ -18,7 +18,11 @@ import { levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficult
 import { arrangeSoloFree } from './solo-free.js';
 import { enforceContraryMotion, motionStats } from './voicing.js';
 import { embellishLine } from './embellish.js';
-import { arrangePlayAlong } from './playalong.js';
+import { arrangePlayAlong, originalEnsembleParts } from './playalong.js';
+import { voiceSlots } from './planner.js';
+import { getInstrument } from './instruments.js';
+import { voiceBelow } from './gen/tutti.js';
+import { keepLeadOnTop, ensureGuideTones, addSuspensions, reduceSyllableRepeats } from './rules.js';
 import { hasMeterChanges } from '../model/song.js';
 import {
   enforceRange,
@@ -36,6 +40,8 @@ import {
 } from './post.js';
 import { transposeEvents } from '../model/song.js';
 
+const ENSEMBLE_NAMES = { 2: 'Duett', 3: 'Trio', 4: 'Quartett', 5: 'Quintett', 6: 'Sextett', 7: 'Septett', 8: 'Oktett' };
+
 export const DEFAULT_OPTIONS = {
   voices: ['trumpet', 'trumpet', 'trombone', 'sousaphone'],
   style: 'funk',
@@ -47,6 +53,7 @@ export const DEFAULT_OPTIONS = {
   ensemble: 'quartet', // quartet | solo
   soloInstrument: 'trumpet', // bei Solo: Instrument-ID oder 'drums'
   playback: false, // bei Solo: true = Play-along 1:1 wie die Vorlage, false = freies Solo-Arrangement
+  original: false, // Mehrere: true = Groove & Melodie 1:1 auf die Instrumente (Original übernehmen)
   playParts: null, // Play-along: [{source: 'melody'|'drums'|Spur-ID, inst: Instrument-ID|'drums'}]
   drumFills: false, // Play-along: zusätzliche Fills im Groove (Standard: Original 1:1)
   drumMode: 'original', // Schlagzeug: 'original' (1:1) | 'own' (eigener Rhythmus im Charakter, je Schwierigkeit)
@@ -87,16 +94,31 @@ export function arrange(songIn, options = {}) {
     return a;
   }
   if (opts.ensemble === 'solo') return opts.playback ? arrangePlayAlong(songIn, opts) : arrangeSoloFree(songIn, opts);
-  if (!Array.isArray(opts.voices) || opts.voices.length !== 4) throw new Error('Es müssen genau 4 Instrumente gewählt werden');
+  if (!Array.isArray(opts.voices) || opts.voices.length < 2 || opts.voices.length > 8) throw new Error('Bitte 2 bis 8 Instrumente wählen');
+  // Original übernehmen: Groove & Melodie 1:1 auf die Instrumente (Form und Takte wie die Vorlage)
+  if (opts.original || hasMeterChanges(songIn)) {
+    const insts = opts.voices.map((id) => getInstrument(id));
+    const parts = originalEnsembleParts(songIn, opts.voices, voiceSlots(insts));
+    if (opts.drums) parts.push({ source: 'drums', inst: 'drums' });
+    const a = arrangePlayAlong(songIn, { ...opts, playParts: parts });
+    if (!opts.original) a.report.notes = [...(a.report.notes || []), 'Taktartwechsel im Stück: das Arrangement folgt dem Originalablauf Takt für Takt.'];
+    a.meta.subtitle = `${ENSEMBLE_NAMES[opts.voices.length] || ''} – Original übernommen`.replace(/^ – /, '');
+    a.originalEnsemble = true;
+    return a;
+  }
   const plan = planArrangement(songIn, opts);
-  const { blocks, song, style, insts, mt } = plan;
+  const { blocks, song, style, insts, mt, slots } = plan;
+  const N = insts.length;
+  // Klangreihenfolge (oben -> unten) für homophone Sätze
+  const regPos = new Map(slots.order.map((v, k) => [v, k]));
+  const byRegister = (vs) => [...vs].sort((a, b) => (regPos.get(a) ?? a) - (regPos.get(b) ?? b));
   const rng = new Rng(opts.seed);
   // Tempo: Nutzerangabe > Vorlage (wenn stilgerecht) > Stil-Standard
   let tempo = opts.tempo || null;
   if (!tempo && song.tempo && style.tempoRange && song.tempo >= style.tempoRange[0] && song.tempo <= style.tempoRange[1]) tempo = song.tempo;
   tempo = Math.round(tempo || style.defaultTempo);
   const beat = song.meter.beatType === 8 && song.meter.beats % 3 === 0 && song.meter.beats > 3 ? (DIV * 3) / 2 : (DIV * 4) / song.meter.beatType;
-  const prevState = [{}, {}, {}, {}];
+  const prevState = insts.map(() => ({}));
   const voices = insts.map((inst, i) => ({ inst, events: [], dirs: [], label: `Stimme ${i + 1}` }));
   const drumEvents = [];
   const chordTrack = [];
@@ -146,6 +168,7 @@ export function arrange(songIn, options = {}) {
       }
       const segChords = sliceChordsRel(b.chords, s0, s1);
       const ctx = new BlockCtx({
+        bassVoice: slots.bass,
         style,
         rng: rng.fork(`${bi}:${si}`),
         key: b.key,
@@ -171,7 +194,8 @@ export function arrange(songIn, options = {}) {
       if (leadV >= 0) {
         const r = roles[leadV];
         if (r === 'melody') {
-          const { line, shift } = placeMelody(ctx, leadV, melodySlice, { adapt: opts.adapt, climax });
+          // erste Vorstellung eines Formteils: exakt wie im Original (Wiedererkennung)
+          const { line, shift } = placeMelody(ctx, leadV, melodySlice, { adapt: b.firstStatement ? 0 : opts.adapt, climax });
           lines[leadV] = line;
           if (si === 0) b.melodyShift = shift;
         } else if (r === 'hook') {
@@ -196,7 +220,7 @@ export function arrange(songIn, options = {}) {
       }
 
       // 2) Gruppenrollen (homophon)
-      const groupOf = (role) => roles.map((r, i) => (r === role ? i : -1)).filter((i) => i >= 0);
+      const groupOf = (role) => byRegister(roles.map((r, i) => (r === role ? i : -1)).filter((i) => i >= 0));
       const tuttiVs = groupOf('tutti');
       if (tuttiVs.length) {
         const res = genTutti(ctx, tuttiVs, melodySlice, { adapt: opts.adapt, octaveUp: b.type === 'shout' });
@@ -244,17 +268,21 @@ export function arrange(songIn, options = {}) {
       for (const v of groupOf('fill')) {
         if (ctx.melodyLine && ctx.melodyLine.length) lines[v] = genCounter(ctx, v, ctx.melodyLine, { mode: 'fill' });
       }
+      // Verdopplung der Melodie (große Besetzung im Refrain): Oktave tiefer bzw. Terz darunter
+      for (const v of groupOf('double')) {
+        if (ctx.melodyLine && ctx.melodyLine.length) lines[v] = doubleMelody(ctx, v, ctx.melodyLine);
+      }
 
       // 5) Begleitung
       const compRoles = ['comp', 'stabs', 'pad', 'background'];
       const generatedComps = [];
       let rank = 0;
-      for (let v = 0; v < 4; v++) {
+      for (const v of byRegister(roles.map((_, i) => i))) {
         const r = roles[v];
         if (!compRoles.includes(r)) continue;
         const partners = generatedComps.map((x) => lines[x]);
         // Gegenstimme als Partner einbeziehen, um Dopplungen zu vermeiden
-        for (let k = 0; k < 4; k++) if (roles[k] === 'counter' && lines[k]) partners.push(lines[k]);
+        for (let k = 0; k < N; k++) if (roles[k] === 'counter' && lines[k]) partners.push(lines[k]);
         if (r === 'background') lines[v] = genBackground(ctx, v, { partners, rank });
         else lines[v] = genComp(ctx, v, r, { partners, rank });
         generatedComps.push(v);
@@ -262,7 +290,7 @@ export function arrange(songIn, options = {}) {
       }
 
       // in absolute Zeit übertragen
-      for (let v = 0; v < 4; v++) {
+      for (let v = 0; v < N; v++) {
         const l = lines[v];
         if (!l) continue;
         for (const e of l) e.role = e.role || roles[v];
@@ -322,6 +350,8 @@ export function arrange(songIn, options = {}) {
     chordTrack: normalizeChords(chordTrack, plan.totalBars * mt),
     keyAt,
     tempo,
+    bassVoice: slots.bass,
+    slots,
   };
   arr.levels = voices.map((_, i) => levelFor(opts, i));
   for (const v of voices) enforceRange(v.events, v.inst, report);
@@ -345,9 +375,27 @@ export function arrange(songIn, options = {}) {
     drumEvents.push(...simple);
   }
   ensureMovement(arr, report);
+  // Profi-Regeln: Vorhalte im Aufbau-Teil, Guide-Tones, Lead immer oben – danach Stimmführung
+  // (Gegenbewegung zum Bass, keine Quint-/Oktavparallelen) und nochmals Lead oben
+  addSuspensions(arr, report);
+  ensureGuideTones(arr, report);
+  keepLeadOnTop(arr, report);
   enforceContraryMotion(arr, report);
+  keepLeadOnTop(arr, report);
   fixParallels(arr, report);
-  voices.forEach((v, i) => insertBreaths(v, v.inst, tempo, report, arr.levels[i] && arr.levels[i] <= 2 ? 0.75 : 1));
+  keepLeadOnTop(arr, report);
+  enforceContraryMotion(arr, report);
+  keepLeadOnTop(arr, report);
+  // Gesangslinie lesbar: Silbenwiederholungen zusammenfassen (wie in gedruckten Noten)
+  voices.forEach((v, i) => {
+    const lead = v.events.filter((e) => e.role === 'melody');
+    if (lead.length < 3) return;
+    const r = reduceSyllableRepeats(lead, arr.levels[i], beat);
+    if (!r.merged) return;
+    v.events = cleanLine([...v.events.filter((e) => e.role !== 'melody'), ...r.events]);
+    report.syllables = (report.syllables || 0) + r.merged;
+  });
+  voices.forEach((v, i) => insertBreaths(v, v.inst, tempo, report, arr.levels[i] && arr.levels[i] <= 2 ? 0.75 : 1, 4 * mt));
   decorate(arr, report);
   applyDynamics(arr);
   simplifyForReading(arr, song.meter);
@@ -428,7 +476,7 @@ export function arrange(songIn, options = {}) {
       title: opts.title || song.title,
       composer: song.composer,
       arranger: 'Arr.: NoteCode',
-      subtitle: `${style.name} – Quartett`,
+      subtitle: `${style.name} – ${ENSEMBLE_NAMES[voices.length] || `${voices.length} Stimmen`}`,
       keyName: keyName(song.key),
       keyNameDe: keyNameDe(song.key),
       tempo,
@@ -459,6 +507,35 @@ export function arrange(songIn, options = {}) {
     levels: arr.levels,
     roleNames: ROLE_NAMES,
   };
+}
+
+// Melodie-Verdopplung für große Besetzungen: Oktave tiefer, wenn bequem spielbar, sonst eine
+// Terz (nächster Akkord-/Skalenton) darunter – bleibt immer unter der Melodie
+function doubleMelody(ctx, v, melLine) {
+  const inst = ctx.inst[v];
+  const ps = melLine.map((e) => e.pitches[0] - 12);
+  const inComfort = ps.filter((m) => m >= inst.comfort[0] - 2 && m <= inst.comfort[1] + 1).length;
+  const octave = ps.length && inComfort / ps.length >= 0.85;
+  const out = [];
+  for (const e of melLine) {
+    const top = e.pitches[0];
+    let m;
+    let lof = e.lofs ? e.lofs[0] : null;
+    if (octave) m = top - 12;
+    else {
+      const chord = ctx.chordAt(e.start);
+      const vc = voiceBelow(chord, top, [inst], ctx.style.id, [out.length ? out[out.length - 1].pitches[0] : null]);
+      m = vc[0].midi;
+      lof = vc[0].lof;
+      while (m >= top) m -= 12;
+    }
+    if (m < inst.range[0]) m += 12;
+    if (m >= top) continue;
+    out.push({ ...e, pitches: [m], lofs: [lof], role: 'double', grace: null, orn: null, fx: [...(e.fx || [])], art: [...(e.art || [])] });
+  }
+  const line = cleanLine(out);
+  if (line.length) ctx.setLast(v, line[line.length - 1].pitches[0]);
+  return line;
 }
 
 function cleanDrums(events) {

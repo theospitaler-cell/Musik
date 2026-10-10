@@ -12,6 +12,7 @@ import { harmonize } from '../theory/analysis.js';
 import { detectKey } from '../theory/keys.js';
 import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
+import { fuseMelody, aiBassAndHarmony } from './ai-pitch.js';
 
 const SR = 22050;
 const N = 2048;
@@ -1186,7 +1187,7 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
 }
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
-export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {} } = {}) {
+export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai = null } = {}) {
   onProgress('Spektrum wird analysiert', 0);
   const feat = analyzeFrames(mono, onProgress);
   onProgress('Tempo & Beats werden erkannt', 0.46);
@@ -1312,9 +1313,33 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     }
     return b * DIV + Math.round((f * DIV) / 6) * 6;
   };
-  let melody = notesF.map((n) => {
-    const s = toTick(melStartSec(n.start));
-    const e = Math.max(s + (swing ? DIV / 2 : 6), toTick(melEndSec(n.end)));
+  // Melodie in Sekunden; mit lokaler KI (Basic Pitch) kombiniert, falls vorhanden
+  let melSec = notesF.map((n) => ({ s: melStartSec(n.start), e: melEndSec(n.end), midi: n.midi }));
+  let aiInfo = null;
+  if (ai && ai.length) {
+    // echter Neuanschlag: kurz vorher deutlich weniger Energie auf dieser Tonhöhe (sonst war es
+    // nur ein Schlagzeug-Transient mitten im gehaltenen Ton)
+    const salAt = (fr, midi) => {
+      let v = 0;
+      for (let q = 0; q < 4; q++) if (Math.abs(feat.topP[fr * 4 + q] - midi) < 0.6) v = Math.max(v, feat.topS[fr * 4 + q]);
+      return v;
+    };
+    const reattack = (sec, midi) => {
+      const fr = Math.round(((sec - 0.034) * SR) / HOP);
+      const before = Math.min(salAt(fr - 1, midi), salAt(fr - 2, midi), salAt(fr, midi));
+      const around = [];
+      for (let k = fr - 12; k <= fr + 12; k++) if (k >= 0 && k < feat.nFrames) around.push(salAt(k, midi));
+      around.sort((a, b) => a - b);
+      const typ = around[Math.floor(around.length * 0.75)] || 0;
+      return typ > 0 && before < 0.6 * typ;
+    };
+    const f = fuseMelody(melSec, ai, { reattack });
+    melSec = f.melody;
+    aiInfo = { changed: f.changed, added: f.added, notes: ai.length };
+  }
+  let melody = melSec.map((n) => {
+    const s = toTick(n.s);
+    const e = Math.max(s + (swing ? DIV / 2 : 6), toTick(n.e));
     return { start: s, dur: e - s, midi: n.midi };
   });
   melody = melody.filter((n) => n.start >= -mt + BT);
@@ -1336,6 +1361,24 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   });
 
   const meter = shuffle12 ? { beats: 3 * m, beatType: 8 } : { beats: m, beatType: 4 };
+  // KI: Basslinie & Begleitung als Spuren (für „Original übernehmen“ & Harmonik)
+  const aiTracks = [];
+  if (ai && ai.length) {
+    const { bass, harmony } = aiBassAndHarmony(ai, melSec);
+    const toNotes = (list) =>
+      list
+        .map((n) => {
+          const s0 = toTick(n.start);
+          return { start: s0, dur: Math.max(6, toTick(n.end) - s0), midi: n.midi, vel: Math.round(40 + 80 * Math.min(1, n.amp || 0.5)) };
+        })
+        .filter((n) => n.start >= 0);
+    const bn = toNotes(bass);
+    const hn = toNotes(harmony);
+    if (bn.length >= 8) aiTracks.push({ id: 'ai-bass', name: 'Bass (KI)', program: 33, mel: false, notes: bn });
+    if (hn.length >= 8) aiTracks.push({ id: 'ai-harmony', name: 'Begleitung (KI)', program: 0, mel: false, notes: hn });
+    // Harmonik: KI-Noten (mehrstimmig) zusätzlich zum Chroma
+    for (const n of [...bn, ...hn]) pseudo.push({ start: n.start, dur: Math.min(n.dur, DIV * 2), midi: n.midi });
+  }
   const key = detectKey([...pseudo, ...melody.filter((n) => n.start >= 0).map((n) => ({ midi: n.midi, dur: n.dur * 0.5 }))]);
   const chords = harmonize(pseudo, { meter, key, measureCount, melodyOnly: false });
   const pickupNotes = melody.filter((n) => n.start < 0);
@@ -1364,6 +1407,8 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   fin.drumNotes = transcribeDrums(feat, refineBeats(beats, comb), firstDown, m, measureCount, fin.sections, { compound: shuffle12 }).notes;
   // Zeitbezug zur Datei: Schlag i liegt bei beatSec[i] Sekunden; Takt 1 beginnt bei Schlag firstDown
   fin.timing = { beatSec, firstBeat: firstDown, beatTicks: BT };
+  if (aiTracks.length) fin.tracks = [{ id: 'ai-melody', name: 'Gesang / Melodie (KI)', program: 52, mel: true, notes: fin.melody.map((n) => ({ ...n, vel: 90 })) }, ...aiTracks];
+  if (aiInfo) fin.warnings.push(`Lokale KI (Basic Pitch): ${aiInfo.notes} Noten gehört – Melodie ${aiInfo.changed ? `an ${aiInfo.changed} Stellen korrigiert, ` : ''}${aiInfo.added} Töne ergänzt; Bass & Begleitung als eigene Spuren.`);
   // Tempowechsel, rit./accel. aus den echten Schlagzeiten
   const tm = tempoMarksFromTiming(fin.timing, m, measureCount);
   fin.tempoMarks = tm.marks.map((x) => ({ ...x, bpm: Math.round(shuffle12 ? x.bpm * 1.5 : x.bpm) }));

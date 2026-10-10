@@ -139,7 +139,7 @@ export function fifthOf(chord) {
 
 // ---------- Block-Kontext ----------------------------------------------
 export class BlockCtx {
-  constructor({ style, rng, key, meter, measures, chords, tempo, inst, block, intensity = 0.5, songMotif = null, prevState }) {
+  constructor({ style, rng, key, meter, measures, chords, tempo, inst, block, intensity = 0.5, songMotif = null, prevState, bassVoice = 3 }) {
     this.style = style;
     this.rng = rng;
     this.key = key;
@@ -158,7 +158,8 @@ export class BlockCtx {
     this.intensity = intensity;
     this.songMotif = songMotif;
     this.prev = prevState; // [{last: midi}] pro Stimme
-    this.lines = [[], [], [], []]; // generierte Ereignisse (blockrelativ)
+    this.lines = (inst || []).map(() => []); // generierte Ereignisse (blockrelativ)
+    this.bassVoice = bassVoice; // Stimme mit der Bass-Funktion (bei 2–8 Stimmen nicht immer Stimme 4)
     this.melodyLine = null; // Ereignisse der Führungsstimme
   }
   chordAt(t) {

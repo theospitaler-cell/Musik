@@ -20,31 +20,38 @@ import { openAudioExport } from './audio-dialog.js';
 import { renderPages, responsiveSvg, pagesToPngs, xmlsToPdf, loadVerovio } from './render.js';
 import { LocalStore, Library } from './store.js';
 import { loadSettings, saveSettings } from './settings.js';
+import { MIN_VOICES, MAX_VOICES, voiceRole, ensembleName, resizeVoices, presetVoices, matchingPreset, carryPerVoice } from './voices.js';
+import { groupLibrary, mergeFolders, sameFolders, songTitleOf, uniqueFolderName } from './folders.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-const VOICE_COLORS = ['#1f3a5f', '#4f6d8f', '#8a6a2f', '#5b5f66', '#2f7d4f'];
+const VOICE_COLORS = ['#1f3a5f', '#4f6d8f', '#8a6a2f', '#5b5f66', '#2f7d4f', '#7a4a5c', '#3f6f73', '#6a5f8f'];
 const STYLE_TAG = { auto: 'Passend zum Song', funk: 'Funk', secondline: 'New Orleans', swing: 'Jazz', ballad: 'Pop', classical: 'Klassik', polka: 'Blasmusik' };
 
 const S = {
-  audioUrl: null,
   settings: null,
   library: null,
   local: null,
-  source: null,
-  song: null,
-  opts: null,
-  arr: null,
-  view: 'score',
-  zoom: 1,
   player: null,
-  currentId: null,
-  measureEls: [],
-  printed: [],
-  t2p: () => null,
   renderToken: 0,
   follower: null, // Mitlesen: Takt-Markierung, Cursor, automatisches Umblättern
+  follow: true,
+  tabs: [], // geöffnete Lieder – jedes mit eigenem, vollständigem Zustand
+  tab: null, // aktiver Tab
+  busy: 0, // laufende Vorgänge (Laden, Arrangieren) – solange kein Tab-Wechsel
+  libFolder: null, // geöffneter Ordner der Bibliothek: { type: 'user' | 'auto', id | key }
 };
+
+// Zustand, der zu einem Lied/Tab gehört: S.song usw. lesen und schreiben immer im aktiven Tab
+const TAB_KEYS = ['source', 'song', 'opts', 'arr', 'view', 'zoom', 'currentId', 'measureEls', 'printed', 't2p', 'audioUrl', 'audioFor'];
+for (const k of TAB_KEYS)
+  Object.defineProperty(S, k, {
+    get: () => S.tab[k],
+    set: (v) => {
+      S.tab[k] = v;
+    },
+    enumerable: true,
+  });
 
 // ---------------------------------------------------------------- Hilfen
 // Hinweis unten/oben; optional mit Aktion (z. B. "Rückgängig")
@@ -189,6 +196,396 @@ function showView(name) {
   if (name === 'library') renderLibrary();
   if (name === 'settings') renderSettings();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (name === 'arrange' && S.tab?.pendingId && !S.song) loadPending(S.tab);
+}
+
+// ---------------------------------------------------------------- Tabs (geöffnete Lieder)
+// Jeder Tab hat seinen eigenen Zustand: Vorlage, Optionen, Arrangement, Ansicht,
+// gesetzte Notenseiten und Mischpult. Ein Wechsel rechnet nichts neu.
+const TABS_KEY = 'notecode:tabs';
+const BUSY_MSG = 'Einen Moment – der aktuelle Vorgang läuft noch.';
+let tabSeq = 0;
+
+function defaultOpts() {
+  const st = S.settings;
+  return {
+    voices: [...st.defaultVoices],
+    style: st.defaultStyle,
+    drums: st.defaultDrums,
+    solo: st.defaultSolo,
+    length: st.defaultLength,
+    adapt: st.defaultAdapt,
+    form: st.form,
+    transpose: st.transposeAuto ? 'auto' : 0,
+    seed: 1,
+    ensemble: 'quartet',
+    soloInstrument: st.defaultVoices[0] || 'trumpet',
+    difficulty: st.defaultDifficulty ?? 'auto',
+    voiceDifficulty: [],
+    ranges: [],
+    original: false,
+    playback: false,
+    playParts: null,
+    drumFills: false,
+  };
+}
+
+function makeTab(opts = defaultOpts()) {
+  return {
+    id: `t${++tabSeq}`,
+    source: null,
+    song: null,
+    opts,
+    arr: null,
+    view: 'score',
+    zoom: 1,
+    currentId: null,
+    measureEls: [],
+    printed: [],
+    t2p: () => null,
+    audioUrl: null,
+    audioFor: null,
+    folder: null, // Ordner, in dem neue Arrangements dieses Tabs landen
+    pendingId: null, // gespeichertes Arrangement, das beim ersten Öffnen geladen wird
+    pendingTitle: null,
+    pages: null, // gesetzte Notenseiten (DOM) für einen schnellen Wechsel
+    pagesKey: null,
+    mix: null,
+    panel: 'notes',
+    scrollY: 0,
+    abcText: '',
+    srcTab: 'file',
+  };
+}
+
+// Einstellungen des aktiven Tabs für ein weiteres Lied übernehmen
+function inheritOpts() {
+  return { ...S.opts, ...readOpts(), tempo: null, title: null, playParts: null };
+}
+
+const tabInUse = (t) => !!(t.song || t.arr || t.pendingId || t.currentId);
+
+function tabTitle(t) {
+  return t.arr?.meta?.title || t.song?.title || t.pendingTitle || 'Neues Projekt';
+}
+
+function tabSub(t) {
+  const o = t.opts || {};
+  const ens =
+    o.ensemble === 'solo'
+      ? `Solo · ${o.soloInstrument === 'drums' ? 'Schlagzeug' : INSTRUMENTS[o.soloInstrument]?.short || ''}`
+      : o.ensemble === 'drums'
+        ? 'Schlagzeug'
+        : `${ensembleName(o.voices?.length || 4)}${o.original ? ' · Original' : ''}`;
+  if (t.pendingId && !t.song) return `${ens} · gespeichert`;
+  return t.song ? ens : `${ens} · noch kein Song`;
+}
+
+function renderTabBar() {
+  const list = $('#song-tab-list');
+  if (!list || !S.tab) return;
+  list.innerHTML = '';
+  for (const t of S.tabs) {
+    const el = document.createElement('div');
+    el.className = 'song-tab' + (t === S.tab ? ' active' : '') + (t.arr ? ' ready' : '');
+    el.dataset.tab = t.id;
+    const b = document.createElement('button');
+    b.className = 'st-main';
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(t === S.tab));
+    b.title = tabTitle(t);
+    b.innerHTML = '<span class="st-title"></span><span class="st-sub"></span>';
+    $('.st-title', b).textContent = tabTitle(t);
+    $('.st-sub', b).textContent = tabSub(t);
+    b.addEventListener('click', () => activateTab(t));
+    const x = document.createElement('button');
+    x.className = 'st-close';
+    x.title = 'Tab schließen';
+    x.setAttribute('aria-label', `„${tabTitle(t)}“ schließen`);
+    x.innerHTML = '<svg><use href="#i-x"/></svg>';
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(t);
+    });
+    // mittlere Maustaste schließt wie im Browser
+    el.addEventListener('auxclick', (e) => e.button === 1 && closeTab(t));
+    el.append(b, x);
+    list.appendChild(el);
+  }
+  $('#song-tabs').classList.toggle('busy', S.busy > 0);
+  // aktiven Tab in den sichtbaren Bereich schieben (nur waagerecht)
+  const act = $('.song-tab.active', list);
+  if (act) {
+    const l = act.offsetLeft;
+    const r = l + act.offsetWidth;
+    if (l < list.scrollLeft) list.scrollLeft = l - 12;
+    else if (r > list.scrollLeft + list.clientWidth) list.scrollLeft = r - list.clientWidth + 12;
+  }
+}
+
+function persistTabs() {
+  try {
+    const ids = [...new Set(S.tabs.map((t) => t.currentId || t.pendingId).filter(Boolean))];
+    localStorage.setItem(TABS_KEY, JSON.stringify({ ids, active: S.tab?.currentId || S.tab?.pendingId || null }));
+  } catch {
+    /* kein Speicher (privater Modus) – Tabs gelten nur für diese Sitzung */
+  }
+}
+
+function readSavedTabs() {
+  try {
+    const v = JSON.parse(localStorage.getItem(TABS_KEY) || 'null');
+    return v && Array.isArray(v.ids) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function selectPanel(name) {
+  $$('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === name));
+  $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.tabpanel === name));
+}
+
+function selectSourceTab(name) {
+  $$('#source-tabs .seg').forEach((x) => x.classList.toggle('active', x.dataset.src === name));
+  $$('.src-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === name));
+}
+
+// Wiedergabe beenden (beim Tab-Wechsel) – das Mischpult des Tabs bleibt gemerkt
+function stopPlayer() {
+  if (S.player) {
+    S.tab.mix = S.player.parts.map((p) => ({ key: String(p.key), volume: p.volume, mute: p.mute, solo: p.solo, pan: p.pan }));
+    S.player.dispose();
+    S.player = null;
+    window.__player = null;
+  }
+  setPlayIcon(false);
+  lastHighlight = -1;
+  $('#player').classList.add('hidden');
+  $('#mixer').classList.remove('open');
+}
+
+// Zustand aus der Oberfläche in den aktiven Tab übernehmen, bevor gewechselt wird
+function stashTab() {
+  const t = S.tab;
+  if (!t) return;
+  t.opts = { ...t.opts, ...readOpts() };
+  t.abcText = $('#abc-input').value;
+  t.srcTab = $('#source-tabs .seg.active')?.dataset.src || 'file';
+  t.panel = $('.tab.active')?.dataset.tab || 'notes';
+  t.scrollY = window.scrollY;
+  S.renderToken++; // laufendes Notensetzen dieses Tabs verwerfen
+  t.pages = $$('#pages .page');
+  t.pages.forEach((p) => p.remove());
+  S.measureEls.forEach((m) => m.classList.remove('playing'));
+  stopPlayer();
+}
+
+// aktiven Tab anzeigen – ohne neu zu arrangieren
+async function showTab() {
+  const t = S.tab;
+  applyOptsToUi(t.opts);
+  $('#abc-input').value = t.abcText || '';
+  selectSourceTab(t.srcTab || 'file');
+  $('#file-input').value = '';
+  if (S.song) renderAnalysis();
+  else {
+    $('#analysis').classList.add('hidden');
+    $('#analysis').innerHTML = '';
+  }
+  $('#opt-tempo').placeholder = S.song?.tempo ? `Auto (♩ ${S.song.tempo})` : 'Automatisch';
+  $('#generate').disabled = !S.song;
+  $('#zoom-label').textContent = `${Math.round(S.zoom * 100)} %`;
+  selectPanel(t.panel || 'notes');
+  refreshEmptyState();
+  renderTabBar();
+  persistTabs();
+  if (S.arr) await showResult(null, { restore: true });
+  else {
+    $('#result').classList.add('hidden');
+    $('#empty-state').classList.remove('hidden');
+  }
+  if (S.tab === t) window.scrollTo({ top: Math.min(t.scrollY || 0, document.body.scrollHeight) });
+  if (t.pendingId && !S.song && $('#view-arrange').classList.contains('active')) await loadPending(t);
+}
+
+async function activateTab(t) {
+  if (!t || t === S.tab) return;
+  if (S.busy) return toast(BUSY_MSG);
+  stashTab();
+  S.tab = t;
+  await showTab();
+}
+
+async function openTab(t) {
+  S.tabs.push(t);
+  await activateTab(t);
+}
+
+function closeTab(t) {
+  const idx = S.tabs.indexOf(t);
+  if (idx < 0) return;
+  const active = t === S.tab;
+  if (active && S.busy) return toast(BUSY_MSG);
+  if (active) stashTab();
+  S.tabs.splice(idx, 1);
+  let blank = null;
+  if (!S.tabs.length) S.tabs.push((blank = makeTab()));
+  if (active) {
+    S.tab = S.tabs[Math.min(idx, S.tabs.length - 1)];
+    showTab();
+  } else {
+    renderTabBar();
+    persistTabs();
+  }
+  if (!tabInUse(t)) return;
+  let undone = false;
+  toast(`„${tabTitle(t)}“ geschlossen`, '', {
+    label: 'Rückgängig',
+    run: () => {
+      undone = true;
+      // der leere Ersatz-Tab wird nicht mehr gebraucht
+      if (blank && S.tab === blank && S.tabs.length === 1 && !tabInUse(blank) && !S.busy) {
+        stashTab();
+        S.tabs = [t];
+        S.tab = t;
+        showTab();
+        return;
+      }
+      S.tabs.splice(Math.min(idx, S.tabs.length), 0, t);
+      if (S.busy) {
+        renderTabBar();
+        persistTabs();
+      } else activateTab(t);
+    },
+  });
+  // Aufnahme erst freigeben, wenn das Rückgängig-Fenster vorbei ist
+  setTimeout(() => {
+    if (!undone && t.audioUrl && !S.tabs.includes(t)) URL.revokeObjectURL(t.audioUrl);
+  }, 7000);
+}
+
+// Neues Projekt: neuer, leerer Tab mit Auswahl der Besetzung
+async function startNew({ folder = null } = {}) {
+  showView('arrange');
+  if (!tabInUse(S.tab)) {
+    S.tab.folder = folder;
+    refreshEmptyState();
+    $('#count-chooser').classList.add('pulse');
+    setTimeout(() => $('#count-chooser').classList.remove('pulse'), 900);
+    return;
+  }
+  if (S.busy) return toast(BUSY_MSG);
+  const t = makeTab();
+  t.folder = folder;
+  await openTab(t);
+  window.scrollTo({ top: 0 });
+}
+
+// Start-Bildschirm eines Tabs ohne Arrangement
+function refreshEmptyState() {
+  const t = S.tab;
+  if (!t) return;
+  const has = !!S.song;
+  const pending = !!t.pendingId && !has;
+  $('#es-title').textContent = pending ? `„${t.pendingTitle || 'Arrangement'}“ wird geöffnet …` : has ? `„${S.song.title}“ ist geladen` : 'Neues Projekt';
+  $('#es-text').textContent = has
+    ? 'Stelle links Besetzung, Stil und Schwierigkeit ein – oder wähle hier nur die Anzahl der Instrumente – und erstelle dann das Arrangement.'
+    : 'Wähle, wie viele Instrumente spielen, und lade einen Song – NoteCode schreibt die Noten: Arrangement mit Intro, Gegenstimmen, Solo und Schluss, Solo-Noten oder Playback 1:1 zum Mitspielen.';
+  $('#es-file span').textContent = has ? 'Anderen Song wählen …' : 'Song wählen …';
+  $('#es-file').classList.toggle('primary', !has);
+  $('#es-file').classList.toggle('ghost', has);
+  $('#es-generate').classList.toggle('hidden', !has);
+  $('#es-hint').classList.toggle('hidden', has);
+  $('#count-chooser').classList.toggle('hidden', pending);
+  $('#empty-state').classList.toggle('pending', pending);
+  $('#arrange-grid').classList.toggle('no-result', !S.arr);
+  renderCountChooser();
+}
+
+// "Wie viele Instrumente?" – 1 = Solo, 2–8 = Mehrere, dazu Schlagzeug
+function renderCountChooser() {
+  const box = $('#cc-grid');
+  if (!box || !S.opts) return;
+  const ens = S.opts.ensemble;
+  const cur = ens === 'solo' ? 1 : ens === 'drums' ? 'drums' : S.opts.voices.length;
+  box.innerHTML = '';
+  const items = [[1, 'Solo']];
+  for (let n = MIN_VOICES; n <= MAX_VOICES; n++) items.push([n, ensembleName(n)]);
+  items.push(['drums', 'Schlagzeug']);
+  for (const [k, name] of items) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cc-tile' + (k === cur ? ' active' : '') + (k === 'drums' ? ' drums' : '');
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', String(k === cur));
+    b.innerHTML = k === 'drums' ? `<svg><use href="#i-drum"/></svg><small>${name}</small>` : `<strong>${k}</strong><small>${name}</small>`;
+    b.addEventListener('click', () => pickCount(k));
+    box.appendChild(b);
+  }
+}
+
+function pickCount(k) {
+  if (k === 1) setEnsemble('solo');
+  else if (k === 'drums') setEnsemble('drums');
+  else {
+    if (S.opts.ensemble !== 'quartet') setEnsemble('quartet');
+    setVoiceCount(k);
+  }
+  renderCountChooser();
+}
+
+// gespeichertes Arrangement in seinen Tab laden (beim ersten Anzeigen)
+async function loadPending(t) {
+  if (t.loading) return;
+  t.loading = true;
+  S.busy++;
+  renderTabBar();
+  try {
+    const it = await S.library.get(t.pendingId);
+    if (!it || it.deleted) {
+      t.pendingId = null;
+      toast('Dieses Arrangement gibt es nicht mehr in der Bibliothek.', 'error');
+      return;
+    }
+    const ok = await setSource(deserializeSource(it.source));
+    t.pendingId = null;
+    t.folder = it.folder || null;
+    if (!ok) return;
+    applyOptsToUi(it.options || {});
+    S.currentId = it.id;
+    await generate({ silent: true });
+  } finally {
+    t.loading = false;
+    S.busy--;
+    if (S.tab === t) refreshEmptyState();
+    renderTabBar();
+    persistTabs();
+  }
+}
+
+// gespeicherte Tabs beim Start wiederherstellen (geladen wird erst beim Anzeigen)
+async function restoreTabs() {
+  const saved = readSavedTabs();
+  const tabs = [];
+  for (const id of (saved?.ids || []).slice(0, 12)) {
+    const it = await S.library.get(id);
+    if (!it || it.deleted) continue;
+    const t = makeTab({ ...defaultOpts(), ...(it.options || {}) });
+    t.pendingId = id;
+    t.pendingTitle = it.title;
+    t.folder = it.folder || null;
+    tabs.push(t);
+  }
+  if (tabs.length && !tabInUse(S.tab) && !S.busy) {
+    S.tabs = tabs;
+    S.tab = tabs.find((t) => t.pendingId === saved.active) || tabs[0];
+    await showTab();
+  } else {
+    renderTabBar();
+    refreshEmptyState();
+    persistTabs();
+  }
 }
 
 // ---------------------------------------------------------------- Instrumente
@@ -246,9 +643,10 @@ function voiceExtras(slot, i, instId, { difficulty = true } = {}) {
     lvl.title = 'Schwierigkeit dieser Stimme';
     difficultyOptions(lvl, S.opts.voiceDifficulty?.[i] ?? null, { inherit: 'Schwierigkeit: wie oben' });
     lvl.addEventListener('change', () => {
-      S.opts.voiceDifficulty = S.opts.voiceDifficulty || [null, null, null, null];
+      S.opts.voiceDifficulty = S.opts.voiceDifficulty || [];
       S.opts.voiceDifficulty[i] = lvl.value ? Number(lvl.value) : null;
       lvl.classList.toggle('set', !!lvl.value);
+      updateFineSummary();
     });
     lvl.classList.toggle('set', !!lvl.value);
     ex.appendChild(lvl);
@@ -276,11 +674,12 @@ function voiceExtras(slot, i, instId, { difficulty = true } = {}) {
       sel.value = cur === null || cur === undefined ? '' : String(cur);
       sel.classList.toggle('set', !!sel.value);
       sel.addEventListener('change', () => {
-        S.opts.ranges = S.opts.ranges || [null, null, null, null];
+        S.opts.ranges = S.opts.ranges || [];
         const r = { ...(S.opts.ranges[i] || { lo: null, hi: null }) };
         r[kind] = sel.value ? Number(sel.value) : null;
         S.opts.ranges[i] = r.lo === null && r.hi === null ? null : r;
         sel.classList.toggle('set', !!sel.value);
+        updateFineSummary();
       });
       return sel;
     };
@@ -288,8 +687,10 @@ function voiceExtras(slot, i, instId, { difficulty = true } = {}) {
     ex.appendChild(mk('hi'));
   }
   slot.appendChild(ex);
+  return ex;
 }
 
+// Instrumente der Besetzung (Feineinstellungen je Stimme stehen in Schritt 4)
 function renderVoiceGrid(container, voices, onChange, { extras = false } = {}) {
   container.innerHTML = '';
   voices.forEach((id, i) => {
@@ -297,7 +698,7 @@ function renderVoiceGrid(container, voices, onChange, { extras = false } = {}) {
     slot.className = 'voice-slot';
     const lab = document.createElement('div');
     lab.className = 'vlabel';
-    lab.innerHTML = `<i style="background:${VOICE_COLORS[i]}"></i>Stimme ${i + 1} · ${['Sopran', 'Alt', 'Tenor', 'Bass'][i]}`;
+    lab.innerHTML = `<i style="background:${VOICE_COLORS[i % VOICE_COLORS.length]}"></i><b>${i + 1}</b><span>${voiceRole(i, voices.length)}</span>`;
     slot.appendChild(lab);
     slot.appendChild(
       instrumentSelect(id, (v) => {
@@ -305,12 +706,131 @@ function renderVoiceGrid(container, voices, onChange, { extras = false } = {}) {
         // neues Instrument -> Tonumfang wieder automatisch
         if (extras && S.opts.ranges) S.opts.ranges[i] = null;
         onChange(voices);
-        if (extras) renderVoiceGrid(container, voices, onChange, { extras });
+        if (extras) renderFineList();
       }),
     );
-    if (extras) voiceExtras(slot, i, id);
     container.appendChild(slot);
   });
+}
+
+// Anzahl der Stimmen (2–8) als Segment-Leiste
+function renderVoiceCount(box, n, onPick) {
+  box.innerHTML = '';
+  for (let k = MIN_VOICES; k <= MAX_VOICES; k++) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'seg' + (k === n ? ' active' : '');
+    b.textContent = String(k);
+    b.title = `${k} Stimmen (${ensembleName(k)})`;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', String(k === n));
+    b.addEventListener('click', () => onPick(k));
+    box.appendChild(b);
+  }
+}
+
+// Besetzung auf n Stimmen bringen; Feineinstellungen wandern mit ihrem Instrument
+function setVoiceCount(n) {
+  const old = [...S.opts.voices];
+  const next = resizeVoices(old, n);
+  if (next.join() === old.join()) return;
+  S.opts.voiceDifficulty = carryPerVoice(old, next, S.opts.voiceDifficulty);
+  S.opts.ranges = carryPerVoice(old, next, S.opts.ranges);
+  S.opts.voices = next;
+  const solo = $('#opt-solo').value;
+  renderBand();
+  if (S.opts.ensemble !== 'solo') fillSoloSelect($('#opt-solo'), next, /^\d+$/.test(solo) && Number(solo) >= next.length ? 0 : solo);
+  renderTabBar();
+}
+
+// Schritt 2 (Mehrere): Anzahl, Vorlage, Instrumente
+function renderBand() {
+  const n = S.opts.voices.length;
+  renderVoiceCount($('#voice-count'), n, setVoiceCount);
+  $('#voice-count-name').textContent = ensembleName(n);
+  renderVoiceGrid(
+    $('#voice-grid'),
+    S.opts.voices,
+    (v) => {
+      S.opts.voices = v;
+      if (S.opts.ensemble !== 'solo') fillSoloSelect($('#opt-solo'), v, $('#opt-solo').value);
+      markPreset();
+      renderTabBar();
+    },
+    { extras: true },
+  );
+  markPreset();
+  renderFineList();
+  renderCountChooser();
+}
+
+function setOriginal(on) {
+  S.opts.original = !!on;
+  $$('#arr-mode .seg').forEach((b) => {
+    const act = (b.dataset.orig === '1') === !!on;
+    b.classList.toggle('active', act);
+    b.setAttribute('aria-checked', String(act));
+  });
+  $('#arr-mode-info').textContent = on
+    ? 'Groove und Melodie werden 1:1 aus der Vorlage auf die Instrumente verteilt – gleiche Form, gleiche Länge.'
+    : 'Eigenes Arrangement im gewählten Stil: Intro, Melodie mit Gegenstimmen, Solo und Schluss.';
+  updateModeVisibility();
+}
+
+// nur zeigen, was für die gewählte Besetzung eine Rolle spielt
+function updateModeVisibility() {
+  const free = S.opts.ensemble === 'quartet' || (S.opts.ensemble === 'solo' && !S.opts.playback);
+  const original = S.opts.ensemble === 'quartet' && !!S.opts.original;
+  $$('.arr-only').forEach((el) => el.classList.toggle('hidden', original || (el.classList.contains('free-only') && !free)));
+}
+
+// Schritt 4: Schwierigkeit & Tonumfang je Stimme
+function fineRows() {
+  const ens = S.opts.ensemble;
+  if (ens === 'drums') return [];
+  if (ens === 'quartet') return S.opts.voices.map((id, i) => ({ i, id, name: `${i + 1} · ${INSTRUMENTS[id].name}`, color: VOICE_COLORS[i % VOICE_COLORS.length] }));
+  if (!S.opts.playback) {
+    const id = S.opts.soloInstrument || 'trumpet';
+    return id === 'drums' ? [] : [{ i: 0, id, name: `Solo · ${INSTRUMENTS[id].name}`, color: VOICE_COLORS[0], difficulty: false }];
+  }
+  if (!S.song) return [];
+  const sources = playAlongSources(S.song);
+  const parts = currentPlayParts(sources);
+  const melodic = parts.filter((p) => p.inst !== 'drums');
+  return parts.map((p) => {
+    const src = sources.find((x) => x.id === p.source);
+    const drums = p.inst === 'drums';
+    const i = drums ? melodic.length : melodic.indexOf(p);
+    return { i, id: p.inst, name: `${src?.name || 'Stimme'} → ${drums ? 'Schlagzeug' : INSTRUMENTS[p.inst].name}`, color: VOICE_COLORS[i % VOICE_COLORS.length] };
+  });
+}
+
+function renderFineList() {
+  const box = $('#fine-list');
+  if (!box || !S.opts) return;
+  box.innerHTML = '';
+  const rows = fineRows();
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'fine-row';
+    const name = document.createElement('div');
+    name.className = 'fine-name';
+    name.innerHTML = `<i style="background:${r.color}"></i>`;
+    name.appendChild(document.createTextNode(r.name));
+    row.appendChild(name);
+    voiceExtras(row, r.i, r.id, { difficulty: r.difficulty !== false });
+    box.appendChild(row);
+  }
+  $('#fine-box').classList.toggle('hidden', !rows.length);
+  updateFineSummary();
+}
+
+function updateFineSummary() {
+  const sub = $('#fine-sub');
+  if (!sub) return;
+  const n = $$('#fine-list select.set').length;
+  sub.textContent = n ? `${n} ${n === 1 ? 'Anpassung' : 'Anpassungen'}` : 'Schwierigkeit & Tonumfang';
+  sub.classList.toggle('on', n > 0);
 }
 
 function renderSoloGrid() {
@@ -318,7 +838,7 @@ function renderSoloGrid() {
   box.innerHTML = '';
   const slot = document.createElement('div');
   slot.className = 'voice-slot';
-  slot.innerHTML = '<div class="vlabel"><i style="background:' + VOICE_COLORS[0] + '"></i>Solo-Instrument</div>';
+  slot.innerHTML = '<div class="vlabel"><i style="background:' + VOICE_COLORS[0] + '"></i><span>Solo-Instrument</span></div>';
   const sel = instrumentSelect(S.opts.soloInstrument === 'drums' ? 'trumpet' : S.opts.soloInstrument, () => {});
   const drumOpt = document.createElement('optgroup');
   drumOpt.label = 'Rhythmus';
@@ -329,10 +849,11 @@ function renderSoloGrid() {
     S.opts.soloInstrument = sel.value;
     if (S.opts.ranges) S.opts.ranges[0] = null;
     renderSoloGrid();
+    renderTabBar();
   });
   slot.appendChild(sel);
-  voiceExtras(slot, 0, S.opts.soloInstrument || 'trumpet', { difficulty: false });
   box.appendChild(slot);
+  renderFineList();
 }
 
 // ---------------------------------------------------------------- Schlagzeug
@@ -361,8 +882,12 @@ function updatePlaybackUi() {
   $('#solo-playback').classList.toggle('hidden', !on);
   $$('.free-only').forEach((el) => el.classList.toggle('hidden', pb));
   $$('.playback-only').forEach((el) => el.classList.toggle('hidden', !pb));
-  $('#generate span').textContent = drums ? 'Schlagzeug-Noten erstellen' : solo ? 'Playback-Noten erstellen' : 'Arrangement erstellen';
+  const label = drums ? 'Schlagzeug-Noten erstellen' : solo ? 'Playback-Noten erstellen' : 'Arrangement erstellen';
+  $('#generate span').textContent = label;
+  $('#es-generate span').textContent = label;
+  updateModeVisibility();
   if (solo) renderPlaybackList();
+  else renderFineList();
 }
 
 // gewählte Stimmen in der Reihenfolge der Quellen (Melodie, Spuren, Schlagzeug)
@@ -379,6 +904,7 @@ function renderPlaybackList() {
   if (!S.song) {
     box.innerHTML = '<div class="pb-empty">Lade zuerst einen Song – dann erscheinen hier seine Stimmen (Gesang, Bass, Gitarre, Schlagzeug …) zur Auswahl.</div>';
     $('#pb-fills-row').classList.add('hidden');
+    renderFineList();
     return;
   }
   const sources = playAlongSources(S.song);
@@ -426,13 +952,10 @@ function renderPlaybackList() {
       target.append(lab, sel);
     }
     row.appendChild(target);
-    if (part) {
-      const idx = part.inst === 'drums' ? melodic.length : melodic.indexOf(part);
-      voiceExtras(row, idx, part.inst);
-    }
     box.appendChild(row);
   }
   $('#pb-fills-row').classList.toggle('hidden', !parts.some((p) => p.inst === 'drums'));
+  renderFineList();
 }
 
 function setEnsemble(ens) {
@@ -451,6 +974,8 @@ function setEnsemble(ens) {
     sel.value = prev === 'none' ? 'none' : '0';
     renderSoloGrid();
   } else fillSoloSelect(sel, S.opts.voices, prev && prev !== 'none' ? prev : S.opts.solo ?? 0);
+  renderCountChooser();
+  renderTabBar();
 }
 
 function fillSoloSelect(sel, voices, value) {
@@ -471,6 +996,7 @@ function fillSoloSelect(sel, voices, value) {
     sel.appendChild(o);
   }
   sel.value = String(value);
+  if (sel.selectedIndex < 0) sel.value = '0'; // z. B. Solo-Stimme 6, aber nur noch 4 Stimmen
 }
 
 function fillTransposeSelect() {
@@ -510,8 +1036,9 @@ function readOpts() {
     drumMode: S.opts.drumMode || 'original',
     soloInstrument: S.opts.soloInstrument || 'trumpet',
     difficulty: $('#opt-difficulty').value === 'auto' ? 'auto' : Number($('#opt-difficulty').value),
-    voiceDifficulty: [...(S.opts.voiceDifficulty || [null, null, null, null])],
-    ranges: [...(S.opts.ranges || [null, null, null, null])],
+    voiceDifficulty: perVoice(S.opts.voiceDifficulty),
+    ranges: perVoice(S.opts.ranges),
+    original: !!S.opts.original, // Mehrere: true = Groove & Melodie 1:1, false = neu arrangieren
     playback: !!S.opts.playback,
     title: S.opts.title || null,
     playParts: S.opts.playParts ? S.opts.playParts.map((p) => ({ ...p })) : null,
@@ -519,23 +1046,21 @@ function readOpts() {
   };
 }
 
+// Feineinstellungen je Stimme: mindestens so viele Einträge wie Stimmen (leer = automatisch)
+function perVoice(arr) {
+  const n = Math.max(S.opts.voices.length, arr?.length || 0);
+  return Array.from({ length: n }, (_, i) => arr?.[i] ?? null);
+}
+
 function applyOptsToUi(o) {
   S.opts = { ...S.opts, ...o };
-  S.opts.voiceDifficulty = S.opts.voiceDifficulty || [null, null, null, null];
-  S.opts.ranges = S.opts.ranges || [null, null, null, null];
-  renderVoiceGrid(
-    $('#voice-grid'),
-    S.opts.voices,
-    (v) => {
-      S.opts.voices = v;
-      if (S.opts.ensemble !== 'solo') fillSoloSelect($('#opt-solo'), v, $('#opt-solo').value);
-      markPreset();
-    },
-    { extras: true },
-  );
+  S.opts.voices = (S.opts.voices || []).slice(0, MAX_VOICES);
+  if (S.opts.voices.length < MIN_VOICES) S.opts.voices = resizeVoices(S.opts.voices.length ? S.opts.voices : [...S.settings.defaultVoices], MIN_VOICES);
+  S.opts.voiceDifficulty = S.opts.voiceDifficulty || [];
+  S.opts.ranges = S.opts.ranges || [];
+  renderBand();
+  setOriginal(!!S.opts.original);
   difficultyOptions($('#opt-difficulty'), S.opts.difficulty ?? 'auto');
-  difficultyOptions($('#opt-solo-difficulty'), S.opts.difficulty ?? 'auto');
-  difficultyOptions($('#opt-drum-difficulty'), S.opts.difficulty ?? 'auto');
   setDrumMode(S.opts.drumMode || 'original');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
   $('#opt-drums').checked = !!o.drums;
@@ -563,10 +1088,14 @@ function renderPresets() {
     b.title = p.name;
     b.dataset.preset = p.id;
     b.addEventListener('click', () => {
-      S.opts.voices = [...p.voices];
+      // Vorlage in der gewählten Anzahl Stimmen
+      const next = presetVoices(p, S.opts.voices.length);
+      S.opts.voiceDifficulty = carryPerVoice(S.opts.voices, next, S.opts.voiceDifficulty);
+      S.opts.ranges = carryPerVoice(S.opts.voices, next, S.opts.ranges);
+      S.opts.voices = next;
       S.opts.style = p.style;
       applyOptsToUi(readOptsKeepVoices());
-      toast(`Besetzung: ${p.name}`);
+      toast(`Besetzung: ${p.name.replace(/\s*\(.*\)/, '')} · ${ensembleName(next.length)}`);
     });
     box.appendChild(b);
   }
@@ -578,8 +1107,9 @@ function readOptsKeepVoices() {
   return o;
 }
 function markPreset() {
-  const key = S.opts.voices.join();
-  $$('#preset-chips .chip').forEach((c) => c.classList.toggle('active', PRESETS.find((p) => p.id === c.dataset.preset)?.voices.join() === key));
+  // Vorlage in der aktuellen Anzahl Stimmen; passen mehrere, wird die erste markiert
+  const hit = matchingPreset(S.opts.voices);
+  $$('#preset-chips .chip').forEach((c) => c.classList.toggle('active', !!hit && c.dataset.preset === hit.id));
 }
 
 function renderStyles() {
@@ -606,11 +1136,13 @@ async function setSource(src) {
     await attachAudio(src);
     renderAnalysis();
     fillTransposeSelect();
-    if (song.tempo) $('#opt-tempo').placeholder = `Automatisch (♩ ${song.tempo})`;
+    $('#opt-tempo').placeholder = song.tempo ? `Auto (♩ ${song.tempo})` : 'Automatisch';
     $('#generate').disabled = false;
     S.opts.playParts = null; // Stimmen gehören zum Song
     S.opts.title = null;
     if (S.opts.ensemble === 'solo' && S.opts.playback) renderPlaybackList();
+    refreshEmptyState();
+    renderTabBar();
     return true;
   } catch (e) {
     console.error(e);
@@ -663,7 +1195,12 @@ function renderAnalysis() {
   if (mp) mp.addEventListener('change', () => setSource({ ...S.source, melodyPart: Number(mp.value) }));
 }
 
-async function handleFile(file) {
+// replace: im aktiven Tab ersetzen; sonst öffnet ein weiteres Lied einen neuen Tab
+async function handleFile(file, { replace = false } = {}) {
+  if (S.busy) return toast(BUSY_MSG);
+  if (!replace && tabInUse(S.tab)) await openTab(makeTab(inheritOpts()));
+  S.busy++;
+  renderTabBar();
   const pg = progress(`„${file.name}“ wird geladen`);
   try {
     const buf = await readFileWithProgress(file, (f) => pg.set(`Datei wird gelesen (${(file.size / 1048576).toFixed(1)} MB)`, f * 0.1));
@@ -699,6 +1236,9 @@ async function handleFile(file) {
     console.error(e);
     toast('Datei konnte nicht geladen werden: ' + e.message, 'error');
   } finally {
+    S.busy--;
+    renderTabBar();
+    persistTabs();
     setTimeout(() => pg.done(), 300);
   }
 }
@@ -717,6 +1257,8 @@ async function generate({ silent = false } = {}) {
   const label = btn.querySelector('span').textContent;
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Wird erstellt …';
+  S.busy++; // kein Tab-Wechsel, solange arrangiert wird
+  renderTabBar();
   const opts = readOpts();
   const pb = opts.ensemble === 'solo' && opts.playback;
   const pg = progress(pb ? 'Playback-Noten werden erstellt' : 'Arrangement wird erstellt');
@@ -738,16 +1280,22 @@ async function generate({ silent = false } = {}) {
     console.error(e);
     toast('Fehler beim Arrangieren: ' + e.message, 'error');
   } finally {
+    S.busy--;
     btn.disabled = false;
     btn.querySelector('span').textContent = label;
+    refreshEmptyState();
+    renderTabBar();
+    persistTabs();
     setTimeout(() => pg.done(), 250);
   }
 }
 
-async function showResult(onProgress = null) {
+// restore: Tab-Wechsel – Notenseiten und Mischpult des Tabs wiederverwenden
+async function showResult(onProgress = null, { restore = false } = {}) {
   const a = S.arr;
   $('#empty-state').classList.add('hidden');
   $('#result').classList.remove('hidden');
+  $('#arrange-grid').classList.remove('no-result');
   $('#res-title').textContent = a.meta.title;
   const chips = [
     [a.options?.drumMode === 'own' && a.drums ? 'Schlagzeug · eigener Rhythmus' : a.playAlong ? 'Playback 1:1' : a.options?.styleAuto ? `${a.style.name} (automatisch)` : a.style.name, 'accent'],
@@ -784,7 +1332,44 @@ async function showResult(onProgress = null) {
   }
   renderPlan();
   setupPlayer();
+  if (restore) {
+    restoreMix();
+    if (restorePages()) return;
+  }
   await renderNotes(onProgress);
+}
+
+function restoreMix() {
+  const mix = S.tab.mix;
+  if (!S.player) return;
+  for (const m of mix || []) {
+    const p = S.player.part(m.key);
+    if (p) Object.assign(p, { volume: m.volume, mute: m.mute, solo: m.solo, pan: m.pan });
+  }
+  const speed = Number($('#p-speed').value) / 100;
+  if (speed && speed !== 1) S.player.setSpeed(speed);
+  if (mix) renderMixer();
+}
+
+// Kennung der gesetzten Seiten: ändern sich Ansicht oder Notenbild, wird neu gesetzt
+function pagesKey() {
+  const st = S.settings;
+  return [S.view, S.zoom, st.paper, st.notesZoom, st.concertScore, st.chords, st.tenorClef].join('|');
+}
+
+function restorePages() {
+  const t = S.tab;
+  if (!t.pages?.length || t.pagesKey !== pagesKey()) return false;
+  const box = $('#pages');
+  box.querySelectorAll('.page').forEach((p) => p.remove());
+  $('#loader').classList.remove('on');
+  box.style.setProperty('--zoom', S.view === 'score' ? 1.15 : 1);
+  for (const p of t.pages) box.appendChild(p);
+  t.pages = null;
+  // Mitlaufen: Takte der wiederhergestellten Seiten neu verknüpfen
+  S.measureEls = $$('g.measure', box);
+  if (S.follower && S.printed) S.follower.attach(S.printed.length);
+  return true;
 }
 
 function xmlFor(view) {
@@ -798,6 +1383,10 @@ function xmlFor(view) {
 
 async function renderNotes(onProgress = null) {
   const token = ++S.renderToken;
+  const tab = S.tab;
+  const key = pagesKey();
+  tab.pagesKey = null;
+  tab.pages = null;
   const box = $('#pages');
   box.querySelectorAll('.page').forEach((p) => p.remove());
   const loader = $('#loader');
@@ -808,7 +1397,7 @@ async function renderNotes(onProgress = null) {
   try {
     const xml = xmlFor(S.view);
     const pages = await renderPages(xml, { paper: S.settings.paper, part: S.view !== 'score', zoom: S.zoom * S.settings.notesZoom, scale: 100, onProgress: (t, f) => token === S.renderToken && report(t, f) });
-    if (token !== S.renderToken) return;
+    if (token !== S.renderToken) return own?.done(); // inzwischen anderer Tab oder neue Ansicht
     loader.classList.remove('on');
     box.style.setProperty('--zoom', S.view === 'score' ? 1.15 : 1);
     for (const svg of pages) {
@@ -820,9 +1409,11 @@ async function renderNotes(onProgress = null) {
     S.measureEls = $$('g.measure', box);
     S.follower.attach(S.printed.length);
     if (S.player) updatePosition(S.player.displayPosition(), S.player.perf.secToBar(S.player.displayPosition()));
+    tab.pagesKey = key;
     own?.done();
   } catch (e) {
     own?.done();
+    if (token !== S.renderToken) return;
     loader.classList.remove('on');
     console.error(e);
     const div = document.createElement('div');
@@ -999,10 +1590,16 @@ function viewLabel() {
 // ---------------------------------------------------------------- Bibliothek
 async function saveCurrent(auto = false) {
   if (!S.arr || !S.source) return;
+  const tab = S.tab;
   const a = S.arr;
+  // Ordner und Anlagedatum eines bereits gespeicherten Arrangements behalten
+  const prev = S.currentId ? await S.library.get(S.currentId) : null;
   const item = {
     id: S.currentId || undefined,
     title: a.meta.title,
+    songTitle: S.song?.title || prev?.songTitle || null,
+    folder: prev ? prev.folder || null : tab.folder || null,
+    createdAt: prev?.createdAt,
     source: serializeSource(S.source),
     options: S.opts,
     summary: {
@@ -1016,79 +1613,289 @@ async function saveCurrent(auto = false) {
     },
   };
   const saved = await S.library.save(item);
-  S.currentId = saved.id;
+  tab.currentId = saved.id;
+  tab.folder = saved.folder || null;
+  renderTabBar();
+  persistTabs();
   if (!auto) toast('In der Bibliothek gespeichert', 'ok');
+}
+
+// ---- Ordner
+const folderList = () => S.settings.folders || [];
+const nowIso = () => new Date().toISOString();
+
+// lokal speichern, dann mit der Cloud zusammenführen (ohne fremde Ordner zu überschreiben)
+async function saveFolders(list) {
+  S.settings.folders = list;
+  await saveSettings(S.local, S.settings);
+  syncFolders({ force: true });
+}
+
+async function createFolder(name) {
+  const now = nowIso();
+  const f = { id: uuid(), name: (name || '').trim() || uniqueFolderName(folderList()), createdAt: now, updatedAt: now };
+  await saveFolders([...folderList(), f]);
+  return f;
+}
+
+async function renameFolder(f, name) {
+  const now = nowIso();
+  const list = folderList();
+  await saveFolders(list.some((x) => x.id === f.id) ? list.map((x) => (x.id === f.id ? { ...x, name, updatedAt: now } : x)) : [...list, { id: f.id, name, createdAt: now, updatedAt: now }]);
+}
+
+// Ordner löschen: die Arrangements bleiben erhalten und liegen wieder in der Übersicht
+async function deleteFolder(f) {
+  const items = (await S.library.list()).filter((it) => it.folder === f.id);
+  const now = nowIso();
+  const list = folderList();
+  await saveFolders(list.some((x) => x.id === f.id) ? list.map((x) => (x.id === f.id ? { ...x, deleted: true, updatedAt: now } : x)) : [...list, { id: f.id, name: f.name, createdAt: now, updatedAt: now, deleted: true }]);
+  for (const it of items) await S.library.save({ ...it, folder: null });
+  for (const t of S.tabs) if (t.folder === f.id) t.folder = null;
+  if (S.libFolder?.id === f.id) S.libFolder = null;
+  renderLibrary();
+  const n = items.length;
+  toast(`Ordner „${f.name}“ gelöscht${n ? ` – ${n === 1 ? 'das Arrangement liegt' : `${n} Arrangements liegen`} wieder in der Übersicht` : ''}`, '', {
+    label: 'Rückgängig',
+    run: async () => {
+      const t = nowIso();
+      await saveFolders(folderList().map((x) => (x.id === f.id ? { ...x, deleted: false, updatedAt: t } : x)));
+      for (const it of items) {
+        const cur = await S.library.get(it.id);
+        if (cur && !cur.deleted) await S.library.save({ ...cur, folder: f.id });
+      }
+      renderLibrary();
+    },
+  });
+}
+
+async function moveItem(id, folderId, { quiet = false } = {}) {
+  const cur = await S.library.get(id);
+  if (!cur) return;
+  const prev = cur.folder || null;
+  folderId = folderId || null;
+  if (prev === folderId) return;
+  await S.library.save({ ...cur, folder: folderId });
+  for (const t of S.tabs) if (t.currentId === id) t.folder = folderId;
+  renderLibrary();
+  if (quiet) return;
+  const name = folderList().find((f) => f.id === folderId)?.name || 'Ordner';
+  toast(folderId ? `„${cur.title}“ liegt jetzt in „${name}“` : `„${cur.title}“ liegt wieder in der Übersicht`, '', { label: 'Rückgängig', run: () => moveItem(id, prev, { quiet: true }) });
+}
+
+let moveItemTarget = null;
+function openMoveDialog(it) {
+  moveItemTarget = it;
+  $('#move-sub').textContent = `„${it.title}“`;
+  const list = $('#move-list');
+  list.innerHTML = '';
+  const add = (id, name, icon) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    const current = (it.folder || null) === id;
+    b.className = 'move-opt' + (current ? ' current' : '');
+    b.innerHTML = `<svg><use href="#${icon}"/></svg><span></span>${current ? '<small>hier gespeichert</small>' : ''}`;
+    $('span', b).textContent = name;
+    b.addEventListener('click', () => {
+      $('#move-dialog').close();
+      moveItem(it.id, id);
+    });
+    list.appendChild(b);
+  };
+  add(null, 'Kein Ordner (Übersicht)', 'i-library');
+  for (const f of groupLibrary([], folderList()).folders) add(f.id, f.name, 'i-folder');
+  $('#move-new-name').value = '';
+  $('#move-dialog').showModal();
+}
+
+async function moveToNewFolder() {
+  const it = moveItemTarget;
+  if (!it) return;
+  const f = await createFolder($('#move-new-name').value);
+  $('#move-dialog').close();
+  await moveItem(it.id, f.id);
+}
+
+// Drag & Drop (Maus): Arrangement auf einen Ordner ziehen
+const DND_TYPE = 'text/x-notecode-item';
+const canDrag = () => window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
+function dropTarget(el, folderId) {
+  el.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer.types.includes(DND_TYPE)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    el.classList.add('drop-over');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('drop-over'));
+  el.addEventListener('drop', (e) => {
+    el.classList.remove('drop-over');
+    const id = e.dataTransfer.getData(DND_TYPE);
+    if (!id) return;
+    e.preventDefault();
+    moveItem(id, folderId);
+  });
+}
+
+function fmtDate(iso) {
+  return iso ? new Date(iso).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+}
+
+function itemCard(it) {
+  const card = document.createElement('div');
+  card.className = 'card lib-card';
+  const sm = it.summary || {};
+  card.innerHTML = `<div class="meta-chips"><span class="accent">${sm.style || ''}</span>${sm.key ? `<span>${sm.key}</span>` : ''}${sm.bars ? `<span>${sm.bars} Takte</span>` : ''}</div>
+      <div class="lib-title"><h3></h3><button class="icon-btn small rename" title="Titel ändern" aria-label="Titel ändern"><svg><use href="#i-pen"/></svg></button></div>
+      <div class="lib-meta">${(sm.voices || []).join(', ')}${sm.drums ? ', Schlagzeug' : ''}</div>
+      <div class="lib-meta">${fmtDate(it.updatedAt)}${it.dirty && S.library.cloud.user ? ' · wird synchronisiert' : ''}</div>
+      <div class="lib-actions"><button class="btn primary small open">Öffnen</button><button class="btn ghost small move" title="In Ordner verschieben" aria-label="In Ordner verschieben"><svg><use href="#i-folder-move"/></svg></button><button class="btn ghost small danger del" title="Löschen" aria-label="Löschen"><svg><use href="#i-trash"/></svg></button></div>`;
+  $('h3', card).textContent = it.title;
+  $('.open', card).addEventListener('click', () => openItem(it.id));
+  $('.move', card).addEventListener('click', () => openMoveDialog(it));
+  $('.rename', card).addEventListener('click', () => renameItem(card, it));
+  $('h3', card).addEventListener('dblclick', () => renameItem(card, it));
+  // Löschen ohne Rückfrage – dafür mit "Rückgängig"
+  $('.del', card).addEventListener('click', async () => {
+    const backup = await S.library.get(it.id);
+    await S.library.remove(it.id);
+    for (const t of S.tabs) if (t.currentId === it.id) t.currentId = null;
+    persistTabs();
+    card.classList.add('removing');
+    setTimeout(renderLibrary, 180);
+    toast(`„${it.title}“ gelöscht`, '', {
+      label: 'Rückgängig',
+      run: async () => {
+        await S.library.save({ ...backup, deleted: false });
+        renderLibrary();
+      },
+    });
+  });
+  if (canDrag()) {
+    card.draggable = true;
+    card.addEventListener('dragstart', (e) => {
+      if (e.target.closest?.('input')) return e.preventDefault();
+      e.dataTransfer.setData(DND_TYPE, it.id);
+      e.dataTransfer.effectAllowed = 'move';
+      card.classList.add('dragging');
+      document.body.classList.add('lib-dragging');
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      document.body.classList.remove('lib-dragging');
+    });
+  }
+  return card;
+}
+
+function folderCard(f) {
+  const card = document.createElement('div');
+  card.className = 'card lib-card folder-card' + (f.auto ? ' auto' : '');
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  const n = f.items.length;
+  const latest = f.items.reduce((m, it) => ((it.updatedAt || '') > m ? it.updatedAt : m), '');
+  const styles = [...new Set(f.items.map((it) => it.summary?.style).filter(Boolean))];
+  card.innerHTML = `<div class="fc-top"><span class="fc-icon"><svg><use href="#${f.auto ? 'i-layers' : 'i-folder'}"/></svg></span><span class="fc-kind">${f.auto ? 'Gleiches Lied' : 'Ordner'}</span>
+      ${f.auto ? '' : '<span class="fc-tools"><button class="icon-btn small rename" title="Ordner umbenennen" aria-label="Ordner umbenennen"><svg><use href="#i-pen"/></svg></button><button class="icon-btn small danger del" title="Ordner löschen" aria-label="Ordner löschen"><svg><use href="#i-trash"/></svg></button></span>'}</div>
+      <div class="lib-title"><h3></h3></div>
+      <div class="lib-meta">${n} ${n === 1 ? 'Arrangement' : 'Arrangements'}${latest ? ` · zuletzt ${fmtDate(latest)}` : ''}</div>
+      <div class="fc-peek">${styles
+        .slice(0, 3)
+        .map((s) => `<span>${s}</span>`)
+        .join('')}${styles.length > 3 ? `<span>+${styles.length - 3}</span>` : ''}${n ? '' : '<span class="empty">leer</span>'}</div>`;
+  $('h3', card).textContent = f.name;
+  const open = () => {
+    S.libFolder = f.auto ? { type: 'auto', key: f.key } : { type: 'user', id: f.id };
+    renderLibrary();
+    window.scrollTo({ top: 0 });
+  };
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('button, input')) return;
+    open();
+  });
+  card.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target === card) {
+      e.preventDefault();
+      open();
+    }
+  });
+  if (!f.auto) {
+    $('.rename', card).addEventListener('click', () => renameFolderInline(card, f));
+    $('.del', card).addEventListener('click', () => deleteFolder(f));
+    dropTarget(card, f.id);
+  }
+  return card;
+}
+
+function libSection(title, count) {
+  const h = document.createElement('div');
+  h.className = 'lib-section';
+  h.innerHTML = `<span></span><small>${count}</small>`;
+  $('span', h).textContent = title;
+  return h;
 }
 
 async function renderLibrary() {
   const box = $('#library-grid');
   const items = await S.library.list();
-  $('#library-sub').textContent = S.library.cloud.user ? `${items.length} Arrangements · synchronisiert mit ${S.library.cloud.user.email}` : `${items.length} Arrangements · nur auf diesem Gerät (anmelden für Sync)`;
-  if (!items.length) {
+  const g = groupLibrary(items, folderList());
+  const user = S.library.cloud.user;
+  let open = null;
+  if (S.libFolder?.type === 'user') open = g.folders.find((f) => f.id === S.libFolder.id) || null;
+  if (S.libFolder?.type === 'auto') open = g.auto.find((f) => f.key === S.libFolder.key) || null;
+  if (!open) S.libFolder = null;
+  $('#lib-crumbs').classList.toggle('hidden', !open);
+  $('#library-title').textContent = open ? open.name : 'Bibliothek';
+  $('#lib-actions').classList.toggle('hidden', !!open);
+  $('#folder-actions').classList.toggle('hidden', !open);
+  box.innerHTML = '';
+  if (open) {
+    const n = open.items.length;
+    $('#library-sub').textContent = open.auto ? `${n} Arrangements desselben Lieds · automatisch zusammengefasst` : `${n} ${n === 1 ? 'Arrangement' : 'Arrangements'} in diesem Ordner`;
+    $('#folder-new-arr').classList.toggle('hidden', !!open.auto);
+    $('#folder-rename').classList.toggle('hidden', !!open.auto);
+    $('#folder-delete').classList.toggle('hidden', !!open.auto);
+    $('#folder-keep').classList.toggle('hidden', !open.auto);
+    if (!n) box.innerHTML = '<div class="lib-empty card"><h3>Dieser Ordner ist leer</h3><p>Verschiebe Arrangements über „In Ordner verschieben“ hierher – am Computer auch per Drag &amp; Drop auf den Ordner.</p></div>';
+    for (const it of open.items) box.appendChild(itemCard(it));
+    return;
+  }
+  const nf = g.folders.length;
+  $('#library-sub').textContent = `${items.length} ${items.length === 1 ? 'Arrangement' : 'Arrangements'}${nf ? ` · ${nf} ${nf === 1 ? 'eigener' : 'eigene'} Ordner` : ''} · ${user ? `synchronisiert mit ${user.email}` : 'nur auf diesem Gerät (anmelden für Sync)'}`;
+  if (!items.length && !nf) {
     box.innerHTML = `<div class="lib-empty card"><h3>Noch nichts gespeichert</h3><p>Erstelle ein Arrangement – es landet automatisch hier und, wenn du angemeldet bist, auf all deinen Geräten.</p></div>`;
     return;
   }
-  box.innerHTML = '';
-  for (const it of items) {
-    const card = document.createElement('div');
-    card.className = 'card lib-card';
-    const date = new Date(it.updatedAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
-    const sm = it.summary || {};
-    card.innerHTML = `<div class="meta-chips"><span class="accent">${sm.style || ''}</span>${sm.key ? `<span>${sm.key}</span>` : ''}${sm.bars ? `<span>${sm.bars} Takte</span>` : ''}</div>
-      <div class="lib-title"><h3></h3><button class="icon-btn small rename" title="Titel ändern" aria-label="Titel ändern"><svg><use href="#i-pen"/></svg></button></div>
-      <div class="lib-meta">${(sm.voices || []).join(', ')}${sm.drums ? ', Schlagzeug' : ''}</div>
-      <div class="lib-meta">${date}${it.dirty && S.library.cloud.user ? ' · wird synchronisiert' : ''}</div>
-      <div class="lib-actions"><button class="btn primary small open">Öffnen</button><button class="btn ghost small danger del"><svg><use href="#i-trash"/></svg></button></div>`;
-    $('h3', card).textContent = it.title;
-    $('.open', card).addEventListener('click', () => openItem(it.id));
-    $('.rename', card).addEventListener('click', () => renameItem(card, it));
-    $('h3', card).addEventListener('dblclick', () => renameItem(card, it));
-    // Löschen ohne Rückfrage – dafür mit "Rückgängig"
-    $('.del', card).addEventListener('click', async () => {
-      const backup = await S.library.get(it.id);
-      await S.library.remove(it.id);
-      if (S.currentId === it.id) S.currentId = null;
-      card.classList.add('removing');
-      setTimeout(renderLibrary, 180);
-      toast(`„${it.title}“ gelöscht`, '', {
-        label: 'Rückgängig',
-        run: async () => {
-          await S.library.save({ ...backup, deleted: false });
-          renderLibrary();
-        },
-      });
-    });
-    box.appendChild(card);
+  const groups = [...g.folders, ...g.auto];
+  if (groups.length) {
+    box.appendChild(libSection('Ordner', groups.length));
+    for (const f of groups) box.appendChild(folderCard(f));
+  }
+  if (g.loose.length) {
+    if (groups.length) box.appendChild(libSection('Arrangements', g.loose.length));
+    for (const it of g.loose) box.appendChild(itemCard(it));
   }
 }
 
 // Titel direkt auf der Karte bearbeiten (Enter = speichern, Esc = abbrechen)
-function renameItem(card, it) {
+function inlineEdit(card, value, onSave) {
   const box = $('.lib-title', card);
   if ($('input', box)) return;
   const h = $('h3', box);
   const input = document.createElement('input');
   input.className = 'title-input';
-  input.value = it.title;
-  input.setAttribute('aria-label', 'Titel');
+  input.value = value;
+  input.setAttribute('aria-label', 'Name');
   h.replaceWith(input);
+  card.draggable = false;
   input.focus();
   input.select();
   let done = false;
   const finish = async (save) => {
     if (done) return;
     done = true;
-    const title = input.value.trim();
-    if (save && title && title !== it.title) {
-      const cur = await S.library.get(it.id);
-      await S.library.save({ ...cur, title, options: { ...(cur.options || {}), title } });
-      if (S.currentId === it.id && S.arr) {
-        S.arr.meta.title = title;
-        S.opts.title = title;
-        $('#res-title').textContent = title;
-      }
-      toast('Titel geändert', 'ok');
-    }
+    const text = input.value.trim();
+    if (save && text && text !== value) await onSave(text);
     renderLibrary();
   };
   input.addEventListener('keydown', (e) => {
@@ -1096,6 +1903,133 @@ function renameItem(card, it) {
     if (e.key === 'Escape') finish(false);
   });
   input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function renameItem(card, it) {
+  inlineEdit(card, it.title, async (title) => {
+    const cur = await S.library.get(it.id);
+    await S.library.save({ ...cur, title, songTitle: cur.songTitle || songTitleOf(cur), options: { ...(cur.options || {}), title } });
+    for (const t of S.tabs) {
+      if (t.currentId !== it.id && t.pendingId !== it.id) continue;
+      if (t.arr) t.arr.meta.title = title;
+      if (t.opts) t.opts.title = title;
+      t.pendingTitle = title;
+    }
+    if (S.currentId === it.id && S.arr) $('#res-title').textContent = title;
+    renderTabBar();
+    toast('Titel geändert', 'ok');
+  });
+}
+
+function renameFolderInline(card, f, { created = false } = {}) {
+  inlineEdit(card, f.name, async (name) => {
+    await renameFolder(f, name);
+    toast(created ? `Ordner „${name}“ angelegt` : 'Ordner umbenannt', 'ok');
+  });
+}
+
+// Kopfzeile eines geöffneten Ordners
+function bindLibraryFolders() {
+  $('#lib-back').addEventListener('click', () => {
+    S.libFolder = null;
+    renderLibrary();
+  });
+  dropTarget($('#lib-back'), null);
+  $('#lib-folder-new').addEventListener('click', async () => {
+    const f = await createFolder();
+    await renderLibrary();
+    const card = $$('#library-grid .folder-card').find((c) => $('h3', c)?.textContent === f.name);
+    if (card) renameFolderInline(card, f, { created: true });
+  });
+  const openFolder = async () => {
+    const g = groupLibrary(await S.library.list(), folderList());
+    if (S.libFolder?.type === 'user') return g.folders.find((f) => f.id === S.libFolder.id);
+    if (S.libFolder?.type === 'auto') return g.auto.find((f) => f.key === S.libFolder.key);
+    return null;
+  };
+  $('#folder-rename').addEventListener('click', async () => {
+    const f = await openFolder();
+    if (!f) return;
+    const box = $('.lib-head-text');
+    if ($('input', box)) return;
+    const h = $('#library-title');
+    const input = document.createElement('input');
+    input.className = 'title-input head';
+    input.value = f.name;
+    input.setAttribute('aria-label', 'Name des Ordners');
+    h.classList.add('hidden');
+    h.after(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const name = input.value.trim();
+      input.remove();
+      h.classList.remove('hidden');
+      if (save && name && name !== f.name) {
+        await renameFolder(f, name);
+        toast('Ordner umbenannt', 'ok');
+      }
+      renderLibrary();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') finish(true);
+      if (e.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+  });
+  $('#folder-delete').addEventListener('click', async () => {
+    const f = await openFolder();
+    if (f) deleteFolder(f);
+  });
+  // neues Arrangement direkt in diesem Ordner
+  $('#folder-new-arr').addEventListener('click', () => startNew({ folder: S.libFolder?.type === 'user' ? S.libFolder.id : null }));
+  // automatischen Ordner als eigenen Ordner übernehmen
+  $('#folder-keep').addEventListener('click', async () => {
+    const g = await openFolder();
+    if (!g) return;
+    const f = await createFolder(g.name);
+    for (const it of g.items) await moveItem(it.id, f.id, { quiet: true });
+    S.libFolder = { type: 'user', id: f.id };
+    renderLibrary();
+    toast(`Eigener Ordner „${f.name}“ angelegt`, 'ok');
+  });
+  $('#move-new-btn').addEventListener('click', moveToNewFolder);
+  $('#move-new-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      moveToNewFolder();
+    }
+  });
+}
+
+// Ordnerliste mit der Cloud abgleichen (je Ordner gewinnt der neueste Stand)
+let folderSyncAt = 0;
+async function syncFolders({ force = false } = {}) {
+  const cloud = S.library.cloud;
+  if (!cloud.user || (!force && Date.now() - folderSyncAt < 20000)) return;
+  folderSyncAt = Date.now();
+  try {
+    const row = await cloud.fetchSettings();
+    const remote = row?.data?.folders || [];
+    const merged = mergeFolders(folderList(), remote);
+    const localChanged = !sameFolders(merged, folderList());
+    if (localChanged) {
+      S.settings.folders = merged;
+      await saveSettings(S.local, S.settings);
+      if ($('#view-library').classList.contains('active')) renderLibrary();
+    }
+    // nur die Ordner hochladen, die anderen Einstellungen der Cloud bleiben
+    if (!sameFolders(merged, remote)) {
+      if (row?.data) await cloud.saveSettings({ ...row.data, folders: merged });
+      else await saveSettings(S.local, S.settings, cloud);
+    }
+  } catch {
+    /* offline oder noch keine Einstellungen in der Cloud */
+  }
 }
 
 // ---------------------------------------------------------------- Updates
@@ -1142,40 +2076,45 @@ async function installUpdate() {
   }
 }
 
-// Neues Arrangement: Vorlage & Ergebnis zurücksetzen
-function startNew() {
-  S.player?.dispose();
-  S.player = null;
-  S.arr = null;
-  S.song = null;
-  S.source = null;
-  S.currentId = null;
-  S.opts.playParts = null;
-  S.opts.title = null;
-  $('#player').classList.add('hidden');
-  $('#result').classList.add('hidden');
-  $('#empty-state').classList.remove('hidden');
-  $('#analysis').classList.add('hidden');
-  $('#generate').disabled = true;
-  $('#file-input').value = '';
-  if (S.opts.ensemble === 'solo' && S.opts.playback) renderPlaybackList();
-  showView('arrange');
-}
-
+// Arrangement aus der Bibliothek öffnen: eigener Tab (oder der schon offene)
 async function openItem(id) {
+  const open = S.tabs.find((t) => t.currentId === id || t.pendingId === id);
+  if (open) {
+    if (open !== S.tab && S.busy) return toast(BUSY_MSG);
+    showView('arrange');
+    return activateTab(open);
+  }
+  if (S.busy) return toast(BUSY_MSG);
   const it = await S.library.get(id);
   if (!it) return;
-  showView('arrange');
-  await setSource(deserializeSource(it.source));
-  applyOptsToUi(it.options || {});
-  S.currentId = it.id;
-  await generate({ silent: true });
+  const fresh = !tabInUse(S.tab);
+  const t = fresh ? S.tab : makeTab();
+  t.opts = { ...defaultOpts(), ...(it.options || {}) };
+  t.pendingId = id;
+  t.pendingTitle = it.title;
+  t.folder = it.folder || null;
+  if (!fresh) {
+    S.tabs.push(t);
+    stashTab();
+    S.tab = t;
+  }
+  await showTab();
+  showView('arrange'); // lädt das Arrangement, sobald der Tab sichtbar ist
 }
 
 // ---------------------------------------------------------------- Einstellungen
 function renderSettings() {
   const st = S.settings;
-  renderVoiceGrid($('#set-voices'), [...st.defaultVoices], (v) => update({ defaultVoices: [...v] }));
+  const n = st.defaultVoices.length;
+  renderVoiceCount($('#set-voice-count'), n, (k) => {
+    update({ defaultVoices: resizeVoices(st.defaultVoices, k) });
+    renderSettings();
+  });
+  $('#set-voice-count-name').textContent = ensembleName(n);
+  renderVoiceGrid($('#set-voices'), [...st.defaultVoices], (v) => {
+    update({ defaultVoices: [...v] });
+    fillSoloSelect($('#set-solo'), v, $('#set-solo').value);
+  });
   const ss = $('#set-style');
   ss.innerHTML = [{ id: 'auto', name: 'Automatisch (passend zum Song)' }, ...STYLE_LIST].map((s) => `<option value="${s.id}">${s.name}</option>`).join('');
   ss.value = st.defaultStyle;
@@ -1233,6 +2172,8 @@ function bindSettings() {
     if (!f) return;
     try {
       const data = JSON.parse(await f.text());
+      // eigene Ordner der Sicherung dazunehmen
+      if (Array.isArray(data.settings?.folders)) await saveFolders(mergeFolders(folderList(), data.settings.folders));
       for (const it of data.items || []) await S.library.save(it);
       toast(`${(data.items || []).length} Arrangements importiert`, 'ok');
       renderLibrary();
@@ -1342,10 +2283,12 @@ async function pullCloudSettings() {
       const { supabaseUrl, supabaseKey, ...rest } = row.data;
       void supabaseUrl;
       void supabaseKey;
-      Object.assign(S.settings, rest);
+      // Ordner nicht ersetzen, sondern zusammenführen (auch lokal angelegte bleiben)
+      Object.assign(S.settings, rest, { folders: mergeFolders(folderList(), rest.folders) });
       await saveSettings(S.local, S.settings);
       applyTheme();
     }
+    syncFolders({ force: true });
   } catch {
     /* noch keine Cloud-Einstellungen */
   }
@@ -1360,7 +2303,11 @@ function bindSyncStatus() {
     pill.classList.toggle('busy', /synchronisiere/.test(st));
     pill.classList.toggle('error', /Fehler/.test(st));
   };
-  S.library.addEventListener('status', upd);
+  S.library.addEventListener('status', () => {
+    upd();
+    // nach jedem Abgleich der Arrangements auch die Ordnerliste abgleichen
+    if (/^synchronisiert/.test(S.library.status)) syncFolders();
+  });
   S.library.addEventListener('auth', () => {
     updateAccountButton();
     upd();
@@ -1368,7 +2315,8 @@ function bindSyncStatus() {
   S.library.addEventListener('change', () => {
     if ($('#view-library').classList.contains('active')) renderLibrary();
   });
-  $('#lib-new').addEventListener('click', startNew);
+  $('#lib-new').addEventListener('click', () => startNew());
+  bindLibraryFolders();
   $('#upd-check').addEventListener('click', () => runUpdateCheck());
   renderUpdateCard();
   // einmal beim Start still prüfen (nur installierte Apps)
@@ -1393,27 +2341,11 @@ async function main() {
   S.library = new Library(S.local);
   S.follower = new ScoreFollower($('#pages'));
   await S.library.init(S.settings);
-  S.opts = {
-    voices: [...S.settings.defaultVoices],
-    style: S.settings.defaultStyle,
-    drums: S.settings.defaultDrums,
-    solo: S.settings.defaultSolo,
-    length: S.settings.defaultLength,
-    adapt: S.settings.defaultAdapt,
-    form: S.settings.form,
-    transpose: S.settings.transposeAuto ? 'auto' : 0,
-    seed: 1,
-    ensemble: 'quartet',
-    soloInstrument: S.settings.defaultVoices[0] || 'trumpet',
-    difficulty: S.settings.defaultDifficulty ?? 'auto',
-    voiceDifficulty: [null, null, null, null],
-    ranges: [null, null, null, null],
-    playback: false,
-    playParts: null,
-    drumFills: false,
-  };
+  S.tab = makeTab(defaultOpts());
+  S.tabs = [S.tab];
   renderPresets();
   applyOptsToUi(S.opts);
+  refreshEmptyState();
   bindSettings();
   bindAuth();
   bindSyncStatus();
@@ -1438,23 +2370,55 @@ async function main() {
       $$('.src-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === b.dataset.src));
     }),
   );
-  $('#file-input').addEventListener('change', (e) => e.target.files[0] && handleFile(e.target.files[0]));
+  // Datei: über Schritt 1 öffnet ein weiteres Lied einen neuen Tab; "Anderen Song wählen"
+  // auf dem Start-Bildschirm ersetzt das Lied im aktiven Tab
+  let fileReplace = false;
+  $('#file-input').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    const replace = fileReplace;
+    fileReplace = false;
+    if (f) handleFile(f, { replace });
+  });
   const dz = $('#dropzone');
+  dz.addEventListener('click', (e) => e.target.id !== 'file-input' && (fileReplace = false));
   ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => (e.preventDefault(), dz.classList.add('over'))));
   ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => (e.preventDefault(), dz.classList.remove('over'))));
   dz.addEventListener('drop', (e) => e.dataTransfer.files[0] && handleFile(e.dataTransfer.files[0]));
   $('#abc-load').addEventListener('click', async () => {
     const text = $('#abc-input').value.trim();
     if (!text) return toast('Bitte zuerst ABC-Noten eingeben.', 'error');
+    if (S.busy) return toast(BUSY_MSG);
+    // eigener Text wird im selben Tab aktualisiert, ein neues Lied bekommt einen neuen Tab
+    if (S.source?.name !== 'eingabe.abc' && tabInUse(S.tab)) {
+      const t = makeTab(inheritOpts());
+      t.abcText = text;
+      t.srcTab = 'abc';
+      await openTab(t);
+    }
     if (await setSource({ name: 'eingabe.abc', format: 'abc', data: text })) toast(`„${S.song.title}“ übernommen`, 'ok');
+    persistTabs();
   });
-  // Schwierigkeit: die Felder bei Solo, Schlagzeug und in Schritt 3 sind dasselbe
-  const diffSels = ['#opt-solo-difficulty', '#opt-difficulty', '#opt-drum-difficulty'].map((x) => $(x));
-  for (const a of diffSels)
-    a.addEventListener('change', () => {
-      for (const b of diffSels) if (b !== a) b.value = a.value;
-      S.opts.difficulty = a.value === 'auto' ? 'auto' : Number(a.value);
-    });
+  // Start-Bildschirm: Song wählen bzw. ersetzen, Datei hineinziehen, Arrangement erstellen
+  $('#es-file').addEventListener('click', () => {
+    fileReplace = !!S.song && !S.arr;
+    $('#file-input').value = '';
+    $('#file-input').click();
+  });
+  $('#es-generate').addEventListener('click', () => $('#generate').click());
+  const es = $('#empty-state');
+  ['dragenter', 'dragover'].forEach((ev) => es.addEventListener(ev, (e) => (e.preventDefault(), es.classList.add('over'))));
+  ['dragleave', 'drop'].forEach((ev) => es.addEventListener(ev, (e) => (e.preventDefault(), es.classList.remove('over'))));
+  es.addEventListener('drop', (e) => e.dataTransfer.files[0] && handleFile(e.dataTransfer.files[0], { replace: !S.arr && !S.tab.pendingId }));
+  // Tabs
+  $('#tab-add').addEventListener('click', () => startNew());
+  // Besetzung: Original übernehmen / neu arrangieren
+  $$('#arr-mode .seg').forEach((b) =>
+    b.addEventListener('click', () => {
+      setOriginal(b.dataset.orig === '1');
+      renderTabBar();
+    }),
+  );
+  $('#opt-difficulty').addEventListener('change', (e) => (S.opts.difficulty = e.target.value === 'auto' ? 'auto' : Number(e.target.value)));
   $$('#drum-mode .seg').forEach((b) => b.addEventListener('click', () => setDrumMode(b.dataset.mode)));
   // Tempo wieder automatisch
   const tempoBtn = () => $('#tempo-auto').classList.toggle('hidden', !$('#opt-tempo').value);
@@ -1548,6 +2512,8 @@ async function main() {
   // Notensatz-Bibliothek im Hintergrund vorladen
   loadVerovio().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.Capacitor) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // zuletzt geöffnete Lieder wieder als Tabs
+  restoreTabs().catch((e) => console.error(e));
 }
 
 function setZoom(z) {

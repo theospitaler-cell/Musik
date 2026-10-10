@@ -1,8 +1,10 @@
-# NoteCode – Quartett-Arrangements, Solo- & Playback-Noten
+# NoteCode – Arrangements für 2–8 Instrumente, Solo-, Schlagzeug- & Playback-Noten
 
-NoteCode macht aus einem Song Noten: **Quartett-Arrangements** (Brass, Saxophon, Streicher,
-Holz, Blasmusik … frei kombinierbar), **Solo-Noten** für jedes Instrument oder Schlagzeug –
-und **Playback-Noten zum Mitspielen**, die 1:1 der Datei folgen. Mit Wiedergabe und Mischpult,
+NoteCode macht aus einem Song Noten: **Arrangements für 2 bis 8 Instrumente** (Brass, Saxophon,
+Streicher, Holz, Blasmusik … frei kombinierbar – neu arrangiert oder „Original übernehmen“),
+**Solo-Noten** für jedes Instrument, eine eigene Kategorie **Schlagzeug** (immer mit Playback) –
+und **Playback-Noten zum Mitspielen**, die 1:1 der Datei folgen. Alles läuft lokal und kostenlos,
+auch die **KI**, die Noten aus MP3s hört. Mit Wiedergabe und Mischpult,
 Export als **PDF**, **Bild (PNG)**, **MuseScore (MusicXML)** und **MIDI**.
 
 ## Installieren
@@ -19,7 +21,7 @@ Die Installer werden bei jeder Änderung automatisch von GitHub gebaut
 
 1. **Song laden**: MP3, WAV, M4A, FLAC, OGG, MuseScore-Datei (MusicXML/MXL), MIDI oder ABC.
    Eine Fortschrittsanzeige zeigt jeden Schritt (Lesen, Dekodieren, Analyse, Noten setzen, Export).
-2. **Besetzung**: Quartett (4 Instrumente + optional Schlagzeug) oder Solo-Noten.
+2. **Besetzung**: *Mehrere* (2–8 Instrumente + optional Schlagzeug), *Solo* oder *Schlagzeug*.
 3. **Stil & Optionen**: Brass Band Funk (Standard), Second Line, Swing, Ballade, Klassik,
    Polka/Marsch; Hauptsolist, Schwierigkeit, Form, Tempo, Tonart.
 4. **Erstellen** → Noten ansehen, abspielen, exportieren.
@@ -62,18 +64,57 @@ das Solo ersetzt einen Mittelteil, kurzer Schluss).
 
 ### MP3 & andere Aufnahmen
 
-NoteCode erkennt aus der Aufnahme Tempo und Beats (auch Tempo-Schwankungen), Taktart und
-Taktanfang, Melodie (Gesang/Lead), Akkorde, Tonart, Form und den Schlagzeug-Groove
-(Bass Drum, Snare, Hi-Hat je Formteil, Swing-Feeling). Die Analyse läuft im Hintergrund.
+NoteCode erkennt aus der Aufnahme Tempo und Beats, Taktart und Taktanfang, Melodie
+(Gesang/Lead), Bass, Begleitung, Akkorde, Tonart, Form und das Schlagzeug Takt für Takt.
+Die Analyse läuft im Hintergrund.
+
+- **Lokale KI**: [Basic Pitch](https://github.com/spotify/basic-pitch-ts) (Spotify, Apache-2.0)
+  hört die Noten mehrstimmig – direkt im Gerät mit TensorFlow.js, ohne Server, ohne Kosten. Sie
+  korrigiert Oktavfehler, trennt Tonwiederholungen und liefert Bass & Begleitung als eigene
+  Spuren; die Signalanalyse prüft jeden KI-Ton (z. B. ob ein „Neuanschlag“ nur ein Schlagzeug-
+  Transient war).
+- **Tempo**: Tempokurve über das ganze Stück – auch **Tempowechsel**, **rit.** und **accel.**;
+  in den Noten stehen neue Metronomangaben, „rit.“ und „a tempo“, die Wiedergabe folgt genau der
+  Aufnahme. Shuffles werden im 12/8-Takt notiert (♩. = …).
+- **Schlagzeug**: Harmonisch/Perkussiv-Trennung, dann NMF-Zerlegung in Bass Drum, Snare,
+  Hi-Hat/Ride/Crash und Toms (Klangprofile passen sich dem Lied an), Ghost-Notes, offene Hi-Hat,
+  Fills und Crashes wie gespielt.
+- **Taktartwechsel** aus MIDI und MusicXML werden übernommen (neue Taktangabe in den Noten,
+  Wiedergabe und Export mit den echten Taktlängen).
+- **Geprüft an vielen Liedern, nicht an einem**: eine Testsammlung mit Rock, Halftime, Shuffle,
+  Walzer, Funk, Ride, Ritardando, Tempowechsel und reinem Schlagzeug misst Tempo, Beats,
+  Taktanfänge, Schlagzeug-Trefferquote und Melodie bei jeder Änderung.
 Das Ergebnis ist eine Annäherung – am besten bei klar hörbarer Melodie. Die Analyse wird in
 der Bibliothek gespeichert (und synchronisiert), die Aufnahme selbst bleibt auf dem Gerät.
 
 ## Was NoteCode schreibt
 
 **Formplan** (Beispiel Funk, Standardlänge):
-Intro (Bass-Riff → Stabs → Hook aus dem Song → Tutti-Build-up) · Thema (Melodie
-wandert zwischen den Stimmen) · Interlude (Send-off-Riff) · Solo (erst nur Bass/Groove,
-dann Backgrounds) · *D.S. al Coda* · Coda mit Shout Chorus, Tag (2×) und Schlussakkord.
+Intro (Bass-Riff → Stabs → Hook aus dem Song → Tutti-Build-up) · alle Formteile des Liedes in
+Originalreihenfolge · Solo statt eines Mittelteils (erst nur Bass/Groove, dann Backgrounds) ·
+letzter Refrain als Shout Chorus · Schlussakkord.
+
+**Wie in Verlagsarrangements** (Vergleich gedruckter Noten mit den Original-Aufnahmen):
+- **Stimme 1 = Lead**, die Melodie liegt immer oben; bei der ersten Vorstellung jedes Formteils
+  exakt wie im Original. Begleitstimmen überschneiden die Melodie nur gelegentlich, wenn es sich
+  anbietet (Antwort auf einen gehaltenen Ton), nie dauerhaft.
+- **Dichte-Dramaturgie**: Strophe dünn (Melodie, Bass-Groove, Einwürfe/Call & Response),
+  Pre-Chorus aufbauend (Liegeklänge mit Vorhalten, Gegenstimme in Gegenbewegung), Refrain voll
+  mit breiten Akkorden und eine Stufe lauter (*f*), letzter Refrain Tutti. Der Refrain ist der
+  häufigste gesungene Formteil.
+- **Guide-Tones**: Terz (und Septime) jedes Akkords liegen in den Mittelstimmen.
+- **2–8 Stimmen**: Lead, zwei Mittelstimmen und Bass werden nach Lage auf die Instrumente
+  verteilt; weitere Stimmen verdoppeln im Refrain die Melodie (Oktave/Terz darunter) oder
+  ergänzen den Satz, in der Strophe pausieren sie. Duo: Melodie + Bass bzw. Gegenstimme.
+- **Gesangslinie lesbar**: Silbenwiederholungen werden zu längeren Tönen mit Tenuto, spätestens
+  nach 4 Takten gibt es eine Atempause (mindestens eine Achtel); Gitarren-Kreuztonarten (E, H,
+  Fis …) werden in Bläser-Tonarten (F, B, Es, As …) gesetzt.
+- **Notenbild**: 4 Takte pro System, Probebuchstaben an Formteilen, Synkopen über die Taktmitte
+  gebunden, Taktzahlen an jedem System.
+
+**Original übernehmen** (Mehrere): Melodie 1:1 in Stimme 1, die Bass-Spur der Vorlage (bei MP3
+von der KI gehört oder die Grundtöne im Rhythmus der Bass Drum) in der tiefsten Stimme, weitere
+Original-Spuren nach Lage, fehlende Stimmen aus der Harmonik – Form, Takte und Tempo wie im Lied.
 
 **Satztechnik**
 - Kein Parallel-Block-Satz: Gegenstimmen bewegen sich, wenn die Melodie hält oder pausiert
@@ -81,7 +122,7 @@ dann Backgrounds) · *D.S. al Coda* · Coda mit Shout Chorus, Tag (2×) und Schl
 - Gegenbewegung von Bass und Melodie, Quint-/Oktavparallelen werden erkannt und korrigiert
   (Klassik: in allen Stimmpaaren).
 - Homophonie nur an Höhepunkten (Shout Chorus, Hits, Schluss).
-- Rollentausch: Melodie in Tenor- oder Bassstimme, der Solist bekommt einen Formteil.
+- Der Solist bekommt einen Formteil als Solo.
 - **Gegenbewegung zum Bass**: Gegenstimmen, Liegeklänge und Comping richten sich nach der
   Basslinie – fällt der Bass, steigen die Mittelstimmen (oder bleiben auf dem gemeinsamen Ton
   liegen); ein Korrekturdurchgang beseitigt verbleibende Parallelbewegungen.

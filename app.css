@@ -2101,3 +2101,779 @@ dialog::backdrop {
     padding: 18px;
   }
 }
+/* ======================================================================
+   Tabs: mehrere geöffnete Lieder
+   ====================================================================== */
+.song-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: -6px 0 18px;
+  border-bottom: 1px solid var(--border);
+}
+.song-tab-list {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding-top: 4px;
+}
+.song-tab-list::-webkit-scrollbar {
+  display: none;
+}
+.song-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 220px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  margin-bottom: -1px;
+  transition: background 0.2s var(--ease);
+}
+.song-tab:hover {
+  background: var(--surface-2);
+}
+.song-tab.active {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+/* Trennstrich zwischen inaktiven Tabs */
+.song-tab:not(.active) + .song-tab:not(.active)::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+  background: var(--border);
+}
+.st-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--muted);
+  text-align: left;
+  padding: 8px 4px 9px 14px;
+  cursor: pointer;
+}
+.song-tab.active .st-main {
+  color: var(--text);
+}
+.st-title,
+.st-sub {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-title {
+  font-weight: 650;
+  font-size: 13.5px;
+}
+.st-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.st-close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-right: 6px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.75;
+}
+.st-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  opacity: 1;
+}
+.st-close svg {
+  width: 14px;
+  height: 14px;
+}
+.song-tab-add {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 5px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.song-tab-add:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.song-tabs.busy .song-tab:not(.active) .st-main {
+  cursor: progress;
+}
+
+/* ======================================================================
+   Linke Spalte: nummerierte Schritte
+   ====================================================================== */
+.steps {
+  gap: 14px;
+}
+.step-head {
+  margin-bottom: 16px;
+}
+.step-title {
+  min-width: 0;
+}
+.step-title h2 {
+  font-size: 16px;
+  line-height: 1.25;
+}
+.step-title p {
+  margin: 1px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.step-num {
+  flex: none;
+}
+.step-num.ghost {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.step-num svg {
+  width: 15px;
+  height: 15px;
+}
+details.step > summary {
+  list-style: none;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+details.step > summary::-webkit-details-marker,
+details.fine > summary::-webkit-details-marker {
+  display: none;
+}
+details.step[open] > summary {
+  margin-bottom: 16px;
+}
+.chev {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.2s var(--ease);
+}
+details[open] > summary .chev {
+  transform: rotate(180deg);
+}
+.adv .field-grid {
+  margin-top: 0;
+}
+.adv .seed-row {
+  margin-bottom: 0;
+}
+.sub-block {
+  margin-top: 16px;
+}
+.ens-panel > .sub-block:first-child {
+  margin-top: 2px;
+}
+.sub-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sub-note {
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent-ink);
+}
+.count-seg {
+  margin: 0;
+}
+.count-seg .seg {
+  padding: 7px 0;
+  font-variant-numeric: tabular-nums;
+}
+.segmented.two {
+  margin-bottom: 0;
+}
+.segmented.two .seg {
+  white-space: normal;
+  line-height: 1.25;
+}
+.hint {
+  margin: 8px 0 0;
+  line-height: 1.45;
+}
+#step-band .toggle-row {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+#step-band .playback-row {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+#solo-field {
+  margin-top: 14px;
+}
+#step-style .field-grid {
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  margin-bottom: 0;
+}
+
+/* Instrumente als Liste: Nummer & Lage links, Instrument rechts */
+.voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.voice-list .voice-slot {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.voice-list select {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.voice-slot .vlabel b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.voice-slot .vlabel span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-list .vlabel {
+  min-width: 0;
+}
+
+/* Schritt 4: je Stimme anpassen */
+.fine {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.fine > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.fine-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+}
+.fine > summary small {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.fine > summary small.on {
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+.fine[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.fine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+.fine-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.fine-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 0;
+}
+/* Stufe über die ganze Breite, Tonumfang darunter */
+.fine-row .slot-extra {
+  grid-template-columns: 1fr 1fr;
+}
+.fine-row .slot-extra:not(.no-diff) select:first-child {
+  grid-column: 1 / -1;
+}
+.fine-name i {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* ======================================================================
+   Start-Bildschirm: Anzahl der Instrumente
+   ====================================================================== */
+.empty-state {
+  padding: 56px 32px 60px;
+  max-width: 680px;
+  border-radius: var(--radius);
+  transition: background 0.2s var(--ease);
+}
+.empty-state.over {
+  background: var(--accent-soft);
+  outline: 2px dashed var(--accent);
+  outline-offset: -14px;
+}
+.count-chooser {
+  max-width: 520px;
+  margin: 26px auto 0;
+}
+.cc-label {
+  margin-bottom: 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cc-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.cc-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 64px;
+  padding: 10px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.cc-tile strong {
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.cc-tile small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.cc-tile svg {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+}
+.cc-tile.drums {
+  grid-column: span 2;
+}
+.cc-tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.cc-tile.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.cc-tile.active small {
+  color: var(--accent-ink);
+}
+.count-chooser.pulse .cc-grid {
+  animation: ccPulse 0.9s var(--ease);
+}
+@keyframes ccPulse {
+  30% {
+    transform: scale(1.02);
+  }
+}
+.es-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 22px;
+}
+.empty-state.pending .es-actions,
+.empty-state.pending .feature-row {
+  display: none;
+}
+.empty-state.pending h1::after {
+  content: '';
+  display: block;
+  width: 120px;
+  height: 4px;
+  margin: 18px auto 0;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent-soft), var(--accent), var(--accent-soft));
+  background-size: 200% 100%;
+  animation: pendingBar 1.2s linear infinite;
+}
+@keyframes pendingBar {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ======================================================================
+   Bibliothek: Ordner
+   ====================================================================== */
+.lib-head-text {
+  min-width: 0;
+}
+.crumbs {
+  margin: 0 0 2px -4px;
+}
+.crumb-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 4px 10px 4px 2px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.crumb-back:hover,
+.crumb-back.drop-over {
+  background: var(--accent-soft);
+}
+.crumb-back.drop-over {
+  outline: 2px dashed var(--accent);
+}
+.title-input.head {
+  font-size: 26px;
+  max-width: 560px;
+  width: 100%;
+}
+.lib-section {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 -6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.lib-section:not(:first-child) {
+  margin-top: 14px;
+}
+.lib-section small {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  letter-spacing: 0;
+}
+.folder-card {
+  cursor: pointer;
+  gap: 8px;
+  /* angedeuteter Stapel: ein Ordner enthält mehrere Arrangements */
+  box-shadow: var(--shadow), 5px 5px 0 -1px var(--surface), 5px 5px 0 0 var(--border);
+}
+.folder-card:hover {
+  box-shadow: var(--shadow-lg), 5px 5px 0 -1px var(--surface), 5px 5px 0 0 var(--border);
+}
+.folder-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.fc-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+}
+.fc-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.folder-card.auto .fc-icon {
+  background: color-mix(in srgb, var(--brass) 14%, var(--surface));
+  color: var(--brass);
+}
+.fc-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.fc-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.folder-card:hover .fc-tools,
+.folder-card:focus-within .fc-tools {
+  opacity: 1;
+}
+@media (hover: none) {
+  .fc-tools {
+    opacity: 1;
+  }
+}
+.fc-tools .icon-btn {
+  width: 30px;
+  height: 30px;
+}
+.fc-tools .icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.icon-btn.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.fc-peek {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+.fc-peek span {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.folder-card.drop-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: translateY(-2px);
+}
+body.lib-dragging .folder-card:not(.auto) {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.lib-card.dragging {
+  opacity: 0.45;
+}
+.lib-card[draggable='true'] {
+  cursor: grab;
+}
+.lib-card .lib-actions .btn.ghost.small {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+/* Dialog: In Ordner verschieben */
+.move-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+}
+.move-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.move-head h2 {
+  font-size: 18px;
+}
+.move-head p {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.move-head .icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.move-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.move-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.move-opt:hover {
+  background: var(--surface-2);
+}
+.move-opt svg {
+  color: var(--accent);
+}
+.move-opt span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.move-opt.current {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+.move-opt small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.move-new {
+  display: flex;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.move-new input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- Responsive (Tabs, Schritte, Start, Ordner) ---------- */
+@media (max-width: 1100px) {
+  /* ohne Arrangement: Start-Bildschirm (Anzahl, Song wählen) zuerst */
+  .arrange-grid.no-result .workspace {
+    order: -1;
+    min-height: 0;
+  }
+}
+@media (max-width: 720px) {
+  .song-tabs {
+    margin: -4px -14px 14px;
+    padding-right: 14px;
+    gap: 6px;
+  }
+  .song-tab-list {
+    padding-left: 14px;
+  }
+  .song-tab {
+    width: 168px;
+  }
+  .st-main {
+    padding-left: 12px;
+  }
+  .empty-state {
+    padding: 26px 16px 28px;
+  }
+  .empty-state .empty-art,
+  .empty-state .feature-row {
+    display: none;
+  }
+  .empty-state h1 {
+    font-size: 22px;
+    margin-top: 0;
+  }
+  .empty-state p {
+    font-size: 14px;
+  }
+  .count-chooser {
+    margin-top: 18px;
+  }
+  #es-hint {
+    display: none;
+  }
+  .cc-grid {
+    gap: 6px;
+  }
+  .cc-tile {
+    min-height: 58px;
+    padding: 8px 2px 7px;
+  }
+  .cc-tile small {
+    font-size: 10.5px;
+  }
+  .voice-list .voice-slot {
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 8px;
+  }
+  #step-style .field-grid {
+    grid-template-columns: 1fr;
+  }
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .head-actions .btn {
+    flex: 1 1 auto;
+  }
+  .title-input.head {
+    font-size: 22px;
+  }
+}

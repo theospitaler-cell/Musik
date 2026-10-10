@@ -127,9 +127,15 @@ export function fixParallels(arr, report) {
     const a1 = a0 + b.measures * mt;
     // Paare bestimmen
     const pairs = [];
-    for (let i = 0; i < 4; i++)
-      for (let j = i + 1; j < 4; j++) {
-        const outer = (i === 0 && j === 3) || voices[i].events.some((e) => e.start >= a0 && e.start < a1 && LEAD_ROLES.has(e.role)) && j === 3;
+    const n = voices.length;
+    const bv = arr.bassVoice ?? (n === 4 ? 3 : n - 1);
+    const hasRole = (k, r) => voices[k].events.some((e) => e.start >= a0 && e.start < a1 && e.role === r);
+    for (let i = 0; i < n; i++)
+      for (let j = i + 1; j < n; j++) {
+        // gewollte Oktav-Verdopplung der Melodie (große Besetzung) ist keine Parallelführung
+        if (hasRole(i, 'double') || hasRole(j, 'double')) continue;
+        const [hi, lo] = j === bv ? [i, j] : i === bv ? [j, i] : [i, j];
+        const outer = lo === bv && (hi === 0 || voices[hi].events.some((e) => e.start >= a0 && e.start < a1 && LEAD_ROLES.has(e.role)));
         if (strictAll || outer) pairs.push([i, j]);
       }
     for (const [i, j] of pairs) {
@@ -187,11 +193,13 @@ export function fixParallels(arr, report) {
 }
 
 // ---------- Atmung --------------------------------------------------------
-export function insertBreaths(line, inst, tempo, report, factor = 1) {
+// maxRun: längste Strecke ohne Atempause in Ticks (Profi-Regel: spätestens nach 4 Takten)
+export function insertBreaths(line, inst, tempo, report, factor = 1, maxRun = null) {
   if (!isWind(inst)) return;
   const sec = 60 / tempo / 24; // Sekunden pro Tick
-  const maxTicks = (inst.breath * factor) / sec;
-  const minGap = Math.max(6, Math.round(0.22 / sec / 6) * 6);
+  const maxTicks = Math.min((inst.breath * factor) / sec, maxRun || Infinity);
+  // Atempause mindestens eine Achtel (bei sehr schnellen Tempi entsprechend länger)
+  const minGap = Math.max(12, Math.round(0.22 / sec / 6) * 6);
   const evs = line.events;
   let runStart = evs.length ? evs[0].start : 0;
   let lastIdx = 0;

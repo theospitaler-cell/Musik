@@ -5,6 +5,7 @@ import { PRESETS, slideGlissPossible, INSTRUMENTS } from '../src/arrange/instrum
 import { STYLE_LIST } from '../src/arrange/styles.js';
 import { demoSong } from './helpers.js';
 import { exportMusicXML } from '../src/output/musicxml.js';
+import * as rules from '../src/arrange/rules.js';
 
 const song = demoSong('saints');
 
@@ -25,11 +26,14 @@ test('alle Stile × Besetzungen: Tonumfang, keine Überlappungen, Bewegungsregel
   }
 });
 
-test('Rollentausch: Melodie wandert zwischen den Stimmen', () => {
+test('Stimme 1 = Lead: Melodie immer in Stimme 1 und oben, Abwechslung über die Dichte der Formteile', () => {
   const a = arrange(song, { style: 'funk', seed: 1 });
   const melodyVoices = new Set();
   for (const b of a.blocks) for (const seg of b.segments) seg.roles.forEach((r, i) => r === 'melody' && melodyVoices.add(i));
-  assert.ok(melodyVoices.size >= 2, 'Melodie in mindestens zwei Stimmen');
+  assert.deepEqual([...melodyVoices], [0]);
+  // Strophe dünn, Refrain voll: nicht jeder Themenabschnitt hat dieselbe Besetzung
+  const densities = new Set(a.blocks.filter((b) => b.type === 'theme').map((b) => b.density));
+  assert.ok(densities.size >= 2, [...densities].join());
 });
 
 test('Originallänge: jeder Formteil einmal, nur kurzes Intro & Schluss', () => {
@@ -335,4 +339,124 @@ test('Schlagzeug-Kategorie: immer Playback; eigener Rhythmus behält Groove & wi
   }
   assert.ok(pro.some((e) => e.ghost), 'Profi: Ghost-Notes');
   assert.ok(pro.some((e) => ['tom1', 'tom2', 'ftom'].includes(e.drum)), 'Profi: Fills über Toms');
+});
+
+// ---- Besetzung 2–8 & Profi-Regeln -------------------------------------------
+const SETS = {
+  2: ['trumpet', 'trombone'],
+  3: ['trumpet', 'altoSax', 'tuba'],
+  5: ['trumpet', 'trumpet', 'horn', 'trombone', 'tuba'],
+  8: ['trumpet', 'trumpet', 'altoSax', 'tenorSax', 'horn', 'trombone', 'bassTrombone', 'tuba'],
+};
+test('2 bis 8 Stimmen: Melodie bei der ersten Vorstellung exakt in Stimme 1, Lead (fast) immer oben', () => {
+  for (const [n, voices] of Object.entries(SETS))
+    for (const id of ['saints', 'ode', 'grace'])
+      for (const style of ['funk', 'ballad', 'swing']) {
+        const a = arrange(demoSong(id), { style, voices, seed: 1 });
+        assert.equal(a.voices.length, Number(n));
+        let hits = 0;
+        let total = 0;
+        let above = 0;
+        let checked = 0;
+        for (const b of a.blocks.filter((x) => x.type === 'theme')) {
+          const t0 = b.startBar * a.mt;
+          const t1 = t0 + b.measures * a.mt;
+          const mel = a.voices[0].events.filter((e) => e.start >= t0 && e.start < t1);
+          if (b.firstStatement)
+            for (const x of b.melody) {
+              total++;
+              if (mel.some((e) => e.start === t0 + x.start && (e.pitches[0] - x.midi) % 12 === 0)) hits++;
+            }
+          for (const e of mel) {
+            checked++;
+            for (let v = 1; v < a.voices.length; v++) {
+              const o = a.voices[v].events.find((x) => x.start <= e.start && x.start + x.dur > e.start);
+              if (o && Math.max(...o.pitches) > e.pitches[0]) above++;
+            }
+          }
+        }
+        assert.ok(total > 0 && hits / total >= 0.95, `${id}/${style}/${n}: Melodie ${hits}/${total}`);
+        // gelegentliche, klanglich motivierte Überschneidungen sind erlaubt – aber nicht immer
+        assert.ok(above <= Math.max(1, checked * 0.06), `${id}/${style}/${n}: über der Melodie ${above}/${checked}`);
+      }
+});
+
+test('Dichte-Dramaturgie: Strophe dünn (Melodie, Bass, Einwürfe), Refrain voll, große Besetzung verdoppelt im Refrain', () => {
+  const s = demoSong('saints');
+  // Strophe A (2×), Refrain B (3×): A B B A B
+  const sections = [
+    { label: 'A', start: 0, length: 3 },
+    { label: 'B', start: 3, length: 3 },
+    { label: 'B', start: 6, length: 3 },
+    { label: 'A', start: 9, length: 3 },
+    { label: 'B', start: 12, length: 3 },
+  ];
+  const song = { ...s, sections, measureCount: 15 };
+  const a = arrange(song, { style: 'funk', voices: SETS[8], seed: 1, solo: 'none' });
+  const theme = a.blocks.filter((b) => b.type === 'theme' || b.type === 'shout');
+  const first = theme[0];
+  assert.equal(first.density, 'thin');
+  const active = first.segments[0].roles.filter((r) => r !== 'rest').length;
+  assert.ok(active <= 3, `Strophe: ${first.segments[0].roles}`);
+  const chorus = theme.find((b) => b.density === 'full');
+  assert.ok(chorus, 'Refrain voll');
+  assert.ok(chorus.segments[0].roles.includes('double'), `Melodie im Refrain verdoppelt: ${chorus.segments[0].roles}`);
+  assert.ok(chorus.segments[0].roles.filter((r) => r !== 'rest').length >= 6);
+  // Dynamik: Refrain lauter als Strophe
+  const L = ['pp', 'p', 'mp', 'mf', 'f', 'ff'];
+  assert.ok(L.indexOf(chorus.dyn) > L.indexOf(first.dyn), `${first.dyn} -> ${chorus.dyn}`);
+});
+
+test('Guide-Tones: Terz in den Akkorden des vollen Satzes abgedeckt', () => {
+  let ok = 0;
+  let n = 0;
+  for (const id of ['saints', 'grace'])
+    for (const style of ['funk', 'swing', 'ballad']) {
+      const a = arrange(demoSong(id), { style, voices: SETS[5], seed: 1 });
+      for (const c of a.chordTrack) {
+        const third = c.chord.tones.find((t) => t.role === 'third');
+        if (!third) continue;
+        const pcs = [];
+        let mids = 0;
+        a.voices.forEach((v) => {
+          const e = v.events.find((x) => x.start <= c.start && x.start + x.dur > c.start);
+          if (!e) return;
+          if (['comp', 'pad', 'stabs', 'background'].includes(e.role)) mids++;
+          if (e.role !== 'bass') pcs.push(...e.pitches.map((p) => ((p % 12) + 12) % 12));
+        });
+        if (mids < 2) continue;
+        n++;
+        if (pcs.includes(third.pc)) ok++;
+      }
+    }
+  assert.ok(n > 10 && ok / n >= 0.9, `Terz abgedeckt ${ok}/${n}`);
+});
+
+test('Atem: Melodie spätestens nach 4 Takten mit Pause (mind. Achtel); Silbenwiederholungen zusammengefasst', () => {
+  for (const id of ['saints', 'ode', 'grace']) {
+    const a = arrange(demoSong(id), { ensemble: 'solo', soloInstrument: 'trumpet', style: 'ballad', seed: 1 });
+    const evs = a.voices[0].events;
+    let runStart = evs[0].start;
+    for (let i = 1; i < evs.length; i++) {
+      if (evs[i].start - (evs[i - 1].start + evs[i - 1].dur) >= 12) runStart = evs[i].start;
+      assert.ok(evs[i].start + evs[i].dur - runStart <= 4 * a.mt + a.mt / 2, `${id}: ${((evs[i].start - runStart) / a.mt).toFixed(1)} Takte ohne Atem`);
+    }
+  }
+  const { reduceSyllableRepeats } = rules;
+  const line = [0, 12, 24, 36, 48, 60].map((t) => ({ start: t, dur: 12, pitches: [67], lofs: [null], art: [], fx: [] }));
+  const r = reduceSyllableRepeats(line, 3, 24);
+  assert.ok(r.merged >= 2 && r.events.length <= 4, `${r.events.length} Töne`);
+  assert.ok(r.events.some((e) => e.dur === 24 && e.art.includes('tenuto')));
+});
+
+test('Original übernehmen (Mehrere): Melodie 1:1 in Stimme 1, Bass & Harmonie aus der Vorlage, 2–8 Stimmen', () => {
+  for (const voices of [SETS[2], SETS[5], SETS[8]]) {
+    const s = demoSong('saints');
+    const a = arrange(s, { voices, original: true });
+    assert.equal(a.voices.length, voices.length);
+    const v0 = a.voices[0].events;
+    const hit = s.melody.filter((n) => v0.some((e) => e.start === n.start + a.sourceOffset && (e.pitches[0] - n.midi) % 12 === 0)).length;
+    assert.equal(hit, s.melody.length);
+    assert.ok(a.voices.slice(1).every((v) => v.events.length > 0), 'alle Stimmen spielen');
+  }
 });

@@ -82,6 +82,7 @@ export function genTutti(ctx, voices, melody, { adapt = 1, octaveUp = false } = 
     const m = e.pitches[0];
     const strong = e.start % ctx.beat === 0;
     const harmonize = isChordTone(chord, m) || e.dur >= ctx.beat || strong;
+    if (!lowerLines.length) continue; // nur eine Stimme im Tutti (Duo): Melodie allein
     if (!harmonize && lowerLines[0].length) {
       // Durchgangston: Unterstimmen halten
       for (const l of lowerLines) {
@@ -127,8 +128,9 @@ export function genHits(ctx, voices, { rising = true } = {}) {
   const lineMap = {};
   for (const v of voices) lineMap[v] = [];
   let topP = clamp(ctx.lastPitch(top, topInst.comfort[0] + 7), topInst.comfort[0] + 3, topInst.comfort[1] - 4);
-  const hasBass = voices.includes(3) && ctx.inst[3].bassCapable;
-  const upper = hasBass ? voices.filter((v) => v !== 3) : voices;
+  const bv = ctx.bassVoice ?? 3;
+  const hasBass = voices.includes(bv) && ctx.inst[bv].bassCapable;
+  const upper = hasBass ? voices.filter((v) => v !== bv) : voices;
   let prevLower = upper.slice(1).map((v) => ctx.lastPitch(v, null));
   for (let bar = 0; bar < ctx.measures; bar++) {
     const isLast = bar === ctx.measures - 1;
@@ -157,12 +159,12 @@ export function genHits(ctx, voices, { rising = true } = {}) {
       });
       prevLower = vc.map((p) => p.midi);
       if (hasBass) {
-        const bi = ctx.inst[3];
-        const root = placePc(chord.bassPc ?? chord.rootPc, ctx.lastPitch(3, bi.comfort[0] + 7), bi.range[0], bi.comfort[0] + 14);
+        const bi = ctx.inst[bv];
+        const root = placePc(chord.bassPc ?? chord.rootPc, ctx.lastPitch(bv, bi.comfort[0] + 7), bi.range[0], bi.comfort[0] + 14);
         const be = ev(t, d, root, chord.bassLof ?? chord.rootLof);
         be.art = [...te.art];
-        lineMap[3].push(be);
-        ctx.setLast(3, root);
+        lineMap[bv].push(be);
+        ctx.setLast(bv, root);
       }
     }
   }
@@ -236,14 +238,15 @@ export function genFinal(ctx, voices) {
     const m = placePc(t.pc, topTarget, ti.comfort[0], ti.range[1] - 1);
     if (!best || Math.abs(m - topTarget) < Math.abs(best.midi - topTarget)) best = { midi: m, lof: t.lof };
   }
-  const hasBass = voices.includes(3) && ctx.inst[3].bassCapable;
-  const upper = hasBass ? voices.filter((v) => v !== 3) : voices;
+  const bv = ctx.bassVoice ?? 3;
+  const hasBass = voices.includes(bv) && ctx.inst[bv].bassCapable;
+  const upper = hasBass ? voices.filter((v) => v !== bv) : voices;
   const vc = voiceBelow(chord, best.midi, upper.slice(1).map((v) => ctx.inst[v]), st, upper.slice(1).map((v) => ctx.lastPitch(v, null)));
   const pitches = { [top]: best };
   upper.slice(1).forEach((v, k) => (pitches[v] = vc[k]));
   if (hasBass) {
-    const bi = ctx.inst[3];
-    pitches[3] = { midi: placePc(chord.rootPc, bi.comfort[0] + 3, bi.range[0], bi.comfort[0] + 12), lof: chord.rootLof };
+    const bi = ctx.inst[bv];
+    pitches[bv] = { midi: placePc(chord.rootPc, bi.comfort[0] + 3, bi.range[0], bi.comfort[0] + 12), lof: chord.rootLof };
   }
   const mt = ctx.mt;
   for (const v of voices) {
