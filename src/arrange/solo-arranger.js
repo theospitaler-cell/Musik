@@ -79,80 +79,61 @@ export function arrangeSolo(songIn, opts) {
   const V7 = buildChord(key.tonicLof + 1, 'dominant');
   const withImpro = opts.solo !== 'none' && length !== 'short';
 
-  // ---- Formplan ----
+  // ---- Formplan (ca. Originallänge) ----
+  // Intro (kurz) – jeder Formteil einmal: erstes Auftreten = Thema mit Fill-Ins,
+  // Wiederholungen = Variation, instrumentaler/mittlerer Teil = Solo, letzter = Höhepunkt
   const blocks = [];
   const add = (b) => blocks.push({ keyShift: 0, key, intensity: 0.55, ...b });
-  const introBars = length === 'short' ? 2 : 4;
   const motif = sliceMelody(song, 0, Math.min(2, M));
-  add({
-    type: 'intro',
-    name: 'Intro',
-    measures: introBars,
-    chords: chordsPerBar(introBars === 2 ? [T, V7] : [T, T, T, V7], mt),
-    role: isDrums ? 'groove-build' : 'hook',
-    dyn: style.dyn.intro,
+  const secInfo = sections.map((sec) => {
+    const mel = sliceMelody(song, sec.start, sec.start + sec.length);
+    return { sec, mel, instrumental: mel.length < Math.max(2, sec.length / 2) };
   });
-  sections.forEach((sec) => {
-    add({
-      type: 'theme',
-      name: `Thema ${sec.label}`,
-      measures: sec.length,
-      chords: sliceChords(song, sec.start, sec.start + sec.length),
-      melody: sliceMelody(song, sec.start, sec.start + sec.length),
-      role: isDrums ? 'groove' : 'melody',
-      source: sec,
-      dyn: style.dyn.theme,
-      leadIn: sec.start === 0 ? pickupNotes(song) : null,
-    });
-  });
-  if (length !== 'short') {
-    sections.forEach((sec, i) => {
-      if (length === 'normal' && i > 0 && sections.length > 2 && i !== sections.length - 1) return;
-      add({
-        type: 'variation',
-        name: `Variation ${sec.label}`,
-        measures: sec.length,
-        chords: sliceChords(song, sec.start, sec.start + sec.length),
-        melody: sliceMelody(song, sec.start, sec.start + sec.length),
-        role: isDrums ? 'groove-hot' : 'melodyVar',
-        source: sec,
-        intensity: 0.7,
-        dyn: style.dyn.variation || style.dyn.theme,
-      });
-    });
+  let first = 0;
+  if (secInfo.length && secInfo[0].instrumental && secInfo[0].sec.length >= 2) {
+    const s0 = secInfo[0].sec;
+    add({ type: 'intro', name: 'Intro', measures: s0.length, chords: sliceChords(song, s0.start, s0.start + s0.length), role: isDrums ? 'groove-build' : 'hook', dyn: style.dyn.intro });
+    first = 1;
+  } else {
+    const introBars = M <= 12 ? 2 : 4;
+    add({ type: 'intro', name: 'Intro', measures: introBars, chords: chordsPerBar(introBars === 2 ? [T, V7] : [T, T, T, V7], mt), role: isDrums ? 'groove-build' : 'hook', dyn: style.dyn.intro });
   }
-  if (withImpro) {
-    const bars = Math.min(length === 'long' ? 16 : 8, Math.max(8, sections[0].length));
-    let chords = sliceChords(song, sections[0].start, sections[0].start + Math.min(bars, M));
-    if (sections[0].length < bars) {
-      const more = sliceChords(song, 0, Math.min(M, bars));
-      chords = more;
+  const n = secInfo.length;
+  let soloAt = -1;
+  if (withImpro && n - first >= 3) {
+    const mid = (first + n - 1) / 2;
+    const cands = [];
+    for (let i = first + 1; i < n - 1; i++) cands.push(i);
+    const instr = cands.filter((i) => secInfo[i].instrumental);
+    const reps = cands.filter((i) => secInfo.slice(0, i).some((x) => x.sec.label === secInfo[i].sec.label));
+    const pick = (arr) => arr.sort((x, y) => Math.abs(x - mid) - Math.abs(y - mid))[0];
+    soloAt = instr.length ? pick(instr) : reps.length ? pick(reps) : n - first >= 4 ? pick(cands) : -1;
+  }
+  const seen = new Set();
+  for (let i = first; i < n; i++) {
+    const { sec, mel, instrumental } = secInfo[i];
+    const chords = sliceChords(song, sec.start, sec.start + sec.length);
+    const isLast = i === n - 1;
+    if (i === soloAt || (instrumental && !isLast && !isDrums)) {
+      add({ type: 'solo', name: isDrums ? 'Drum-Solo' : `Solo (${sec.label})`, measures: sec.length, chords, role: isDrums ? 'drumsolo' : 'solo', intensity: 0.75, dyn: style.dyn.solo === 'mp' ? 'mf' : style.dyn.solo, showChords: true, source: sec });
+    } else if (isLast && n - first >= 2) {
+      add({ type: 'shout', name: `Höhepunkt ${sec.label}`, measures: sec.length, chords, melody: mel, role: isDrums ? 'hits' : 'melodyClimax', source: sec, intensity: 0.95, dyn: style.dyn.shout });
+    } else if (seen.has(sec.label)) {
+      add({ type: 'variation', name: `Variation ${sec.label}`, measures: sec.length, chords, melody: mel, role: isDrums ? 'groove-hot' : 'melodyVar', source: sec, intensity: 0.7, dyn: style.dyn.variation || style.dyn.theme });
+    } else {
+      add({ type: 'theme', name: `Thema ${sec.label}`, measures: sec.length, chords, melody: mel, role: isDrums ? 'groove' : 'melody', source: sec, dyn: style.dyn.theme, leadIn: sec.start === 0 ? pickupNotes(song) : null });
     }
-    add({ type: 'solo', name: isDrums ? 'Drum-Solo' : 'Solo', measures: bars, chords, role: isDrums ? 'drumsolo' : 'solo', intensity: 0.75, dyn: style.dyn.solo === 'mp' ? 'mf' : style.dyn.solo, showChords: true });
+    seen.add(sec.label);
   }
-  const last = sections[sections.length - 1];
-  if (length !== 'short') {
-    add({
-      type: 'shout',
-      name: `Reprise ${last.label}`,
-      measures: last.length,
-      chords: sliceChords(song, last.start, last.start + last.length),
-      melody: sliceMelody(song, last.start, last.start + last.length),
-      role: isDrums ? 'hits' : 'melodyClimax',
-      source: last,
-      intensity: 0.95,
-      dyn: style.dyn.shout,
-    });
-  }
-  const tagFrom = Math.max(0, M - 2);
+  // Schluss: 2 Takte Schlussklang
   add({
     type: 'coda',
-    name: 'Coda',
-    measures: M - tagFrom + 2,
-    chords: [...sliceChords(song, tagFrom, M), { start: (M - tagFrom) * mt, dur: 2 * mt, chord: buildChord(key.tonicLof, key.mode === 'minor' ? 'minor' : 'major') }],
-    melody: sliceMelody(song, tagFrom, M),
+    name: 'Schluss',
+    measures: 2,
+    chords: [{ start: 0, dur: 2 * mt, chord: buildChord(key.tonicLof, key.mode === 'minor' ? 'minor' : 'major') }],
+    melody: [],
     role: isDrums ? 'hits' : 'melody',
-    tagBars: M - tagFrom,
+    tagBars: 0,
     intensity: 0.9,
     dyn: style.dyn.coda,
   });
@@ -168,7 +149,7 @@ export function arrangeSolo(songIn, opts) {
     b.chords = normalizeChords(b.chords, b.measures * mt);
     // Segmente (für Notensatz/Dynamik): eine Rolle pro Stimme
     const roleName = b.role === 'melodyVar' || b.role === 'melodyClimax' ? 'melody' : b.role;
-    if (b.type === 'coda' && !isDrums) b.segments = [{ bars: b.tagBars, roles: ['melody'], startBar: 0 }, { bars: 2, roles: ['final'], startBar: b.tagBars }];
+    if (b.type === 'coda' && !isDrums) b.segments = b.tagBars ? [{ bars: b.tagBars, roles: ['melody'], startBar: 0 }, { bars: 2, roles: ['final'], startBar: b.tagBars }] : [{ bars: 2, roles: ['final'], startBar: 0 }];
     else b.segments = [{ bars: b.measures, roles: [isDrums ? 'rest' : roleName], startBar: 0, climax: b.type === 'shout' }];
     bar += b.measures;
   }

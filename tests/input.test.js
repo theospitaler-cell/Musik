@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseABC } from '../src/input/abc.js';
 import { demoSong } from './helpers.js';
-import { DEMOS } from '../src/demos.js';
+import { DEMOS } from './fixtures/songs.js';
 
 test('ABC: Auftakt, Tonart, Akkorde, Abschnitte', () => {
   const s = demoSong('saints');

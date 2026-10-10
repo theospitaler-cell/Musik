@@ -151,7 +151,8 @@ export function planArrangement(songIn, opts) {
   const firstMelody = sliceMelody(song, 0, Math.min(2, M));
 
   // --- Intro -------------------------------------------------------------
-  const introBars = length === 'short' ? 4 : style.id === 'ballad' || style.id === 'swing' ? 4 : 8;
+  // Originallänge: kurzes Intro (4 Takte), nur auf Wunsch länger
+  const introBars = length === 'long' && style.id !== 'ballad' && style.id !== 'swing' ? 8 : 4;
   const T = tonicChord(key, style);
   const hookVoice = soloPref !== null && style.id === 'ballad' ? soloPref : style.id === 'ballad' ? 2 : 0;
   {
@@ -347,10 +348,13 @@ export function planArrangement(songIn, opts) {
   };
 
   // --- Solo ----------------------------------------------------------------
-  const soloBlock = () => {
+  const soloBlock = (overSection = null) => {
     let chords;
     let bars;
-    if (style.soloOver === 'vamp') {
+    if (overSection) {
+      bars = overSection.measures;
+      chords = overSection.chords;
+    } else if (style.soloOver === 'vamp') {
       bars = length === 'long' ? 16 : 8;
       const IV = key.mode === 'minor' ? degreeChord(key, 5, -1, 'minor-seventh') : degreeChord(key, 5, -1, 'dominant');
       const list = [];
@@ -388,11 +392,11 @@ export function planArrangement(songIn, opts) {
       }
       segs.push({ bars: bars - open, roles: soloRoles(sv, insts), soloVoice: sv, note: `Solo geht weiter; Backgrounds: erst Liegeklänge, dann Riffs` });
     }
-    return { type: 'solo', name: 'Solo', measures: bars, chords, segments: segs, intensity: 0.6, dyn: style.dyn.solo, key, showChords: true };
+    return { type: 'solo', name: overSection ? `Solo (${overSection.source.label})` : 'Solo', measures: bars, chords, segments: segs, intensity: 0.6, dyn: style.dyn.solo, key, showChords: true, source: overSection?.source };
   };
 
   // --- Coda ----------------------------------------------------------------
-  const codaBlock = (keyShift, { withShout = false, compact = false } = {}) => {
+  const codaBlock = (keyShift, { withShout = false, compact = false, finalOnly = false } = {}) => {
     const k2 = transposeKey(key, keyShift);
     const tagFrom = Math.max(0, M - 2);
     const tagMel = transposeEvents(sliceMelody(song, tagFrom, M), keyShift);
@@ -404,6 +408,10 @@ export function planArrangement(songIn, opts) {
     let chords = [];
     let bars = 0;
     let melody = [];
+    if (finalOnly) {
+      const fin = [{ start: 0, dur: 2 * mt, chord: finalChord }];
+      return { type: 'coda', name: 'Schluss', measures: 2, chords: fin, melody: [], melodyVoice: 0, segments: [{ bars: 2, roles: ['final', 'final', 'final', 'final'], note: 'Schlussakkord' }], intensity: 0.9, dyn: style.dyn.coda, key: k2, keyShift };
+    }
     if (withShout) {
       const last = sections[sections.length - 1];
       const shMel = transposeEvents(sliceMelody(song, last.start, last.start + last.length), keyShift);
@@ -438,66 +446,73 @@ export function planArrangement(songIn, opts) {
     return { type: 'coda', name: 'Coda', measures: bars, chords, melody, melodyVoice: 0, segments: segs, intensity: 0.9, dyn: style.dyn.coda, key: k2, keyShift, codaSign: compact && withShout };
   };
 
-  // --- Formablauf je Länge & Stil ------------------------------------------
-  const compact = opts.form !== 'full';
-  const firstChordOfSong = song.chords[0]?.chord || T;
+  // --- Formablauf: ca. Originallänge -----------------------------------------
+  // Jeder Formteil des Liedes genau einmal in Originalreihenfolge. Das Solo ersetzt
+  // einen instrumentalen oder wiederholten Mittelteil, der letzte Refrain wird zum
+  // Shout Chorus; dazu nur ein kurzes Intro und ein kurzer Schluss.
   const form = { segnoBlock: null, toCodaBlock: null, dsAfterBlock: null, codaBlock: null };
-  // D.S. al Coda: Rücksprung zum Segno (Thema), bei "To Coda" in die Coda
-  const addDsReturn = (themeIdx) => {
-    if (!themeIdx.length) return false;
-    const upto = themeIdx.length >= 2 ? themeIdx.length - 1 : themeIdx.length;
-    // lange Songs: Rücksprung nur zu den letzten Formteilen (sonst wird es sehr lang)
-    const from = M > 48 ? Math.max(0, upto - 2) : 0;
-    form.segnoBlock = themeIdx[from];
-    form.toCodaBlock = themeIdx[upto - 1];
-    form.dsAfterBlock = blocks.length - 1;
-    for (let k = from; k < upto; k++) {
-      const src = blocks[themeIdx[k]];
-      add({ ...src, copyOf: themeIdx[k], name: `${src.name} (D.S.)`, segments: src.segments.map((x) => ({ ...x })) });
+  const theme = themeBlocks(0, 0, 'theme');
+  for (const b of theme) b.instrumental = (b.melody || []).length < Math.max(2, b.measures / 2);
+  const labelCount = {};
+  for (const b of theme) labelCount[b.source.label] = (labelCount[b.source.label] || 0) + 1;
+  const seenBefore = (i) => theme.slice(0, i).some((x) => x.source.label === theme[i].source.label);
+  const n = theme.length;
+  // Shout: letzte Wiederholung des häufigsten Formteils im letzten Drittel, sonst letzter Teil
+  let shoutAt = -1;
+  if (n >= 2) {
+    const top = Object.entries(labelCount).sort((x, y) => y[1] - x[1])[0][0];
+    for (let i = n - 1; i >= Math.floor((n * 2) / 3); i--) if (theme[i].source.label === top && !theme[i].instrumental) {
+      shoutAt = i;
+      break;
     }
-    return themeIdx.length >= 2;
+    if (shoutAt < 0 && !theme[n - 1].instrumental) shoutAt = n - 1;
+  }
+  // Solo: instrumentaler Mittelteil bevorzugt, sonst eine Wiederholung in der Mitte
+  let soloAt = -1;
+  if (!noSolo && n >= 3) {
+    const mid = (n - 1) / 2;
+    const cands = [];
+    for (let i = 1; i < n - 1; i++) if (i !== shoutAt) cands.push(i);
+    const instr = cands.filter((i) => theme[i].instrumental);
+    const reps = cands.filter((i) => seenBefore(i));
+    const pickMid = (arr) => arr.sort((x, y) => Math.abs(x - mid) - Math.abs(y - mid))[0];
+    if (instr.length) soloAt = pickMid(instr);
+    else if (reps.length) soloAt = pickMid(reps);
+    else if (n >= 4) soloAt = pickMid(cands);
+  }
+  const instrumentalRoles = (bars, first) => {
+    const funky = style.id === 'funk' || style.id === 'secondline' || style.id === 'polka' || style.id === 'swing';
+    const h = Math.max(1, Math.floor(bars / 2));
+    if (funky)
+      return [
+        { bars: h, roles: first ? ['rest', 'stabs', 'stabs', 'bass'] : ['riff', 'riff', 'comp', 'bass'], note: first ? 'Groove: Bass + Stabs' : 'Riff (instrumentaler Teil)' },
+        ...(bars - h > 0 ? [{ bars: bars - h, roles: ['riff', 'riff', 'riff', 'bass'], note: 'Riff' }] : []),
+      ];
+    return [
+      { bars: h, roles: ['rest', 'pad', 'pad', 'bass'], note: 'Liegeklänge' },
+      ...(bars - h > 0 ? [{ bars: bars - h, roles: ['counter', 'pad', 'pad', 'bass'], note: 'Melodische Überleitung' }] : []),
+    ];
   };
-  const themeIdx = [];
-  for (const b of themeBlocks(0, 0, 'theme')) {
-    add(b);
-    themeIdx.push(blocks.length - 1);
+  // Hat das Lied selbst ein instrumentales Intro, ersetzt es das generierte Intro
+  if (theme.length && theme[0].instrumental && theme[0].measures >= 2) {
+    blocks.pop();
+    const t0 = theme[0];
+    add({ ...t0, type: 'intro', name: 'Intro', segments: instrumentalRoles(t0.measures, true), intensity: 0.55, dyn: style.dyn.intro, motif: firstMelody });
+    theme.shift();
+    if (soloAt >= 0) soloAt--;
+    if (shoutAt >= 0) shoutAt--;
   }
-  if (length === 'short') {
-    add(codaBlock(0, { compact }));
-  } else if (style.id === 'polka') {
-    const trioShift = style.modulateTrio || 5;
-    const trioFirst = transposeChord(firstChordOfSong, trioShift);
-    add(interlude(trioShift, trioFirst, 4));
-    for (const b of themeBlocks(1, trioShift, 'trio')) add(b);
-    if (!noSolo && length === 'long') add(soloBlock());
-    if (compact) {
-      const shoutInCoda = addDsReturn(themeIdx);
-      add(codaBlock(0, { withShout: shoutInCoda, compact }));
-      form.codaBlock = blocks.length - 1;
-    } else {
-      add(interlude(0, firstChordOfSong, 4));
-      for (const b of themeBlocks(2, 0, 'recap')) add(b);
-      add(codaBlock(0, { compact }));
-    }
-  } else {
-    add(interlude(0, firstChordOfSong));
-    if (length === 'long') for (const b of themeBlocks(1, 0, 'variation')) add(b);
-    if (!noSolo) add(soloBlock());
-    else if (length !== 'long') for (const b of themeBlocks(1, 0, 'variation')) add(b);
-    const mod = opts.modulate !== false && style.modulateFinal ? style.modulateFinal : 0;
-    if (compact && !mod && length !== 'long') {
-      const shoutInCoda = addDsReturn(themeIdx);
-      add(codaBlock(0, { withShout: shoutInCoda, compact }));
-      form.codaBlock = blocks.length - 1;
-    } else {
-      if (mod) add(interlude(mod, transposeChord(firstChordOfSong, mod), 2));
-      // Reprise: bei langen Songs nur die letzten Abschnitte
-      const recap = themeBlocks(2, mod, 'recap');
-      const keep = length === 'long' ? recap : recap.slice(-Math.min(recap.length, M > 32 ? 2 : 3));
-      for (const b of keep) add(b);
-      add(codaBlock(mod, { compact }));
-    }
-  }
+  theme.forEach((b, i) => {
+    if (i === soloAt) {
+      const sb = soloBlock(b);
+      add(sb);
+    } else if (i === shoutAt) {
+      add({ ...b, type: 'shout', name: `Shout Chorus ${b.source.label}`, melodyVoice: 0, segments: [{ bars: b.measures, roles: ['tutti', 'tutti', 'tutti', 'bass'], climax: true }], intensity: 0.95, dyn: style.dyn.shout });
+    } else if (b.instrumental) {
+      add({ ...b, type: 'interlude', name: `Zwischenspiel ${b.source.label}`, segments: instrumentalRoles(b.measures, false), intensity: 0.6, dyn: style.dyn.interlude });
+    } else add(b);
+  });
+  add(codaBlock(0, { finalOnly: true }));
 
   // Probenbuchstaben & Taktpositionen
   let bar = 0;

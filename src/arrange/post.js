@@ -206,12 +206,13 @@ export function insertBreaths(line, inst, tempo, report, factor = 1) {
     if (end - runStart > maxTicks) {
       // besten Atempunkt im aktuellen Lauf suchen: langer Ton, endet auf Zählzeit
       let best = null;
+      // bevorzugt eine Note VOR dem aktuellen Ton kürzen (damit vor ihm geatmet wird)
       for (let k = Math.max(lastIdx, i - 16); k <= i; k++) {
         const c = evs[k];
         const cEnd = c.start + c.dur;
-        if (cEnd - runStart < maxTicks * 0.35) continue;
+        if (cEnd - runStart < maxTicks * 0.2 && k < i) continue;
         if (c.dur < minGap * 2 || c.tieToNext) continue;
-        const score = c.dur + (cEnd % 24 === 0 ? 12 : 0) + (c.role && LEAD_ROLES.has(c.role) ? 0 : 6);
+        const score = c.dur + (cEnd % 24 === 0 ? 12 : 0) + (c.role && LEAD_ROLES.has(c.role) ? 0 : 6) + (k < i ? 1000 : 0);
         if (!best || score > best.score) best = { k, score };
       }
       const k = best ? best.k : i;

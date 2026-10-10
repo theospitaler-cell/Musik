@@ -1,5 +1,5 @@
 import { parseABC } from '../src/input/abc.js';
-import { DEMOS } from '../src/demos.js';
+import { DEMOS } from './fixtures/songs.js';
 import { parseXML } from '../src/core/xml.js';
 
 export const demoSong = (id = 'saints') => parseABC(DEMOS.find((d) => d.id === id).abc);

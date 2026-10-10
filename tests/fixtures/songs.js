@@ -1,4 +1,4 @@
-// Demo-Vorlagen (gemeinfrei bzw. eigene Komposition) im ABC-Format.
+// Test-Lieder (gemeinfrei bzw. eigene Komposition) im ABC-Format.
 export const DEMOS = [
   {
     id: 'saints',

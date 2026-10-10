@@ -31,11 +31,22 @@ test('Rollentausch: Melodie wandert zwischen den Stimmen', () => {
   assert.ok(melodyVoices.size >= 2, 'Melodie in mindestens zwei Stimmen');
 });
 
-test('Solist bekommt das Solo, kompakte Form nutzt D.S. al Coda', () => {
-  const a = arrange(song, { style: 'funk', solo: 2, seed: 1 });
+test('Originallänge: jeder Formteil einmal, nur kurzes Intro & Schluss', () => {
+  for (const id of ['saints', 'ode', 'grace', 'groove']) {
+    const sg = demoSong(id);
+    const a = arrange(sg, { style: 'funk', seed: 1 });
+    assert.ok(a.totalBars <= sg.measureCount + 8, `${id}: ${a.totalBars} Takte bei ${sg.measureCount} Originaltakten`);
+    assert.ok(a.totalBars >= sg.measureCount, id);
+  }
+});
+
+test('Solist bekommt einen Formteil als Solo (statt zusätzlicher Takte)', () => {
+  const sg = demoSong('grace');
+  const a = arrange(sg, { style: 'funk', solo: 2, seed: 1 });
   const solo = a.blocks.find((b) => b.type === 'solo');
+  assert.ok(solo, 'Solo vorhanden');
   assert.ok(solo.segments.every((s) => s.roles[2] === 'solo'));
-  assert.ok(a.form.segnoBar !== null && a.form.codaBar !== null);
+  assert.ok(a.blocks.some((b) => b.type === 'shout'));
 });
 
 test('Ausgeschriebene Form ohne Sprünge', () => {
@@ -94,12 +105,14 @@ test('Schwierigkeit: Stufe 1 ohne 16tel & Effekte, Stufe pro Stimme', () => {
 });
 
 test('Solo-Noten: ein Instrument bzw. Schlagzeug-Chart', () => {
-  const t = arrange(song, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1 });
+  const grace = demoSong('grace');
+  const t = arrange(grace, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1 });
   assert.equal(t.voices.length, 1);
   assert.equal(t.drums, null);
-  assert.ok(t.voices[0].events.length > 40);
+  assert.ok(t.voices[0].events.length > 30);
+  assert.ok(t.totalBars <= grace.measureCount + 6);
   assert.ok(t.blocks.some((b) => b.type === 'solo'));
-  const d = arrange(song, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
+  const d = arrange(grace, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
   assert.equal(d.voices.length, 0);
   assert.ok(d.drums.events.length > 100);
   assert.ok(d.blocks.some((b) => b.name === 'Drum-Solo'));
