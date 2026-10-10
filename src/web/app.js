@@ -148,7 +148,20 @@ function progress(title) {
   };
   return api.set('', 0);
 }
-const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+// Nächstes Bild abwarten, damit die Anzeige sichtbar wird. Ist das Fenster verdeckt oder
+// minimiert, liefert der Browser keine Bilder – dann geht es nach kurzer Zeit trotzdem weiter
+// (sonst bliebe der Vorgang hängen und alle Tabs wären gesperrt).
+const nextFrame = () =>
+  new Promise((r) => {
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      setTimeout(r, 0);
+    };
+    requestAnimationFrame(go);
+    setTimeout(go, 120);
+  });
 
 function readFileWithProgress(file, onProgress) {
   return new Promise((resolve, reject) => {
@@ -397,7 +410,7 @@ function stopPlayer() {
     window.__player = null;
   }
   setPlayIcon(false);
-  lastHighlight = -1;
+  S.follower?.clear();
   $('#player').classList.add('hidden');
   $('#mixer').classList.remove('open');
 }
@@ -503,9 +516,10 @@ function closeTab(t) {
 }
 
 // Neues Projekt: neuer, leerer Tab mit Auswahl der Besetzung
-async function startNew({ folder = null } = {}) {
+// force: der „+“-Knopf öffnet immer einen weiteren Tab (wie im Browser)
+async function startNew({ folder = null, force = false } = {}) {
   showView('arrange');
-  if (!tabInUse(S.tab)) {
+  if (!tabInUse(S.tab) && !(force && S.tabs.length < 12)) {
     S.tab.folder = folder;
     refreshEmptyState();
     $('#count-chooser').classList.add('pulse');
@@ -2447,7 +2461,7 @@ async function main() {
   ['dragleave', 'drop'].forEach((ev) => es.addEventListener(ev, (e) => (e.preventDefault(), es.classList.remove('over'))));
   es.addEventListener('drop', (e) => e.dataTransfer.files[0] && handleFile(e.dataTransfer.files[0], { replace: !S.arr && !S.tab.pendingId }));
   // Tabs
-  $('#tab-add').addEventListener('click', () => startNew());
+  $('#tab-add').addEventListener('click', () => startNew({ force: true }));
   // Besetzung: Original übernehmen / neu arrangieren
   $$('#arr-mode .seg').forEach((b) =>
     b.addEventListener('click', () => {

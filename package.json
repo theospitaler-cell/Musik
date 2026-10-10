@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "serve": "python3 -m http.server 8000",
+    "serve": "node scripts/serve.mjs 8000",
     "desktop": "electron .",
     "dist": "electron-builder --publish never",
     "web": "node scripts/build-web.mjs"

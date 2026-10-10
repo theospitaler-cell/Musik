@@ -3,7 +3,18 @@
 import { renderMixdown, encodeMp3, canStretchOffline } from './audio-export.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+// auch bei verdecktem Fenster weiterlaufen (dort liefert der Browser keine Bilder)
+const nextFrame = () =>
+  new Promise((r) => {
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      setTimeout(r, 0);
+    };
+    requestAnimationFrame(go);
+    setTimeout(go, 120);
+  });
 let busy = false;
 
 function dialogEl() {
