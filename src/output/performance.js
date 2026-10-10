@@ -27,6 +27,42 @@ export function makeClock(tempoMap, defaultBpm) {
   };
 }
 
+// Ticks -> Sekunden entlang der Beats einer Aufnahme (Play-along mit Audio).
+// timing = {beatSec: [s], firstBeat, beatTicks}; offset = Tick, an dem Takt 1 der Vorlage beginnt.
+// Liegt der Anfang vor dem Dateianfang (Auftakt-Takt), wird alles nach hinten verschoben:
+// audioStart = Sekunde, an der die Aufnahme beginnt.
+export function makeBeatClock(timing, offset = 0) {
+  const bs = timing.beatSec;
+  const n = bs.length;
+  const bt = timing.beatTicks || DIV;
+  const secAt = (idx) => {
+    if (n < 2) return (bs[0] || 0) + idx * 0.5;
+    if (idx <= 0) return bs[0] + idx * (bs[1] - bs[0]);
+    if (idx >= n - 1) return bs[n - 1] + (idx - (n - 1)) * (bs[n - 1] - bs[n - 2]);
+    const i = Math.floor(idx);
+    return bs[i] + (idx - i) * (bs[i + 1] - bs[i]);
+  };
+  const idxAt = (sec) => {
+    if (n < 2 || sec <= bs[0]) return n < 2 ? (sec - (bs[0] || 0)) / 0.5 : (sec - bs[0]) / (bs[1] - bs[0]);
+    if (sec >= bs[n - 1]) return n - 1 + (sec - bs[n - 1]) / (bs[n - 1] - bs[n - 2]);
+    let lo = 0;
+    let hi = n - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (bs[mid] <= sec) lo = mid;
+      else hi = mid;
+    }
+    return lo + (sec - bs[lo]) / (bs[lo + 1] - bs[lo]);
+  };
+  const raw = (t) => secAt(timing.firstBeat + (t - offset) / bt);
+  const audioStart = Math.max(0, -raw(0));
+  return {
+    audioStart,
+    toSec: (t) => raw(t) + audioStart,
+    toTick: (sec) => (idxAt(sec - audioStart) - timing.firstBeat) * bt + offset,
+  };
+}
+
 // Swing: Offbeat-Achtel auf die Triolen-Position (2:1) verschieben
 function swingTick(t, on) {
   if (!on) return t;
@@ -59,7 +95,7 @@ function dynamicAt(dirs) {
 
 // Ergebnis: [{part, t(sec), d(sec), midi, vel, fx: {...}}], Dauer gesamt
 export function performArrangement(arr, { swing = arr.meta?.swing } = {}) {
-  const clock = makeClock(arr.tempoMap, arr.tempo);
+  const clock = arr.timing ? makeBeatClock(arr.timing, arr.sourceOffset || 0) : makeClock(arr.tempoMap, arr.tempo);
   const notes = [];
   const sw = (t) => swingTick(t, swing);
   arr.voices.forEach((v, vi) => {
@@ -104,7 +140,19 @@ export function performArrangement(arr, { swing = arr.meta?.swing } = {}) {
       notes.push({ part: 'drums', t: t0, d: 0.12, midi: e.pitches[0], vel, fx: {} });
     }
   }
+  // Original zum Mitspielen (Noten aller Spuren der Vorlage)
+  const bk = arr.backing;
+  if (bk && bk.kind === 'notes') {
+    for (const n of bk.notes) {
+      const t0 = clock.toSec(n.start);
+      const t1 = clock.toSec(n.start + Math.max(2, n.dur * 0.95));
+      notes.push({ part: n.mel ? 'origMel' : 'orig', t: t0, d: t1 - t0, midi: n.midi, vel: clamp(n.vel ?? 80, 20, 127), fx: {}, prog: n.program ?? 0 });
+    }
+    for (const n of bk.drums) notes.push({ part: 'origDrums', t: clock.toSec(n.start), d: 0.12, midi: n.midi, vel: clamp(n.vel ?? 90, 20, 127), fx: {} });
+  }
   notes.sort((a, b) => a.t - b.t);
-  const total = clock.toSec(arr.totalBars * arr.mt) + 1.5;
-  return { notes, total, clock, barToSec: (bar) => clock.toSec(bar * arr.mt), secToBar: (s) => Math.floor(clock.toTick(s) / arr.mt) };
+  const audioStart = clock.audioStart || 0;
+  let total = clock.toSec(arr.totalBars * arr.mt) + 1.5;
+  if (bk && bk.kind === 'audio' && arr.song?.duration) total = Math.max(total, audioStart + arr.song.duration);
+  return { notes, total, clock, audioStart, barToSec: (bar) => clock.toSec(bar * arr.mt), secToBar: (s) => Math.floor(clock.toTick(s) / arr.mt) };
 }

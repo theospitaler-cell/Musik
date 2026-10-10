@@ -117,7 +117,8 @@ export function scanScore(xmlText) {
       const u = mi.num('midi-unpitched');
       if (u) unp[mi.attrs.id] = u - 1;
     }
-    partInfo[sp.attrs.id] = { name: sp.val('part-name') || sp.attrs.id, unpitched: unp };
+    const prog = sp.all('midi-instrument').map((mi) => mi.num('midi-program')).find((x) => x);
+    partInfo[sp.attrs.id] = { name: sp.val('part-name') || sp.attrs.id, unpitched: unp, program: prog ? prog - 1 : 0 };
   }
 
   const parts = [];
@@ -263,7 +264,7 @@ export function scanScore(xmlText) {
       measures.push(mm);
     }
     const pitched = measures.reduce((s, m) => s + m.notes.length, 0);
-    parts.push({ id: part.attrs.id, name: partInfo[part.attrs.id]?.name || `Stimme ${pIdx + 1}`, measures, unpitched: unpitchedCount > pitched });
+    parts.push({ id: part.attrs.id, name: partInfo[part.attrs.id]?.name || `Stimme ${pIdx + 1}`, measures, unpitched: unpitchedCount > pitched, program: partInfo[part.attrs.id]?.program ?? 0 });
     if (pIdx === 0) {
       measureMeta.push(...measures);
       if (rawKey) key = transposeKey(rawKey, transposeChromatic % 12);
@@ -328,7 +329,7 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
       const m = p.measures[mIdx];
       if (!m) return;
       for (const n of m.notes) {
-        const ev = { start: starts[k] + n.start, dur: n.dur, midi: n.midi, lof: n.lof, tieStart: n.tieStart, tieStop: n.tieStop, voice: n.voice, staff: n.staff };
+        const ev = { start: starts[k] + n.start, dur: n.dur, midi: n.midi, lof: n.lof, tieStart: n.tieStart, tieStop: n.tieStop, voice: n.voice, staff: n.staff, part: pIdx };
         allNotes.push(ev);
         if (pIdx === melIdx) melodyRaw.push(ev);
       }
@@ -340,7 +341,7 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
     const out = [];
     const open = new Map();
     for (const n of s) {
-      const keyId = `${n.staff}|${n.voice}|${n.midi}`;
+      const keyId = `${n.part}|${n.staff}|${n.voice}|${n.midi}`;
       const o = open.get(keyId);
       if (n.tieStop && o && o.start + o.dur === n.start) {
         o.dur += n.dur;
@@ -381,7 +382,9 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
       for (const d of p.measures[mIdx]?.drums || []) drumNotes.push({ ...d, start: starts[k] + d.start });
     });
   });
-  const backingNotes = merged.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, vel: 80, program: 0 }));
+  const tracks = scan.parts
+    .map((p, pIdx) => ({ id: `p${pIdx}`, name: p.name, program: p.program ?? 0, mel: pIdx === melIdx, notes: merged.filter((n) => n.part === pIdx).map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, vel: 80 })) }))
+    .filter((t) => t.notes.length);
 
   // Akkorde: erste Stimme mit Harmonien
   const chords = [];
@@ -415,7 +418,7 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
     warnings,
     source: 'musicxml',
     drumNotes,
-    backing: { notes: backingNotes },
+    tracks,
     parts: describeParts(scan),
     melodyPart: melIdx,
   };

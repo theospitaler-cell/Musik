@@ -140,17 +140,19 @@ export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
   const mt = (meter.beats * DIV * 4) / meter.beatType;
   // Schlagzeug (Kanal 10) und Original-Noten aller Spuren für die Wiedergabe
   const drumNotes = [];
-  const backingNotes = [];
-  parsed.tracks.forEach((t) => {
+  const tracks = [];
+  parsed.tracks.forEach((t, ti) => {
+    const notes = [];
     for (const n of t.notes) {
       const s0 = Math.round(quantizeTick(conv(n.start), DIV));
       let e0 = Math.round(quantizeTick(conv(n.end), DIV));
       if (e0 <= s0) e0 = s0 + DIV / 4;
       if (n.ch === 9) drumNotes.push({ start: s0, dur: Math.min(e0 - s0, DIV / 2), midi: n.key, vel: n.vel });
-      else backingNotes.push({ start: s0, dur: e0 - s0, midi: n.key, vel: n.vel, program: t.program ?? 0 });
+      else notes.push({ start: s0, dur: e0 - s0, midi: n.key, vel: n.vel });
     }
+    if (notes.length) tracks.push({ id: `t${ti}`, name: t.name, program: t.program ?? 0, mel: ti === melIdx, notes });
   });
-  const lastEnd = Math.max(0, ...[...backingNotes, ...drumNotes].map((n) => n.start + n.dur));
+  const lastEnd = Math.max(0, ...[...tracks.flatMap((t) => t.notes), ...drumNotes].map((n) => n.start + n.dur));
   const song = {
     title: title || parsed.tracks.find((t) => t.name && !/^Spur/.test(t.name))?.name || 'MIDI-Import',
     composer: null,
@@ -166,7 +168,7 @@ export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
     warnings: ['MIDI enthält keine Akkordsymbole – Harmonik wurde automatisch analysiert.'],
     source: 'midi',
     drumNotes,
-    backing: { notes: backingNotes },
+    tracks,
     parts: desc,
     melodyPart: melIdx,
   };

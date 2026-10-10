@@ -1,0 +1,774 @@
+// Audio (MP3/WAV/M4A/OGG/FLAC) -> Leadsheet (Melodie, Akkorde, Tempo, Takt, Tonart).
+// Reine Signalverarbeitung in JavaScript (läuft im Web-Worker):
+//   1. Spektrum (STFT) mit Whitening
+//   2. Onset-Hüllkurve -> Tempo (Autokorrelation) -> Beat-Tracking (dynamische Programmierung)
+//   3. Chroma pro Schlag -> Taktart & Taktanfänge (Akkordwechsel), Akkorde & Tonart
+//   4. Melodie: harmonische Summation (Salienz) + Viterbi-Glättung -> Noten
+// Das Ergebnis ist eine Annäherung – bei klaren Gesangs-/Instrumentalmelodien gut,
+// bei sehr dichten Mixen weniger genau.
+import { DIV } from '../core/constants.js';
+import { finalizeSong } from '../theory/analysis.js';
+import { harmonize } from '../theory/analysis.js';
+import { detectKey } from '../theory/keys.js';
+
+const SR = 22050;
+const N = 2048;
+const HOP = 441; // 20 ms
+const FR = SR / HOP; // 50 Frames/s
+
+// ---------- FFT (radix-2, komplex, in-place) ----------
+function makeFFT(n) {
+  const levels = Math.log2(n);
+  const cos = new Float32Array(n / 2);
+  const sin = new Float32Array(n / 2);
+  for (let i = 0; i < n / 2; i++) {
+    cos[i] = Math.cos((2 * Math.PI * i) / n);
+    sin[i] = Math.sin((2 * Math.PI * i) / n);
+  }
+  const rev = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    let x = i;
+    let r = 0;
+    for (let b = 0; b < levels; b++) {
+      r = (r << 1) | (x & 1);
+      x >>= 1;
+    }
+    rev[i] = r;
+  }
+  return (re, im) => {
+    for (let i = 0; i < n; i++) {
+      const j = rev[i];
+      if (j > i) {
+        let t = re[i];
+        re[i] = re[j];
+        re[j] = t;
+        t = im[i];
+        im[i] = im[j];
+        im[j] = t;
+      }
+    }
+    for (let size = 2; size <= n; size <<= 1) {
+      const half = size >> 1;
+      const step = n / size;
+      for (let i = 0; i < n; i += size) {
+        for (let j = i, k = 0; j < i + half; j++, k += step) {
+          const l = j + half;
+          const tre = re[l] * cos[k] + im[l] * sin[k];
+          const tim = -re[l] * sin[k] + im[l] * cos[k];
+          re[l] = re[j] - tre;
+          im[l] = im[j] - tim;
+          re[j] += tre;
+          im[j] += tim;
+        }
+      }
+    }
+  };
+}
+
+export function resampleMono(channels, sampleRate) {
+  const len = channels[0].length;
+  const mono = new Float32Array(len);
+  for (const ch of channels) for (let i = 0; i < len; i++) mono[i] += ch[i] / channels.length;
+  if (sampleRate === SR) return mono;
+  const ratio = sampleRate / SR;
+  const outLen = Math.floor(len / ratio);
+  const out = new Float32Array(outLen);
+  // einfacher Tiefpass (gleitender Mittelwert) gegen Aliasing, dann linear interpolieren
+  const k = Math.max(1, Math.round(ratio));
+  let acc = 0;
+  const smooth = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    acc += mono[i];
+    if (i >= k) acc -= mono[i - k];
+    smooth[i] = acc / Math.min(k, i + 1);
+  }
+  for (let i = 0; i < outLen; i++) {
+    const x = i * ratio;
+    const i0 = Math.floor(x);
+    const f = x - i0;
+    out[i] = smooth[i0] * (1 - f) + (smooth[Math.min(len - 1, i0 + 1)] || 0) * f;
+  }
+  return out;
+}
+
+const binHz = SR / N;
+const midiToHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+
+// Pitch-Kandidaten für die Melodie (0,2 Halbtöne)
+const P_LO = 48;
+const P_HI = 86;
+const P_STEP = 0.2;
+const CANDS = [];
+for (let m = P_LO; m <= P_HI; m += P_STEP) CANDS.push(m);
+
+export function analyzeFrames(x, onProgress) {
+  const fft = makeFFT(N);
+  const win = new Float32Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));
+  const nFrames = Math.max(1, Math.floor((x.length - N) / HOP) + 1);
+  const re = new Float32Array(N);
+  const im = new Float32Array(N);
+  const mag = new Float32Array(N / 2);
+  const prevLog = new Float32Array(N / 2);
+  const onset = new Float32Array(nFrames);
+  const energy = new Float32Array(nFrames);
+  // Schlagzeug-Bänder: Bass Drum (tief), Snare (Mitten/Rauschen), Hi-Hat (hoch)
+  const lowF = new Float32Array(nFrames);
+  const midF = new Float32Array(nFrames);
+  const highF = new Float32Array(nFrames);
+  const bandOf = new Int8Array(N / 2).fill(-1);
+  for (let k = 1; k < N / 2; k++) {
+    const f = k * binHz;
+    if (f >= 30 && f <= 130) bandOf[k] = 0;
+    else if (f >= 1500 && f <= 4500) bandOf[k] = 1;
+    else if (f >= 6500 && f <= 10500) bandOf[k] = 2;
+  }
+  const chroma = new Float32Array(nFrames * 12);
+  const bass = new Float32Array(nFrames * 12);
+  const topP = new Float32Array(nFrames * 4);
+  const topS = new Float32Array(nFrames * 4);
+  const maxBin = Math.floor(5000 / binHz);
+  const env = new Float32Array(N / 2);
+  const sal = new Float32Array(CANDS.length);
+  // Chroma-Zuordnung je Bin
+  const pcOfBin = new Int8Array(N / 2).fill(-1);
+  for (let k = 1; k < N / 2; k++) {
+    const f = k * binHz;
+    if (f < 30 || f > 4200) continue;
+    const m = 69 + 12 * Math.log2(f / 440);
+    pcOfBin[k] = ((Math.round(m) % 12) + 12) % 12;
+  }
+  for (let t = 0; t < nFrames; t++) {
+    const off = t * HOP;
+    let e = 0;
+    for (let i = 0; i < N; i++) {
+      const v = (x[off + i] || 0) * win[i];
+      re[i] = v;
+      im[i] = 0;
+      e += v * v;
+    }
+    energy[t] = Math.sqrt(e / N);
+    fft(re, im);
+    let flux = 0;
+    let lf = 0;
+    let mf = 0;
+    let hf = 0;
+    for (let k = 0; k < N / 2; k++) {
+      const m = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+      mag[k] = m;
+      const lg = Math.log1p(100 * m);
+      const d = lg - prevLog[k];
+      if (d > 0) {
+        if (k < maxBin) flux += d;
+        const bd = bandOf[k];
+        if (bd === 0) lf += d;
+        else if (bd === 1) mf += d;
+        else if (bd === 2) hf += d;
+      }
+      prevLog[k] = lg;
+    }
+    onset[t] = flux;
+    lowF[t] = lf;
+    midF[t] = mf;
+    highF[t] = hf;
+    // Chroma (Obertöne) & Bass-Chroma
+    for (let k = 1; k < N / 2; k++) {
+      const pc = pcOfBin[k];
+      if (pc < 0) continue;
+      const f = k * binHz;
+      const v = Math.sqrt(mag[k]);
+      if (f < 250) bass[t * 12 + pc] += v;
+      else chroma[t * 12 + pc] += v;
+    }
+    // Whitening: durch geglättete Hüllkurve teilen (betont Teiltöne gegenüber Rauschen)
+    const R = 8;
+    let s = 0;
+    for (let k = 0; k < Math.min(N / 2, R); k++) s += mag[k];
+    for (let k = 0; k < maxBin + 20 && k < N / 2; k++) {
+      if (k + R < N / 2) s += mag[k + R];
+      if (k - R - 1 >= 0) s -= mag[k - R - 1];
+      env[k] = s / (2 * R + 1);
+    }
+    // Harmonische Summation
+    let best = 0;
+    for (let c = 0; c < CANDS.length; c++) {
+      const f0 = midiToHz(CANDS[c]);
+      let sum = 0;
+      let w = 1;
+      for (let h = 1; h <= 10; h++) {
+        const fh = f0 * h;
+        if (fh > 5000) break;
+        const b = fh / binHz;
+        const b0 = Math.floor(b);
+        let m = 0;
+        for (let k = b0 - 1; k <= b0 + 1; k++) {
+          if (k <= 0 || k >= N / 2) continue;
+          const v = mag[k] / (env[k] + 1e-6);
+          if (v > m) m = v;
+        }
+        sum += w * Math.sqrt(m);
+        w *= 0.8;
+      }
+      sal[c] = sum;
+      if (sum > best) best = sum;
+    }
+    // Top-4 lokale Maxima
+    const peaks = [];
+    for (let c = 1; c < CANDS.length - 1; c++) if (sal[c] >= sal[c - 1] && sal[c] >= sal[c + 1]) peaks.push(c);
+    peaks.sort((a, b) => sal[b] - sal[a]);
+    for (let q = 0; q < 4; q++) {
+      const c = peaks[q];
+      topP[t * 4 + q] = c === undefined ? -1 : CANDS[c];
+      topS[t * 4 + q] = c === undefined ? 0 : sal[c];
+    }
+    if (onProgress && t % 200 === 0) onProgress('Spektrum wird analysiert', (t / nFrames) * 0.45);
+  }
+  return { nFrames, onset, energy, chroma, bass, topP, topS, lowF, midF, highF };
+}
+
+// ---------- Tempo & Beats ----------
+export function trackBeats(onsetRaw) {
+  const n = onsetRaw.length;
+  // Normalisieren, lokales Mittel abziehen
+  const o = new Float32Array(n);
+  const W = 25;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += onsetRaw[i];
+    if (i >= W) acc -= onsetRaw[i - W];
+    const mean = acc / Math.min(W, i + 1);
+    o[i] = Math.max(0, onsetRaw[i] - mean);
+  }
+  let sd = 0;
+  for (let i = 0; i < n; i++) sd += o[i] * o[i];
+  sd = Math.sqrt(sd / n) || 1;
+  for (let i = 0; i < n; i++) o[i] /= sd;
+  // Tempo per Autokorrelation (40–220 BPM) mit Kamm über Vielfache der Periode
+  // (echte Schläge wiederholen sich auch nach 2 und 4 Schlägen), Prior um 105 BPM
+  const minLag = Math.round((60 / 220) * FR);
+  const maxLag = Math.round((60 / 40) * FR);
+  const acf = new Float32Array(4 * maxLag + 1);
+  for (let lag = 1; lag <= 4 * maxLag && lag < n; lag++) {
+    let ac = 0;
+    for (let i = lag; i < n; i++) ac += o[i] * o[i - lag];
+    acf[lag] = ac / (n - lag);
+  }
+  let bestLag = Math.round((60 / 105) * FR);
+  let bestScore = -Infinity;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    const ac = acf[lag] + 0.5 * acf[2 * lag] + 0.25 * acf[4 * lag];
+    const bpm = (60 * FR) / lag;
+    const prior = Math.exp(-0.5 * Math.pow(Math.log2(bpm / 105) / 0.8, 2));
+    const sc = ac * prior;
+    if (sc > bestScore) {
+      bestScore = sc;
+      bestLag = lag;
+    }
+  }
+  const P = bestLag;
+  // Dynamische Programmierung (Ellis)
+  const score = new Float32Array(n);
+  const back = new Int32Array(n).fill(-1);
+  const tight = 100;
+  for (let t = 0; t < n; t++) {
+    let best = 0;
+    let arg = -1;
+    for (let tau = t - 2 * P; tau <= t - Math.round(P / 2); tau++) {
+      if (tau < 0) continue;
+      const d = Math.log((t - tau) / P);
+      const v = score[tau] - tight * d * d;
+      if (arg < 0 || v > best) {
+        best = v;
+        arg = tau;
+      }
+    }
+    score[t] = o[t] + (arg >= 0 ? best : 0);
+    back[t] = arg;
+  }
+  // Ende: bestes Score im letzten Periodenfenster
+  let t = n - 1;
+  let bestEnd = -Infinity;
+  for (let i = Math.max(0, n - P); i < n; i++)
+    if (score[i] > bestEnd) {
+      bestEnd = score[i];
+      t = i;
+    }
+  const beats = [];
+  while (t >= 0) {
+    beats.push(t);
+    t = back[t];
+  }
+  beats.reverse();
+  const ibis = [];
+  for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);
+  ibis.sort((a, b) => a - b);
+  const med = ibis.length ? ibis[Math.floor(ibis.length / 2)] : P;
+  let bpm = (60 * FR) / med;
+  return { beats, bpm, onset: o };
+}
+
+export function beatChroma(beats, feat, nFrames) {
+  const out = [];
+  for (let i = 0; i < beats.length; i++) {
+    const a = beats[i];
+    const b = i + 1 < beats.length ? beats[i + 1] : Math.min(nFrames, a + (beats[i] - (beats[i - 1] ?? a - 25)));
+    const c = new Float32Array(12);
+    const bs = new Float32Array(12);
+    for (let t = a; t < b; t++) for (let k = 0; k < 12; k++) {
+      c[k] += feat.chroma[t * 12 + k];
+      bs[k] += feat.bass[t * 12 + k];
+    }
+    const mx = Math.max(...c) || 1;
+    const mb = Math.max(...bs) || 1;
+    for (let k = 0; k < 12; k++) {
+      c[k] /= mx;
+      bs[k] /= mb;
+    }
+    out.push({ c, b: bs });
+  }
+  return out;
+}
+
+function cosine(a, b) {
+  let s = 0;
+  let na = 0;
+  let nb = 0;
+  for (let k = 0; k < 12; k++) {
+    s += a[k] * b[k];
+    na += a[k] * a[k];
+    nb += b[k] * b[k];
+  }
+  return na && nb ? s / Math.sqrt(na * nb) : 0;
+}
+
+// Taktart (3 oder 4) und Lage des ersten Taktanfangs.
+// Hinweise je Schlag: Bass-Drum (tief) auf der "1", Snare auf 2/4 (Backbeat),
+// Harmoniewechsel (Bass-Chroma & Takt-Chroma) am Taktanfang.
+export function findMeter(bc, cues = {}) {
+  const n = bc.length;
+  const low = cues.low || new Array(n).fill(0);
+  const mid = cues.mid || new Array(n).fill(0);
+  const onset = cues.onset || new Array(n).fill(0);
+  const bassChange = bc.map((x, i) => (i ? 1 - cosine(x.b, bc[i - 1].b) : 0));
+  const z = (arr) => {
+    const m = mean(arr);
+    const sd = Math.sqrt(mean(arr.map((v) => (v - m) ** 2))) || 1;
+    return arr.map((v) => (v - m) / sd);
+  };
+  const evalMeter = (m) => {
+    const res = [];
+    for (let ph = 0; ph < m; ph++) {
+      const on = (i) => (((i - ph) % m) + m) % m === 0;
+      const back = (i) => m === 4 && (((i - ph) % m) + m) % m % 2 === 1;
+      const avgOn = (arr) => mean(arr.filter((_, i) => on(i))) - mean(arr.filter((_, i) => !on(i)));
+      // Takt-Chroma: Unterschied zwischen aufeinanderfolgenden Takten (Akkordwechsel an Taktgrenzen)
+      const bars = [];
+      for (let s0 = ph; s0 + m <= n; s0 += m) {
+        const c = new Float32Array(12);
+        for (let k = s0; k < s0 + m; k++) for (let q = 0; q < 12; q++) c[q] += bc[k].c[q] + bc[k].b[q];
+        bars.push(c);
+      }
+      let nov = 0;
+      for (let k = 1; k < bars.length; k++) nov += 1 - cosine(bars[k], bars[k - 1]);
+      nov /= Math.max(1, bars.length - 1);
+      // Gegenprobe: dieselbe Novelty, aber um einen halben Takt versetzt
+      res.push({
+        ph,
+        kick: avgOn(low),
+        snare: m === 4 ? mean(mid.filter((_, i) => back(i))) - mean(mid.filter((_, i) => !back(i))) : 0,
+        bass: avgOn(bassChange),
+        onset: avgOn(onset),
+        nov,
+      });
+    }
+    // je Merkmal über die Phasen normieren und gewichten
+    const keys = { kick: 1.2, snare: 0.8, bass: 1, onset: 0.3, nov: 1.2 };
+    const tot = new Array(m).fill(0);
+    for (const [k, w] of Object.entries(keys)) {
+      const vals = res.map((r) => r[k]);
+      const spread = Math.max(...vals) - Math.min(...vals);
+      if (spread < 1e-6) continue;
+      z(vals).forEach((v, i) => (tot[i] += w * v));
+    }
+    let best = 0;
+    for (let i = 1; i < m; i++) if (tot[i] > tot[best]) best = i;
+    // Stärke: Abstand der besten Phase zum Mittel
+    const raw = res[best];
+    return { phase: best, score: raw.kick + raw.bass + raw.nov * 2 + raw.onset * 0.1 };
+  };
+  const m4 = evalMeter(4);
+  const m3 = evalMeter(3);
+  if (m3.score > m4.score * 1.35 && m3.score > 0.05) return { beats: 3, phase: m3.phase };
+  return { beats: 4, phase: m4.phase };
+}
+
+// ---------- Melodie ----------
+export function trackMelody(feat, onProgress) {
+  const { nFrames, topP, topS, energy } = feat;
+  // Schwellen
+  const tops = [];
+  for (let t = 0; t < nFrames; t++) tops.push(topS[t * 4]);
+  const sorted = [...tops].sort((a, b) => a - b);
+  const q = (p) => sorted[Math.floor(p * (sorted.length - 1))] || 0;
+  const thr = Math.min(q(0.35), 0.8 * (q(0.97) || 1));
+  const sMax = q(0.97) || 1;
+  const eSorted = [...energy].sort((a, b) => a - b);
+  const eThr = Math.min(eSorted[Math.floor(0.1 * (eSorted.length - 1))] * 1.3, eSorted[Math.floor(0.5 * (eSorted.length - 1))] * 0.35);
+  const K = 5; // 4 Kandidaten + stimmlos
+  const score = new Float32Array(nFrames * K);
+  const back = new Int8Array(nFrames * K);
+  const pitchOf = (t, k) => (k < 4 ? topP[t * 4 + k] : -1);
+  const emit = (t, k) => {
+    if (k === 4) return thr / sMax;
+    const p = topP[t * 4 + k];
+    if (p < 0 || energy[t] < eThr) return -5;
+    // leichte Bevorzugung höherer Kandidaten gegenüber Begleitstimmen/Bass
+    return topS[t * 4 + k] / sMax + (p - 60) * 0.004;
+  };
+  for (let k = 0; k < K; k++) score[k] = emit(0, k);
+  for (let t = 1; t < nFrames; t++) {
+    for (let k = 0; k < K; k++) {
+      const pk = pitchOf(t, k);
+      let best = -Infinity;
+      let arg = 0;
+      for (let j = 0; j < K; j++) {
+        const pj = pitchOf(t - 1, j);
+        let tr;
+        if (k === 4 && j === 4) tr = 0;
+        else if (k === 4 || j === 4) tr = -0.35;
+        else {
+          const d = Math.abs(pk - pj);
+          tr = -0.06 * d - (d > 7 ? 0.6 : 0);
+        }
+        const v = score[(t - 1) * K + j] + tr;
+        if (v > best) {
+          best = v;
+          arg = j;
+        }
+      }
+      score[t * K + k] = best + emit(t, k);
+      back[t * K + k] = arg;
+    }
+    if (onProgress && t % 500 === 0) onProgress('Melodie wird erkannt', 0.55 + (t / nFrames) * 0.2);
+  }
+  let k = 0;
+  let bestEnd = -Infinity;
+  for (let j = 0; j < K; j++)
+    if (score[(nFrames - 1) * K + j] > bestEnd) {
+      bestEnd = score[(nFrames - 1) * K + j];
+      k = j;
+    }
+  const path = new Float32Array(nFrames);
+  for (let t = nFrames - 1; t >= 0; t--) {
+    path[t] = pitchOf(t, k);
+    k = back[t * K + k];
+  }
+  return path; // MIDI (Bruchteile) oder -1
+}
+
+export function segmentNotes(path) {
+  const notes = [];
+  let cur = null;
+  const flush = () => {
+    if (!cur) return;
+    const vals = cur.vals.slice().sort((a, b) => a - b);
+    const med = vals[Math.floor(vals.length / 2)];
+    if (cur.end - cur.start >= 4) notes.push({ start: cur.start, end: cur.end, midi: Math.round(med) });
+    cur = null;
+  };
+  for (let t = 0; t < path.length; t++) {
+    const p = path[t];
+    if (p < 0) {
+      flush();
+      continue;
+    }
+    if (cur) {
+      const ref = cur.vals.slice(-6).reduce((s, x) => s + x, 0) / Math.min(6, cur.vals.length);
+      if (Math.abs(p - ref) > 0.7) {
+        flush();
+        cur = { start: t, end: t + 1, vals: [p] };
+      } else {
+        cur.vals.push(p);
+        cur.end = t + 1;
+      }
+    } else cur = { start: t, end: t + 1, vals: [p] };
+  }
+  flush();
+  // gleiche Tonhöhen mit Mini-Lücke verbinden
+  const merged = [];
+  for (const n of notes) {
+    const p = merged[merged.length - 1];
+    if (p && p.midi === n.midi && n.start - p.end <= 3) p.end = n.end;
+    else merged.push({ ...n });
+  }
+  return merged;
+}
+
+// ---------- Schlagzeug ----------
+// Onset-Stärke je Band normalisieren (lokales Mittel abziehen, auf 97. Perzentil skalieren)
+function bandNorm(arr) {
+  const n = arr.length;
+  const o = new Float32Array(n);
+  const W = 15;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += arr[i];
+    if (i >= W) acc -= arr[i - W];
+    o[i] = Math.max(0, arr[i] - acc / Math.min(W, i + 1));
+  }
+  const sorted = Array.from(o).sort((a, b) => a - b);
+  const p = sorted[Math.floor(0.97 * (n - 1))] || 1;
+  for (let i = 0; i < n; i++) o[i] = Math.min(3, o[i] / p);
+  return o;
+}
+
+// Bruchteil-Schlagindex -> Frame (zwischen den Beats interpoliert, an den Rändern extrapoliert)
+export function beatFrame(beats, idx) {
+  const n = beats.length;
+  if (n < 2) return beats[0] || 0;
+  if (idx <= 0) return beats[0] + idx * (beats[1] - beats[0]);
+  if (idx >= n - 1) return beats[n - 1] + (idx - (n - 1)) * (beats[n - 1] - beats[n - 2]);
+  const i = Math.floor(idx);
+  return beats[i] + (idx - i) * (beats[i + 1] - beats[i]);
+}
+
+const SUB = 12; // Positionen je Schlag: 16tel (0,3,6,9) und Triolen (4,8)
+const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+
+// Groove eines Formteils aus den gemittelten Band-Profilen
+function groovePattern(avg, meterBeats) {
+  const [low, mid, high] = avg;
+  const steps = meterBeats * SUB;
+  const at = (arr, r) => mean(Array.from({ length: meterBeats }, (_, b) => arr[b * SUB + r]));
+  // Swing: Offbeat auf der Triolen-Position statt auf der Achtel
+  const swing = at(high, 8) > 1.4 * at(high, 6) && at(high, 8) > 0.15;
+  const grid = [];
+  for (let s = 0; s < steps; s += 3) grid.push(s);
+  const hits = [];
+  // Hi-Hat: Viertel, Achtel oder 16tel
+  const q = at(high, 0);
+  const e = swing ? at(high, 8) : at(high, 6);
+  const x = (at(high, 3) + at(high, 9)) / 2;
+  let hatStep = 12;
+  if (!swing && x > 0.55 * Math.max(q, e) && x > 0.12) hatStep = 3;
+  else if (e > 0.4 * q) hatStep = 6;
+  if (Math.max(q, e) > 0.08) for (let s = 0; s < steps; s += hatStep) hits.push({ s, midi: 42, vel: 80 });
+  // Bass Drum: viel Tiefe, wenig Mitten (Snare-Rauschen reicht auch in die Tiefe)
+  const kick = (s) => low[s] - 0.5 * mid[s];
+  const kG = grid.map(kick);
+  const kMax = Math.max(...kG);
+  const ks = [];
+  if (kMax > 0.1) {
+    ks.push(...grid.filter((s) => kick(s) >= 0.6 * kMax).sort((a, b) => kick(b) - kick(a)).slice(0, 2 * meterBeats - 2));
+    if (kick(0) >= 0.3 * kMax && !ks.includes(0)) ks.push(0);
+    for (const s of ks) hits.push({ s, midi: 36, vel: 100 });
+  }
+  // Snare: Mitten deutlich über dem, was die Hi-Hat dort hinterlässt
+  const snare = (s) => mid[s] - 0.7 * high[s];
+  const sG = grid.map(snare).sort((a, b) => a - b);
+  const med = Math.max(0.02, sG[Math.floor(sG.length / 2)]);
+  const sMax = sG[sG.length - 1];
+  if (sMax > 0.15 && sMax > 1.4 * med) {
+    const thr = med + 0.5 * (sMax - med);
+    const ss = grid.filter((s) => snare(s) >= thr && !(ks.includes(s) && kick(s) > snare(s) * 2)).sort((a, b) => snare(b) - snare(a)).slice(0, meterBeats);
+    for (const s of ss) hits.push({ s, midi: 38, vel: 100 });
+  }
+  // Raster -> Ticks (Swing wird als gerade Achtel notiert, gespielt wird mit Swing)
+  const toTick = (s) => {
+    const b = Math.floor(s / SUB);
+    const r = s % SUB;
+    return b * DIV + (swing && r === 8 ? DIV / 2 : Math.round((r * DIV) / SUB));
+  };
+  return { hits: hits.map((h) => ({ pos: toTick(h.s), midi: h.midi, vel: h.vel })), swing };
+}
+
+// Schlagzeug je Formteil: Groove aus der Aufnahme, Takte ohne Schlagzeug bleiben leer
+export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, sections) {
+  const bands = [bandNorm(feat.lowF), bandNorm(feat.midF), bandNorm(feat.highF)];
+  const valAt = (band, f) => {
+    const i = Math.round(f);
+    let m = 0;
+    for (let k = i - 1; k <= i + 1; k++) if (k >= 0 && k < band.length && band[k] > m) m = band[k];
+    return m;
+  };
+  const steps = meterBeats * SUB;
+  const bars = [];
+  for (let m = 0; m < measureCount; m++) {
+    const prof = [new Float32Array(steps), new Float32Array(steps), new Float32Array(steps)];
+    let act = 0;
+    for (let s = 0; s < steps; s++) {
+      const f = beatFrame(beats, firstDown + m * meterBeats + s / SUB);
+      for (let b = 0; b < 3; b++) prof[b][s] = valAt(bands[b], f);
+      if (s % 3 === 0) act += prof[0][s] + prof[2][s];
+    }
+    bars.push({ prof, act });
+  }
+  const acts = bars.map((b) => b.act).sort((a, b) => a - b);
+  const medAct = acts[Math.floor(acts.length / 2)] || 0;
+  for (const b of bars) b.on = medAct > 0 && b.act > 0.35 * medAct;
+  const notes = [];
+  let swingVotes = 0;
+  let votes = 0;
+  for (const sec of sections) {
+    const idx = [];
+    for (let m = sec.start; m < sec.start + sec.length; m++) if (bars[m] && bars[m].on) idx.push(m);
+    if (!idx.length) continue;
+    const avg = [0, 1, 2].map((b) => {
+      const a = new Float32Array(steps);
+      for (const m of idx) for (let s = 0; s < steps; s++) a[s] += bars[m].prof[b][s] / idx.length;
+      return a;
+    });
+    const g = groovePattern(avg, meterBeats);
+    votes += idx.length;
+    if (g.swing) swingVotes += idx.length;
+    for (const m of idx) for (const h of g.hits) notes.push({ start: m * meterBeats * DIV + h.pos, dur: 6, midi: h.midi, vel: h.vel });
+  }
+  return { notes: notes.sort((a, b) => a.start - b.start), swing: votes > 0 && swingVotes > votes / 2, activeBars: bars.map((b) => b.on) };
+}
+
+// ---------- Gesamtablauf ----------
+// Frame-Index -> Sekunde in der Datei (Onset-Spitze liegt kurz nach Fensteranfang)
+export const FRAME_LAG = 0.75 * N;
+export const frameToSec = (f) => (f * HOP + FRAME_LAG) / SR;
+
+// mono: Float32Array (22050 Hz, siehe resampleMono)
+export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {} } = {}) {
+  onProgress('Spektrum wird analysiert', 0);
+  const feat = analyzeFrames(mono, onProgress);
+  onProgress('Tempo & Beats werden erkannt', 0.46);
+  // Onset-Hüllkurve: Spektralfluss + Tiefband (Bass Drum hat nur wenige Bins)
+  const lowNorm = bandNorm(feat.lowF);
+  const fluxNorm = bandNorm(feat.onset);
+  const comb = new Float32Array(feat.nFrames);
+  for (let i = 0; i < comb.length; i++) comb[i] = fluxNorm[i] + 0.7 * lowNorm[i];
+  let { beats, bpm, onset } = trackBeats(comb);
+  // Halbes Tempo erkannt? Dann liegt die Snare (Backbeat) zwischen den Schlägen -> verdoppeln
+  {
+    const midN = bandNorm(feat.midF);
+    const highN = bandNorm(feat.highF);
+    const sn = (f) => {
+      let m = 0;
+      for (let k = Math.round(f) - 1; k <= Math.round(f) + 1; k++) if (k >= 0 && k < midN.length) m = Math.max(m, midN[k] - 0.7 * highN[k]);
+      return Math.max(0, m);
+    };
+    const on = [];
+    const off = [];
+    for (let i = 0; i + 1 < beats.length; i++) {
+      on.push(sn(beats[i]));
+      off.push(sn((beats[i] + beats[i + 1]) / 2));
+    }
+    if (bpm < 110 && mean(off) > 1.5 * mean(on) && mean(off) > 0.1) {
+      const dbl = [];
+      for (let i = 0; i < beats.length; i++) {
+        dbl.push(beats[i]);
+        if (i + 1 < beats.length) dbl.push(Math.round((beats[i] + beats[i + 1]) / 2));
+      }
+      beats = dbl;
+      bpm *= 2;
+    }
+  }
+  if (beats.length < 8) throw new Error('Im Audio wurde kein durchgehender Rhythmus erkannt (zu kurz oder zu leise).');
+  const bc = beatChroma(beats, feat, feat.nFrames);
+  const lowN = bandNorm(feat.lowF);
+  const midN = bandNorm(feat.midF);
+  const peak = (arr, f) => Math.max(arr[f - 1] || 0, arr[f] || 0, arr[f + 1] || 0);
+  const meterInfo = findMeter(bc, {
+    low: beats.map((b) => peak(lowN, b)),
+    mid: beats.map((b) => peak(midN, b)),
+    onset: beats.map((b) => onset[b] || 0),
+  });
+  const m = meterInfo.beats;
+  const firstDown = meterInfo.phase;
+  const mt = m * DIV;
+  const measureCount = Math.max(1, Math.floor((beats.length - firstDown) / m));
+  // Sekunde -> Schlagposition (lineare Interpolation zwischen den Beats)
+  const beatSec = beats.map(frameToSec);
+  const beatPos = (sec) => {
+    const b = beatSec;
+    if (sec <= b[0]) return (sec - b[0]) / (b[1] - b[0]);
+    for (let i = 0; i < b.length - 1; i++) if (sec < b[i + 1]) return i + (sec - b[i]) / (b[i + 1] - b[i]);
+    const last = b.length - 1;
+    return last + (sec - b[last]) / (b[last] - b[last - 1]);
+  };
+  // Tonhöhen-Frames: Salienz setzt erst ein, wenn der Ton das Fenster füllt
+  const melStartSec = (f) => (f * HOP) / SR - 0.015;
+  const melEndSec = (f) => (f * HOP) / SR + 0.06;
+
+  // Akkorde: Chroma pro Schlag als gewichtete "Noten" an den Harmonisierer
+  onProgress('Akkorde & Tonart werden erkannt', 0.5);
+  const pseudo = [];
+  bc.forEach((x, i) => {
+    const start = (i - firstDown) * DIV;
+    if (start < 0) return;
+    for (let k = 0; k < 12; k++) {
+      if (x.c[k] > 0.35) pseudo.push({ start, dur: Math.round(DIV * x.c[k]), midi: 60 + k });
+      if (x.b[k] > 0.6) pseudo.push({ start, dur: Math.round(DIV * 0.9 * x.b[k]), midi: 36 + k });
+    }
+  });
+
+  onProgress('Melodie wird erkannt', 0.55);
+  const path = trackMelody(feat, onProgress);
+  const notesF = segmentNotes(path);
+
+  // Schlagzeug (vorläufige Formteile = 8-Takt-Gruppen, danach mit der echten Form)
+  onProgress('Schlagzeug wird erkannt', 0.78);
+  const roughSections = [];
+  for (let s0 = 0; s0 < measureCount; s0 += 8) roughSections.push({ start: s0, length: Math.min(8, measureCount - s0) });
+  const swing = estimateDrums(feat, beats, firstDown, m, measureCount, roughSections).swing;
+
+  onProgress('Noten werden ins Taktraster gesetzt', 0.82);
+  // 16tel-Raster; bei Swing liegen Offbeats auf der Triole -> als gerade Achtel notiert
+  const toTick = (sec) => {
+    const bp = beatPos(sec) - firstDown;
+    const b = Math.floor(bp);
+    const f = bp - b;
+    if (swing) {
+      const opts = [0, 2 / 3, 1];
+      const ticks = [0, DIV / 2, DIV];
+      let best = 0;
+      for (let i = 1; i < 3; i++) if (Math.abs(f - opts[i]) < Math.abs(f - opts[best])) best = i;
+      return b * DIV + ticks[best];
+    }
+    return b * DIV + Math.round((f * DIV) / 6) * 6;
+  };
+  let melody = notesF.map((n) => {
+    const s = toTick(melStartSec(n.start));
+    const e = Math.max(s + (swing ? DIV / 2 : 6), toTick(melEndSec(n.end)));
+    return { start: s, dur: e - s, midi: n.midi };
+  });
+  melody = melody.filter((n) => n.start >= -mt + DIV);
+  // gleiche Startzeit nach dem Runden: längere Note behalten
+  melody = melody.filter((n, i) => !melody.some((o, j) => j !== i && o.start === n.start && (o.dur > n.dur || (o.dur === n.dur && j < i))));
+
+  const meter = { beats: m, beatType: 4 };
+  const key = detectKey([...pseudo, ...melody.filter((n) => n.start >= 0).map((n) => ({ midi: n.midi, dur: n.dur * 0.5 }))]);
+  const chords = harmonize(pseudo, { meter, key, measureCount, melodyOnly: false });
+  const pickupNotes = melody.filter((n) => n.start < 0);
+  const song = {
+    title,
+    composer: null,
+    key,
+    keyDetected: true,
+    meter,
+    tempo: Math.round(bpm),
+    swing,
+    pickup: pickupNotes.length ? -Math.min(...pickupNotes.map((n) => n.start)) : 0,
+    measureCount,
+    melody: melody.filter((n) => n.start < measureCount * mt),
+    chords,
+    sections: [],
+    warnings: ['Aus Audio erkannt: Melodie, Akkorde, Tempo und Schlagzeug sind eine Annäherung – bitte mit dem Original anhören.'],
+    source: 'audio',
+    chordsDetected: true,
+  };
+  onProgress('Form wird bestimmt', 0.92);
+  const fin = finalizeSong(song);
+  fin.chordsDetected = true;
+  // Schlagzeug je Formteil
+  fin.drumNotes = estimateDrums(feat, beats, firstDown, m, measureCount, fin.sections).notes;
+  // Zeitbezug zur Datei: Schlag i liegt bei beatSec[i] Sekunden; Takt 1 beginnt bei Schlag firstDown
+  fin.timing = { beatSec, firstBeat: firstDown, beatTicks: DIV };
+  fin.duration = mono.length / SR;
+  onProgress('Fertig', 1);
+  return fin;
+}

@@ -111,11 +111,11 @@ export function exportMusicXML(arr, opts = {}) {
   const isPart = mode === 'part';
   const partSpecs = [];
   if (isPart) {
-    if (partIndex === 'drums') partSpecs.push({ kind: 'drums', idx: 4 });
+    if (partIndex === 'drums') partSpecs.push({ kind: 'drums', idx: 'drums' });
     else partSpecs.push({ kind: 'voice', idx: partIndex });
   } else {
     arr.voices.forEach((_, i) => partSpecs.push({ kind: 'voice', idx: i }));
-    if (arr.drums) partSpecs.push({ kind: 'drums', idx: 4 });
+    if (arr.drums) partSpecs.push({ kind: 'drums', idx: 'drums' });
   }
   const layout = pageLayout(paper, isPart ? 7.0 : 5.6);
   const w = new XmlWriter();
@@ -173,7 +173,7 @@ export function exportMusicXML(arr, opts = {}) {
     const nm = nameCount[base] > 1 ? `${base} ${seen[base]}` : base;
     w.open('score-part', { id: pid });
     // Einzelstimme: Name nur oben links im Kopf (Credit), nicht vor jedem System
-    w.el('part-name', isPart ? (arr.soloMode ? `${nm} (Solo)` : `${nm} (${voiceLabel(ps.idx)})`) : nm, isPart ? { 'print-object': 'no' } : undefined);
+    w.el('part-name', isPart ? (arr.playAlong ? `${nm} (${v.label})` : arr.soloMode ? `${nm} (Solo)` : `${nm} (${voiceLabel(ps.idx)})`) : nm, isPart ? { 'print-object': 'no' } : undefined);
     w.el('part-abbreviation', v.inst.short + (nameCount[base] > 1 ? ` ${seen[base]}` : ''), isPart ? { 'print-object': 'no' } : undefined);
     w.open('score-instrument', { id: `${pid}-I1` });
     w.el('instrument-name', base);
@@ -199,6 +199,7 @@ export function exportMusicXML(arr, opts = {}) {
 function partTitle(arr, ps) {
   if (ps.kind === 'drums') return arr.soloMode ? 'Solo – Schlagzeug' : 'Schlagzeug';
   const v = arr.voices[ps.idx];
+  if (arr.playAlong) return arr.voices.length > 1 || arr.drums ? `${v.inst.name} – ${v.label}` : `Solo – ${v.inst.name}`;
   return arr.soloMode ? `Solo – ${v.inst.name}` : `${voiceLabel(ps.idx)} – ${v.inst.name}`;
 }
 

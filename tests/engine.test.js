@@ -4,6 +4,7 @@ import { arrange } from '../src/arrange/engine.js';
 import { PRESETS, slideGlissPossible, INSTRUMENTS } from '../src/arrange/instruments.js';
 import { STYLE_LIST } from '../src/arrange/styles.js';
 import { demoSong } from './helpers.js';
+import { exportMusicXML } from '../src/output/musicxml.js';
 
 const song = demoSong('saints');
 
@@ -106,7 +107,7 @@ test('Schwierigkeit: Stufe 1 ohne 16tel & Effekte, Stufe pro Stimme', () => {
 
 test('Solo-Noten (Play-along): gleiche Länge, gleiche Töne & Rhythmen wie die Vorlage', () => {
   const grace = demoSong('grace');
-  const t = arrange(grace, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1, style: 'funk' });
+  const t = arrange(grace, { ensemble: 'solo', playback: true, soloInstrument: 'altoSax', seed: 1, style: 'funk' });
   assert.equal(t.voices.length, 1);
   assert.equal(t.drums, null);
   const lead = grace.pickup > 0 ? 1 : 0;
@@ -124,7 +125,7 @@ test('Solo-Noten (Play-along): gleiche Länge, gleiche Töne & Rhythmen wie die 
   assert.equal([...shifts][0] % 12, 0);
   assert.equal(ev.length, grace.melody.length, 'keine zusätzlichen Töne');
   // Schlagzeug ohne Drum-Spur: Groove über exakt dieselben Takte
-  const d = arrange(grace, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
+  const d = arrange(grace, { ensemble: 'solo', playback: true, soloInstrument: 'drums', seed: 1 });
   assert.equal(d.voices.length, 0);
   assert.equal(d.totalBars, grace.measureCount + lead);
   assert.ok(d.drums.events.length > 100);
@@ -142,12 +143,12 @@ test('Schlagzeug-Play-along: Drum-Spur 1:1, Fills nur im Groove ergänzt', () =>
     drumNotes.push({ start: bar * mt + 30, dur: 6, midi: 60, vel: 100 }); // Bongo -> wird nicht notiert
   }
   const song = { ...sg, pickup: 0, melody: sg.melody.filter((n) => n.start >= 0), drumNotes, sections: [{ label: 'A', start: 0, length: 8 }, { label: 'B', start: 8, length: sg.measureCount - 8 }] };
-  const plain = arrange(song, { ensemble: 'solo', soloInstrument: 'drums', drumFills: false });
+  const plain = arrange(song, { ensemble: 'solo', playback: true, soloInstrument: 'drums', drumFills: false });
   assert.equal(plain.totalBars, song.measureCount);
   const kit = drumNotes.filter((n) => n.midi !== 60);
   assert.equal(plain.drums.events.length, kit.length, '1:1 übernommen');
   for (const n of kit) assert.ok(plain.drums.events.some((e) => e.start === n.start && e.pitches[0] === n.midi));
-  const filled = arrange(song, { ensemble: 'solo', soloInstrument: 'drums' });
+  const filled = arrange(song, { ensemble: 'solo', playback: true, soloInstrument: 'drums' });
   assert.equal(filled.totalBars, song.measureCount);
   const fillBar = 7; // Ende von Teil A
   const toms = filled.drums.events.filter((e) => e.start >= fillBar * mt && e.start < (fillBar + 1) * mt && [48, 45, 41].includes(e.pitches[0]));
@@ -160,4 +161,36 @@ test('Schlagzeug-Play-along: Drum-Spur 1:1, Fills nur im Groove ergänzt', () =>
   // außerhalb der Fill-Takte unverändert
   const sig = (a, bar) => a.drums.events.filter((e) => e.start >= bar * mt && e.start < (bar + 1) * mt).map((e) => `${e.start}:${e.pitches[0]}`).sort().join();
   assert.equal(sig(filled, 3), sig(plain, 3));
+});
+
+test('Solo-Noten frei (ohne Playback): eigenes Arrangement mit Intro, Solo & Schluss', () => {
+  const grace = demoSong('grace');
+  const t = arrange(grace, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1 });
+  assert.equal(t.voices.length, 1);
+  assert.ok(t.blocks.some((b) => b.type === 'intro'));
+  assert.ok(t.blocks.some((b) => b.type === 'solo'));
+  assert.ok(t.totalBars <= grace.measureCount + 6);
+  const d = arrange(grace, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
+  assert.ok(d.blocks.some((b) => b.name === 'Drum-Solo'));
+});
+
+test('Playback mit mehreren Originalstimmen: jede Spur 1:1 auf dem gewählten Instrument', () => {
+  const sg = demoSong('ode');
+  const bass = sg.chords.map((c) => ({ start: c.start, dur: c.dur, midi: 36 + c.chord.rootPc, vel: 90 }));
+  const pad = sg.chords.flatMap((c) => c.chord.tones.map((t) => ({ start: c.start, dur: c.dur, midi: 60 + t.pc, vel: 70 })));
+  const song = { ...sg, source: 'midi', tracks: [{ id: 't0', name: 'Gesang', program: 0, mel: true, notes: sg.melody }, { id: 't1', name: 'Bass', program: 33, notes: bass }, { id: 't2', name: 'Keys', program: 4, notes: pad }], drumNotes: [] };
+  const a = arrange(song, { ensemble: 'solo', playback: true, playParts: [{ source: 'melody', inst: 'trumpet' }, { source: 't1', inst: 'tuba' }, { source: 't2', inst: 'altoSax' }, { source: 'drums', inst: 'drums' }] });
+  assert.equal(a.voices.length, 3);
+  assert.ok(a.drums, 'Schlagzeug (Stil-Groove, da die Vorlage keins hat)');
+  assert.equal(a.totalBars, song.measureCount);
+  // Bass: Grundtöne an denselben Stellen, Keys: oberster Ton
+  for (const n of bass) assert.ok(a.voices[1].events.some((e) => e.start === n.start && (e.pitches[0] - n.midi) % 12 === 0));
+  const top = (c) => Math.max(...c.chord.tones.map((t) => 60 + t.pc));
+  for (const c of sg.chords) assert.ok(a.voices[2].events.some((e) => e.start === c.start && (e.pitches[0] - top(c)) % 12 === 0));
+  // Original-Kanäle: übernommene Stimmen einzeln, Rest als Band
+  const keys = a.backing.channels.map((c) => c.key);
+  assert.deepEqual(keys, ['orig:melody', 'orig:t1', 'orig:t2']);
+  // MusicXML: alle Stimmen + Schlagzeug, gültige Takte
+  const xml = exportMusicXML(a, { mode: 'score' });
+  assert.equal((xml.match(/<score-part /g) || []).length, 4);
 });

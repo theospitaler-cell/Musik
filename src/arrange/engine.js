@@ -14,7 +14,8 @@ import { genSolo } from './gen/solo.js';
 import { genDrumsSegment } from './gen/drums.js';
 import { fitOctave } from './instruments.js';
 import { levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
-import { arrangeSolo } from './solo-arranger.js';
+import { arrangeSoloFree } from './solo-free.js';
+import { arrangePlayAlong } from './playalong.js';
 import {
   enforceRange,
   ensureMovement,
@@ -41,6 +42,9 @@ export const DEFAULT_OPTIONS = {
   seed: 1,
   ensemble: 'quartet', // quartet | solo
   soloInstrument: 'trumpet', // bei Solo: Instrument-ID oder 'drums'
+  playback: false, // bei Solo: true = Play-along 1:1 wie die Vorlage, false = freies Solo-Arrangement
+  playParts: null, // Play-along: [{source: 'melody'|'drums'|Spur-ID, inst: Instrument-ID|'drums'}]
+  drumFills: true, // Play-along: Fills im Groove ergänzen
   difficulty: 'auto', // 'auto' | 1..5
   tempo: null,
   transpose: 'auto', // 'auto' | Zahl (Halbtöne)
@@ -64,7 +68,7 @@ function sliceChordsRel(chords, a, b) {
 export function arrange(songIn, options = {}) {
   const opts = { ...DEFAULT_OPTIONS };
   for (const [k, v] of Object.entries(options)) if (v !== undefined && v !== null && v !== '') opts[k] = v;
-  if (opts.ensemble === 'solo') return arrangeSolo(songIn, opts);
+  if (opts.ensemble === 'solo') return opts.playback ? arrangePlayAlong(songIn, opts) : arrangeSoloFree(songIn, opts);
   if (!Array.isArray(opts.voices) || opts.voices.length !== 4) throw new Error('Es müssen genau 4 Instrumente gewählt werden');
   const plan = planArrangement(songIn, opts);
   const { blocks, song, style, insts, mt } = plan;
