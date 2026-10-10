@@ -1799,3 +1799,75 @@ dialog::backdrop {
     grid-column: auto;
   }
 }
+
+/* Bibliothek: Titel bearbeiten, Neu, Löschen mit Rückgängig */
+.head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.lib-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.lib-title h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+.lib-title .rename {
+  opacity: 0;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  transition: opacity 0.15s;
+}
+.lib-card:hover .rename,
+.lib-title .rename:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lib-title .rename {
+    opacity: 1;
+  }
+}
+.lib-title .rename svg {
+  width: 15px;
+  height: 15px;
+}
+.title-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+.lib-card.removing {
+  opacity: 0;
+  transform: scale(0.97);
+  transition: opacity 0.18s, transform 0.18s;
+}
+.toast.has-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.toast-action {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  padding: 2px 4px;
+}

@@ -43,17 +43,31 @@ const S = {
 };
 
 // ---------------------------------------------------------------- Hilfen
-function toast(msg, kind = '') {
+// Hinweis unten/oben; optional mit Aktion (z. B. "Rückgängig")
+function toast(msg, kind = '', action = null) {
   const t = document.createElement('div');
-  t.className = `toast ${kind}`;
-  t.textContent = msg;
-  $('#toasts').appendChild(t);
-  setTimeout(() => {
+  t.className = `toast ${kind}${action ? ' has-action' : ''}`;
+  const span = document.createElement('span');
+  span.textContent = msg;
+  t.appendChild(span);
+  const close = () => {
     t.style.transition = 'opacity .3s, transform .3s';
     t.style.opacity = '0';
     t.style.transform = 'translateX(16px)';
     setTimeout(() => t.remove(), 320);
-  }, kind === 'error' ? 5200 : 2600);
+  };
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.addEventListener('click', () => {
+      action.run();
+      close();
+    });
+    t.appendChild(b);
+  }
+  $('#toasts').appendChild(t);
+  setTimeout(close, action ? 6000 : kind === 'error' ? 5200 : 2600);
 }
 
 // ---------------------------------------------------------------- Fortschritt
@@ -479,6 +493,7 @@ function readOpts() {
     voiceDifficulty: [...(S.opts.voiceDifficulty || [null, null, null, null])],
     ranges: [...(S.opts.ranges || [null, null, null, null])],
     playback: !!S.opts.playback,
+    title: S.opts.title || null,
     playParts: S.opts.playParts ? S.opts.playParts.map((p) => ({ ...p })) : null,
     drumFills: $('#opt-fills').checked,
   };
@@ -571,6 +586,7 @@ async function setSource(src) {
     if (song.tempo) $('#opt-tempo').placeholder = `auto (${song.tempo})`;
     $('#generate').disabled = false;
     S.opts.playParts = null; // Stimmen gehören zum Song
+    S.opts.title = null;
     if (S.opts.ensemble === 'solo' && S.opts.playback) renderPlaybackList();
     return true;
   } catch (e) {
@@ -997,19 +1013,87 @@ async function renderLibrary() {
     const date = new Date(it.updatedAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
     const sm = it.summary || {};
     card.innerHTML = `<div class="meta-chips"><span class="accent">${sm.style || ''}</span>${sm.key ? `<span>${sm.key}</span>` : ''}${sm.bars ? `<span>${sm.bars} Takte</span>` : ''}</div>
-      <h3>${it.title}</h3>
+      <div class="lib-title"><h3></h3><button class="icon-btn small rename" title="Titel ändern" aria-label="Titel ändern"><svg><use href="#i-pen"/></svg></button></div>
       <div class="lib-meta">${(sm.voices || []).join(', ')}${sm.drums ? ', Schlagzeug' : ''}</div>
       <div class="lib-meta">${date}${it.dirty && S.library.cloud.user ? ' · wird synchronisiert' : ''}</div>
       <div class="lib-actions"><button class="btn primary small open">Öffnen</button><button class="btn ghost small danger del"><svg><use href="#i-trash"/></svg></button></div>`;
+    $('h3', card).textContent = it.title;
     $('.open', card).addEventListener('click', () => openItem(it.id));
+    $('.rename', card).addEventListener('click', () => renameItem(card, it));
+    $('h3', card).addEventListener('dblclick', () => renameItem(card, it));
+    // Löschen ohne Rückfrage – dafür mit "Rückgängig"
     $('.del', card).addEventListener('click', async () => {
-      if (!confirm(`„${it.title}“ wirklich löschen?`)) return;
+      const backup = await S.library.get(it.id);
       await S.library.remove(it.id);
       if (S.currentId === it.id) S.currentId = null;
-      renderLibrary();
+      card.classList.add('removing');
+      setTimeout(renderLibrary, 180);
+      toast(`„${it.title}“ gelöscht`, '', {
+        label: 'Rückgängig',
+        run: async () => {
+          await S.library.save({ ...backup, deleted: false });
+          renderLibrary();
+        },
+      });
     });
     box.appendChild(card);
   }
+}
+
+// Titel direkt auf der Karte bearbeiten (Enter = speichern, Esc = abbrechen)
+function renameItem(card, it) {
+  const box = $('.lib-title', card);
+  if ($('input', box)) return;
+  const h = $('h3', box);
+  const input = document.createElement('input');
+  input.className = 'title-input';
+  input.value = it.title;
+  input.setAttribute('aria-label', 'Titel');
+  h.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const title = input.value.trim();
+    if (save && title && title !== it.title) {
+      const cur = await S.library.get(it.id);
+      await S.library.save({ ...cur, title, options: { ...(cur.options || {}), title } });
+      if (S.currentId === it.id && S.arr) {
+        S.arr.meta.title = title;
+        S.opts.title = title;
+        $('#res-title').textContent = title;
+      }
+      toast('Titel geändert', 'ok');
+    }
+    renderLibrary();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+// Neues Arrangement: Vorlage & Ergebnis zurücksetzen
+function startNew() {
+  S.player?.dispose();
+  S.player = null;
+  S.arr = null;
+  S.song = null;
+  S.source = null;
+  S.currentId = null;
+  S.opts.playParts = null;
+  S.opts.title = null;
+  $('#player').classList.add('hidden');
+  $('#result').classList.add('hidden');
+  $('#empty-state').classList.remove('hidden');
+  $('#analysis').classList.add('hidden');
+  $('#generate').disabled = true;
+  $('#file-input').value = '';
+  if (S.opts.ensemble === 'solo' && S.opts.playback) renderPlaybackList();
+  showView('arrange');
 }
 
 async function openItem(id) {
@@ -1218,6 +1302,7 @@ function bindSyncStatus() {
   S.library.addEventListener('change', () => {
     if ($('#view-library').classList.contains('active')) renderLibrary();
   });
+  $('#lib-new').addEventListener('click', startNew);
   $('#sync-now').addEventListener('click', async () => {
     if (!S.library.cloud.user) return openAuth();
     try {

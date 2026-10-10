@@ -201,7 +201,7 @@ export function arrangeSoloFree(songIn, opts) {
   const th = tempoHeading(style, tempo);
   return {
     meta: {
-      title: song.title,
+      title: opts.title || song.title,
       composer: song.composer,
       arranger: 'Arr.: NoteCode',
       subtitle: `Solo für ${isDrums ? 'Schlagzeug' : inst.name}`,

@@ -225,7 +225,7 @@ export function arrangePlayAlong(song, opts) {
   const who = [...voices.map((v) => v.inst.name), ...(drums ? ['Schlagzeug'] : [])];
   return {
     meta: {
-      title: song.title,
+      title: opts.title || song.title,
       composer: song.composer,
       arranger: 'Play-along: NoteCode',
       subtitle: `${who.length === 1 ? `Solo für ${who[0]}` : who.join(', ')} – Originalablauf`,

@@ -409,7 +409,7 @@ export function arrange(songIn, options = {}) {
 
   return {
     meta: {
-      title: song.title,
+      title: opts.title || song.title,
       composer: song.composer,
       arranger: 'Arr.: NoteCode',
       subtitle: `${style.name} – Quartett`,
