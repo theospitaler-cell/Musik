@@ -85,20 +85,54 @@ function toast(msg, kind = '', action = null) {
 // Eine Anzeige für alles, was dauert: Datei lesen, Audio analysieren, Arrangieren,
 // Noten setzen, Exportieren. Ein neuer Vorgang übernimmt die Anzeige.
 let progressJob = 0;
+// Fortschrittsanzeige: Prozent laufen gleichmäßig weiter, solange gearbeitet wird (zwischen den
+// Meldungen langsam bis knapp vor den nächsten Schritt), drei hüpfende Punkte zeigen Aktivität.
+// Kommt zu lange keine Rückmeldung, erscheint eine Fehlermeldung statt eines eingefrorenen Balkens.
+const PROGRESS_STALL_MS = 60000;
+let progressTick = null;
 function progress(title) {
   const id = ++progressJob;
   const box = $('#progress');
   $('#pg-title').textContent = title;
   $('#pg-text').textContent = '';
-  box.classList.remove('hidden');
+  box.classList.remove('hidden', 'stalled');
+  let target = 0; // gemeldeter Stand
+  let shown = 0; // angezeigter Stand
+  let indeterminate = false;
+  let lastReport = Date.now();
+  const render = () => {
+    $('#pg-fill').style.width = indeterminate ? '' : `${(shown * 100).toFixed(1)}%`;
+    $('#pg-pct').textContent = indeterminate ? '' : `${Math.floor(shown * 100)} %`;
+  };
+  clearInterval(progressTick);
+  progressTick = setInterval(() => {
+    if (id !== progressJob) return;
+    if (Date.now() - lastReport > PROGRESS_STALL_MS) {
+      if (!box.classList.contains('stalled')) {
+        box.classList.add('stalled');
+        $('#pg-text').textContent = 'Keine Rückmeldung – der Vorgang hängt. Bitte App neu starten oder eine andere Datei versuchen.';
+      }
+      return;
+    }
+    if (indeterminate) return;
+    // zügig zum gemeldeten Stand, danach langsam weiter (max. 6 Prozentpunkte über die Meldung)
+    if (shown < target) shown = Math.min(target, shown + Math.max(0.004, (target - shown) * 0.25));
+    else shown = Math.min(0.99, target + 0.06, shown + Math.max(0, target + 0.06 - shown) * 0.015);
+    render();
+  }, 200);
   const api = {
     set(text, frac = null) {
       if (id !== progressJob) return api;
+      lastReport = Date.now();
+      box.classList.remove('stalled');
       if (text !== undefined && text !== null) $('#pg-text').textContent = text;
-      const ind = frac === null || frac === undefined;
-      box.classList.toggle('indeterminate', ind);
-      $('#pg-fill').style.width = ind ? '' : `${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%`;
-      $('#pg-pct').textContent = ind ? '' : `${Math.round(Math.max(0, Math.min(1, frac)) * 100)} %`;
+      indeterminate = frac === null || frac === undefined;
+      box.classList.toggle('indeterminate', indeterminate);
+      if (!indeterminate) {
+        target = Math.max(0, Math.min(1, frac));
+        if (target < shown - 0.08) shown = target; // neuer Abschnitt mit kleinerem Wert
+      }
+      render();
       return api;
     },
     title(t) {
@@ -106,7 +140,10 @@ function progress(title) {
       return api;
     },
     done() {
-      if (id === progressJob) box.classList.add('hidden');
+      if (id !== progressJob) return;
+      clearInterval(progressTick);
+      box.classList.add('hidden');
+      box.classList.remove('stalled');
     },
   };
   return api.set('', 0);
