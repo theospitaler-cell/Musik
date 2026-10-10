@@ -14,6 +14,7 @@ import { genSolo } from './gen/solo.js';
 import { genDrumsSegment } from './gen/drums.js';
 import { fitOctave } from './instruments.js';
 import { levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
+import { arrangeSolo } from './solo-arranger.js';
 import {
   enforceRange,
   ensureMovement,
@@ -38,6 +39,9 @@ export const DEFAULT_OPTIONS = {
   length: 'normal', // short | normal | long
   adapt: 1, // 0 = nah am Original, 1 = stilisiert, 2 = frei
   seed: 1,
+  ensemble: 'quartet', // quartet | solo
+  soloInstrument: 'trumpet', // bei Solo: Instrument-ID oder 'drums'
+  difficulty: 'auto', // 'auto' | 1..5
   tempo: null,
   transpose: 'auto', // 'auto' | Zahl (Halbtöne)
   modulate: true,
@@ -60,6 +64,7 @@ function sliceChordsRel(chords, a, b) {
 export function arrange(songIn, options = {}) {
   const opts = { ...DEFAULT_OPTIONS };
   for (const [k, v] of Object.entries(options)) if (v !== undefined && v !== null && v !== '') opts[k] = v;
+  if (opts.ensemble === 'solo') return arrangeSolo(songIn, opts);
   if (!Array.isArray(opts.voices) || opts.voices.length !== 4) throw new Error('Es müssen genau 4 Instrumente gewählt werden');
   const plan = planArrangement(songIn, opts);
   const { blocks, song, style, insts, mt } = plan;

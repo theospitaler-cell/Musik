@@ -79,3 +79,56 @@ export function genDrumsSegment(ctx, { mode, bars, isBlockStart, isBlockEnd, hit
   }
   return out;
 }
+
+// Ausgeschriebenes Drum-Solo: Dramaturgie Break -> Snare-Akzente -> Toms -> großer Fill
+const ACCENTS = [0, 3, 6, 8, 11, 14]; // 3+3+2-Gruppierung
+export function genDrumSolo(ctx, bars) {
+  const out = [];
+  const rng = ctx.rng;
+  for (let bar = 0; bar < bars; bar++) {
+    const b0 = bar * ctx.mt;
+    const steps = ctx.steps;
+    const p = bars > 1 ? bar / (bars - 1) : 1;
+    const last = bar === bars - 1;
+    const kind = last ? 'fill' : p < 0.3 ? 'break' : p < 0.6 ? 'snare' : 'toms';
+    for (let s = 0; s < steps; s++) {
+      const t = b0 + s * 6;
+      const acc = ACCENTS.includes(s % 16);
+      if (kind === 'break') {
+        if (s % 4 === 0 && s % 8 !== 4) out.push(hit(t, 6, 'bd', s === 0));
+        if (s % 8 === 4) out.push(hit(t, 6, 'sn', true));
+        if (s % 2 === 0) out.push(hit(t, 6, 'hh', false));
+        if (rng.chance(0.25) && s % 4 === 3) out.push(hit(t, 6, 'sn', false, true));
+      } else if (kind === 'snare') {
+        out.push(hit(t, 6, 'sn', acc, !acc));
+        if (s % 8 === 0) out.push(hit(t, 6, 'bd', true));
+        if (acc && rng.chance(0.3)) out.push(hit(t, 6, 'crash', false));
+      } else if (kind === 'toms') {
+        const seq = ['sn', 'tom1', 'tom2', 'ftom'];
+        out.push(hit(t, 6, seq[Math.floor(s / 4) % 4], acc));
+        if (acc) out.push(hit(t, 6, 'bd', false));
+      } else {
+        const seq = ['sn', 'sn', 'tom1', 'tom1', 'tom2', 'tom2', 'ftom', 'ftom'];
+        out.push(hit(t, 6, seq[Math.floor((s * seq.length) / steps)], acc || s >= steps - 2));
+        if (s % 4 === 0) out.push(hit(t, 6, 'bd', true));
+      }
+    }
+  }
+  return out;
+}
+
+// Hits zur Melodie (Kicks + Crash/Snare auf betonte, lange Melodietöne) über einem leichten Groove
+export function genDrumHits(ctx, melody, bars) {
+  const out = [];
+  const groove = drumGroove(ctx.style, ctx.steps, 0);
+  const hats = groove.hh || groove.ride || 'x.x.x.x.x.x.x.x.';
+  for (let bar = 0; bar < bars; bar++) {
+    for (const h of parseRhythm(hats)) out.push(hit(bar * ctx.mt + h.step * 6, 6, groove.hh ? 'hh' : 'ride', false, h.short));
+  }
+  for (const n of melody) {
+    if (n.dur < ctx.beat && n.start % ctx.beat !== 0) continue;
+    out.push(hit(n.start, 6, 'bd', true));
+    out.push(hit(n.start, 6, n.dur >= ctx.beat * 2 ? 'crash' : 'sn', true));
+  }
+  return out;
+}

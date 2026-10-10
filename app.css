@@ -1455,3 +1455,41 @@ dialog::backdrop {
     padding-bottom: 170px;
   }
 }
+
+/* Besetzung: Quartett/Solo, Feineinstellungen pro Stimme */
+.ens-panel {
+  display: none;
+}
+.ens-panel.active {
+  display: block;
+  animation: fadeUp 0.25s var(--ease);
+}
+.voice-grid.single {
+  grid-template-columns: 1fr;
+}
+.slot-extra {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr;
+  gap: 4px;
+}
+.slot-extra select {
+  font-size: 11.5px;
+  padding: 5px 22px 5px 7px;
+  background-position: right 7px center;
+  border-radius: 7px;
+  color: var(--muted);
+}
+.slot-extra select.set {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background-color: var(--accent-soft);
+}
+.voice-grid.single .voice-slot {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.voice-grid.single .slot-extra {
+  margin-top: 4px;
+}

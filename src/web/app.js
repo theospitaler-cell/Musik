@@ -1,6 +1,7 @@
 // NoteCode – App-Steuerung (Oberfläche).
 import { DEMOS } from '../demos.js';
-import { INSTRUMENTS, PRESETS, FAMILIES } from '../arrange/instruments.js';
+import { INSTRUMENTS, PRESETS, FAMILIES, writtenRangeChoices } from '../arrange/instruments.js';
+import { DIFFICULTY_LEVELS } from '../arrange/difficulty.js';
 import { STYLE_LIST } from '../arrange/styles.js';
 import { loadSong, detectFormat } from '../input/index.js';
 import { arrange } from '../arrange/engine.js';
@@ -126,7 +127,85 @@ function instrumentSelect(value, onChange) {
   return sel;
 }
 
-function renderVoiceGrid(container, voices, onChange) {
+// Notenname (notiert), deutsch mit Helmholtz-Oktaven + international
+const DE_NAMES = ['c', 'des', 'd', 'es', 'e', 'f', 'fis', 'g', 'as', 'a', 'b', 'h'];
+const SCI_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+function noteLabel(m) {
+  const pc = ((m % 12) + 12) % 12;
+  const oct = Math.floor(m / 12) - 1;
+  let de = DE_NAMES[pc];
+  if (oct >= 3) de = de + "'".repeat(oct - 3);
+  else de = de[0].toUpperCase() + de.slice(1) + ','.repeat(Math.max(0, 2 - oct));
+  return `${de} (${SCI_NAMES[pc]}${oct})`;
+}
+
+function difficultyOptions(sel, value, { auto = 'Automatisch', inherit = null } = {}) {
+  sel.innerHTML = '';
+  const add = (v, t) => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = t;
+    sel.appendChild(o);
+  };
+  if (inherit) add('', inherit);
+  else add('auto', auto);
+  for (const d of DIFFICULTY_LEVELS) add(String(d.value), `${d.value} · ${d.name}`);
+  sel.value = value === null || value === undefined ? (inherit ? '' : 'auto') : String(value);
+}
+
+// Feineinstellung pro Stimme: Schwierigkeit, tiefster & höchster Ton (notiert)
+function voiceExtras(slot, i, instId) {
+  const ex = document.createElement('div');
+  ex.className = 'slot-extra';
+  const lvl = document.createElement('select');
+  lvl.title = 'Schwierigkeit dieser Stimme';
+  difficultyOptions(lvl, S.opts.voiceDifficulty?.[i] ?? null, { inherit: 'Stufe: global' });
+  [...lvl.options].forEach((o) => o.value && (o.textContent = `Stufe ${o.value}`));
+  lvl.addEventListener('change', () => {
+    S.opts.voiceDifficulty = S.opts.voiceDifficulty || [null, null, null, null];
+    S.opts.voiceDifficulty[i] = lvl.value ? Number(lvl.value) : null;
+    lvl.classList.toggle('set', !!lvl.value);
+  });
+  lvl.classList.toggle('set', !!lvl.value);
+  ex.appendChild(lvl);
+  if (instId !== 'drums') {
+    const inst = INSTRUMENTS[instId];
+    const ch = writtenRangeChoices(inst);
+    const mk = (kind) => {
+      const sel = document.createElement('select');
+      sel.title = kind === 'lo' ? 'Tiefster Ton (notiert)' : 'Höchster Ton (notiert)';
+      const auto = document.createElement('option');
+      auto.value = '';
+      auto.textContent = kind === 'lo' ? '↓ tief: Auto' : '↑ hoch: Auto';
+      sel.appendChild(auto);
+      const list = [];
+      for (let m = ch.min; m <= ch.max; m++) list.push(m);
+      if (kind === 'hi') list.reverse();
+      for (const m of list) {
+        const o = document.createElement('option');
+        o.value = String(m);
+        o.textContent = `${kind === 'lo' ? '↓' : '↑'} ${noteLabel(m)}`;
+        sel.appendChild(o);
+      }
+      const cur = S.opts.ranges?.[i]?.[kind];
+      sel.value = cur === null || cur === undefined ? '' : String(cur);
+      sel.classList.toggle('set', !!sel.value);
+      sel.addEventListener('change', () => {
+        S.opts.ranges = S.opts.ranges || [null, null, null, null];
+        const r = { ...(S.opts.ranges[i] || { lo: null, hi: null }) };
+        r[kind] = sel.value ? Number(sel.value) : null;
+        S.opts.ranges[i] = r.lo === null && r.hi === null ? null : r;
+        sel.classList.toggle('set', !!sel.value);
+      });
+      return sel;
+    };
+    ex.appendChild(mk('lo'));
+    ex.appendChild(mk('hi'));
+  }
+  slot.appendChild(ex);
+}
+
+function renderVoiceGrid(container, voices, onChange, { extras = false } = {}) {
   container.innerHTML = '';
   voices.forEach((id, i) => {
     const slot = document.createElement('div');
@@ -138,11 +217,52 @@ function renderVoiceGrid(container, voices, onChange) {
     slot.appendChild(
       instrumentSelect(id, (v) => {
         voices[i] = v;
+        // neues Instrument -> Tonumfang wieder automatisch
+        if (extras && S.opts.ranges) S.opts.ranges[i] = null;
         onChange(voices);
+        if (extras) renderVoiceGrid(container, voices, onChange, { extras });
       }),
     );
+    if (extras) voiceExtras(slot, i, id);
     container.appendChild(slot);
   });
+}
+
+function renderSoloGrid() {
+  const box = $('#solo-grid');
+  box.innerHTML = '';
+  const slot = document.createElement('div');
+  slot.className = 'voice-slot';
+  slot.innerHTML = '<div class="vlabel"><i style="background:' + VOICE_COLORS[0] + '"></i>Solo-Instrument</div>';
+  const sel = instrumentSelect(S.opts.soloInstrument === 'drums' ? 'trumpet' : S.opts.soloInstrument, () => {});
+  const drumOpt = document.createElement('optgroup');
+  drumOpt.label = 'Rhythmus';
+  drumOpt.innerHTML = '<option value="drums">Schlagzeug</option>';
+  sel.appendChild(drumOpt);
+  sel.value = S.opts.soloInstrument || 'trumpet';
+  sel.addEventListener('change', () => {
+    S.opts.soloInstrument = sel.value;
+    if (S.opts.ranges) S.opts.ranges[0] = null;
+    renderSoloGrid();
+  });
+  slot.appendChild(sel);
+  voiceExtras(slot, 0, S.opts.soloInstrument || 'trumpet');
+  box.appendChild(slot);
+}
+
+function setEnsemble(ens) {
+  S.opts.ensemble = ens;
+  $$('#ensemble-tabs .seg').forEach((b) => b.classList.toggle('active', b.dataset.ens === ens));
+  $$('.ens-panel').forEach((p) => p.classList.toggle('active', p.dataset.enspanel === ens));
+  const solo = ens === 'solo';
+  $('#solo-label').textContent = solo ? 'Solo-Teil' : 'Hauptsolo';
+  const sel = $('#opt-solo');
+  const prev = sel.value;
+  if (solo) {
+    sel.innerHTML = '<option value="0">Mit ausgeschriebenem Solo</option><option value="none">Ohne Solo-Teil</option>';
+    sel.value = prev === 'none' ? 'none' : '0';
+    renderSoloGrid();
+  } else fillSoloSelect(sel, S.opts.voices, prev && prev !== 'none' ? prev : S.opts.solo ?? 0);
 }
 
 function fillSoloSelect(sel, voices, value) {
@@ -198,16 +318,29 @@ function readOpts() {
     tempo,
     transpose: tr === 'auto' ? 'auto' : Number(tr),
     seed: Number($('#opt-seed').value) || 1,
+    ensemble: S.opts.ensemble || 'quartet',
+    soloInstrument: S.opts.soloInstrument || 'trumpet',
+    difficulty: $('#opt-difficulty').value === 'auto' ? 'auto' : Number($('#opt-difficulty').value),
+    voiceDifficulty: [...(S.opts.voiceDifficulty || [null, null, null, null])],
+    ranges: [...(S.opts.ranges || [null, null, null, null])],
   };
 }
 
 function applyOptsToUi(o) {
   S.opts = { ...S.opts, ...o };
-  renderVoiceGrid($('#voice-grid'), S.opts.voices, (v) => {
-    S.opts.voices = v;
-    fillSoloSelect($('#opt-solo'), v, $('#opt-solo').value);
-    markPreset();
-  });
+  S.opts.voiceDifficulty = S.opts.voiceDifficulty || [null, null, null, null];
+  S.opts.ranges = S.opts.ranges || [null, null, null, null];
+  renderVoiceGrid(
+    $('#voice-grid'),
+    S.opts.voices,
+    (v) => {
+      S.opts.voices = v;
+      if (S.opts.ensemble !== 'solo') fillSoloSelect($('#opt-solo'), v, $('#opt-solo').value);
+      markPreset();
+    },
+    { extras: true },
+  );
+  difficultyOptions($('#opt-difficulty'), S.opts.difficulty ?? 'auto');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
   $('#opt-drums').checked = !!o.drums;
   $('#opt-length').value = o.length || 'normal';
@@ -219,6 +352,8 @@ function applyOptsToUi(o) {
   if (o.transpose !== undefined) $('#opt-transpose').value = String(o.transpose);
   renderStyles();
   markPreset();
+  setEnsemble(S.opts.ensemble || 'quartet');
+  if (S.opts.ensemble === 'solo') $('#opt-solo').value = o.solo === 'none' ? 'none' : '0';
 }
 
 function renderPresets() {
@@ -362,14 +497,15 @@ function showResult() {
     [keyNameDe(a.key) + (a.transposeShift ? ` (${a.transposeShift > 0 ? '+' : ''}${a.transposeShift})` : ''), ''],
     [`♩ = ${a.tempo}`, ''],
     [`${S.printed.length} Takte gedruckt`, ''],
-    [a.voices.map((v) => v.inst.short).join(' · ') + (a.drums ? ' · Schlz.' : ''), ''],
+    [a.soloMode ? `Solo · ${a.voices[0]?.inst.name || 'Schlagzeug'}` : a.voices.map((v) => v.inst.short).join(' · ') + (a.drums ? ' · Schlz.' : ''), ''],
   ];
   $('#res-meta').innerHTML = chips.map(([t, c]) => `<span class="${c}">${t}</span>`).join('');
   // Ansichten
   const vt = $('#view-tabs');
   vt.innerHTML = '';
-  const views = [['score', 'Partitur'], ...a.voices.map((v, i) => [String(i), `${i + 1} · ${v.inst.short}`])];
+  let views = [['score', 'Partitur'], ...a.voices.map((v, i) => [String(i), `${i + 1} · ${v.inst.short}`])];
   if (a.drums) views.push(['drums', 'Schlz.']);
+  if (a.soloMode) views = a.voices.length ? [['0', `Solo · ${a.voices[0].inst.name}`]] : [['drums', 'Solo · Schlagzeug']];
   if (!views.some(([k]) => k === S.view)) S.view = 'score';
   for (const [k, t] of views) {
     const b = document.createElement('button');
@@ -389,7 +525,7 @@ function showResult() {
 
 function xmlFor(view) {
   const st = S.settings;
-  const chords = st.chords;
+  const chords = S.arr.soloMode && st.chords !== 'none' ? 'all' : st.chords;
   const tenorClef = st.tenorClef;
   if (view === 'score') return exportMusicXML(S.arr, { mode: 'score', concert: st.concertScore, paper: st.paper, chords, tenorClef });
   if (view === 'drums') return exportMusicXML(S.arr, { mode: 'part', partIndex: 'drums', paper: st.paper });
@@ -537,8 +673,8 @@ async function doExport(kind) {
   try {
     toast('Export wird erstellt …');
     if (kind === 'mscz-zip') {
-      const files = [{ name: `${base}_Partitur.musicxml`, data: xmlFor('score') }];
-      a.voices.forEach((_, i) => files.push({ name: `${base}_${partName(i)}.musicxml`, data: xmlFor(String(i)) }));
+      const files = a.soloMode ? [] : [{ name: `${base}_Partitur.musicxml`, data: xmlFor('score') }];
+      a.voices.forEach((_, i) => files.push({ name: `${base}_${a.soloMode ? 'Solo_' + safeName(a.voices[i].inst.name) : partName(i)}.musicxml`, data: xmlFor(String(i)) }));
       if (a.drums) files.push({ name: `${base}_Schlagzeug.musicxml`, data: exportMusicXML(a, { mode: 'part', partIndex: 'drums', paper: st.paper }) });
       files.push({ name: `${base}.mid`, data: exportMidi(a) });
       files.push({ name: `${base}_Regieplan.md`, data: planMarkdown(a) });
@@ -549,7 +685,7 @@ async function doExport(kind) {
       const pdf = await xmlsToPdf([{ xml: xmlFor(S.view), part: S.view !== 'score' }], { paper: st.paper, zoom: st.notesZoom, title: a.meta.title });
       download(`${base}_${viewLabel()}.pdf`, pdf, 'application/pdf');
     } else if (kind === 'pdf-all') {
-      const list = [{ xml: xmlFor('score'), part: false }, ...a.voices.map((_, i) => ({ xml: xmlFor(String(i)), part: true }))];
+      const list = [...(a.soloMode ? [] : [{ xml: xmlFor('score'), part: false }]), ...a.voices.map((_, i) => ({ xml: xmlFor(String(i)), part: true }))];
       if (a.drums) list.push({ xml: xmlFor('drums'), part: true });
       const pdf = await xmlsToPdf(list, { paper: st.paper, zoom: st.notesZoom, title: a.meta.title });
       download(`${base}_komplett.pdf`, pdf, 'application/pdf');
@@ -572,6 +708,7 @@ function viewLabel() {
   if (S.view === 'score') return 'Partitur';
   if (S.view === 'drums') return 'Schlagzeug';
   const i = Number(S.view);
+  if (S.arr.soloMode) return `Solo_${safeName(S.arr.voices[i].inst.name)}`;
   return `Stimme_${i + 1}_${safeName(S.arr.voices[i].inst.name)}`;
 }
 
@@ -584,7 +721,7 @@ async function saveCurrent(auto = false) {
     title: a.meta.title,
     source: serializeSource(S.source),
     options: S.opts,
-    summary: { style: a.style.name, styleId: a.style.id, voices: a.voices.map((v) => v.inst.name), drums: !!a.drums, key: keyNameDe(a.key), bars: S.printed.length, tempo: a.tempo },
+    summary: { style: a.style.name, styleId: a.style.id, voices: a.soloMode ? [`Solo: ${a.voices[0]?.inst.name || 'Schlagzeug'}`] : a.voices.map((v) => v.inst.name), drums: !!a.drums && !a.soloMode, key: keyNameDe(a.key), bars: S.printed.length, tempo: a.tempo },
   };
   const saved = await S.library.save(item);
   S.currentId = saved.id;
@@ -640,6 +777,7 @@ function renderSettings() {
   ss.value = st.defaultStyle;
   fillSoloSelect($('#set-solo'), st.defaultVoices, st.defaultSolo);
   $('#set-length').value = st.defaultLength;
+  difficultyOptions($('#set-difficulty'), st.defaultDifficulty ?? 'auto');
   $('#set-form').value = st.form;
   $('#set-drums').checked = st.defaultDrums;
   $('#set-transpose').checked = st.transposeAuto;
@@ -667,6 +805,7 @@ function bindSettings() {
   on('#set-style', (e) => update({ defaultStyle: e.target.value }));
   on('#set-solo', (e) => update({ defaultSolo: /\d/.test(e.target.value) ? Number(e.target.value) : e.target.value }));
   on('#set-length', (e) => update({ defaultLength: e.target.value }));
+  on('#set-difficulty', (e) => update({ defaultDifficulty: e.target.value === 'auto' ? 'auto' : Number(e.target.value) }));
   on('#set-form', (e) => update({ form: e.target.value }));
   on('#set-drums', (e) => update({ defaultDrums: e.target.checked }));
   on('#set-transpose', (e) => update({ transposeAuto: e.target.checked }));
@@ -856,6 +995,11 @@ async function main() {
     form: S.settings.form,
     transpose: S.settings.transposeAuto ? 'auto' : 0,
     seed: 1,
+    ensemble: 'quartet',
+    soloInstrument: S.settings.defaultVoices[0] || 'trumpet',
+    difficulty: S.settings.defaultDifficulty ?? 'auto',
+    voiceDifficulty: [null, null, null, null],
+    ranges: [null, null, null, null],
   };
   renderDemos();
   renderPresets();
@@ -874,6 +1018,8 @@ async function main() {
   );
   const startView = (location.hash || '#arrange').slice(1);
   if (['arrange', 'library', 'settings'].includes(startView)) showView(startView);
+
+  $$('#ensemble-tabs .seg').forEach((b) => b.addEventListener('click', () => setEnsemble(b.dataset.ens)));
 
   // Vorlage
   $$('#source-tabs .seg').forEach((b) =>

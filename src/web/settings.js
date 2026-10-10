@@ -6,6 +6,7 @@ export const DEFAULT_SETTINGS = {
   defaultSolo: 0,
   defaultLength: 'normal',
   defaultAdapt: 1,
+  defaultDifficulty: 'auto', // 'auto' | 1..5
   form: 'compact', // compact = Wiederholungen & D.S. al Coda, full = ausgeschrieben
   paper: 'A4',
   notesZoom: 1,

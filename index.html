@@ -68,12 +68,22 @@
             <!-- Schritt 2 -->
             <div class="card step" id="step-band">
               <div class="step-head"><span class="step-num">2</span><h2>Besetzung</h2></div>
-              <div class="chips" id="preset-chips"></div>
-              <div class="voice-grid" id="voice-grid"></div>
-              <label class="toggle-row">
-                <span><strong>Schlagzeug</strong><small>zusätzliche Drum-Stimme</small></span>
-                <input type="checkbox" class="switch" id="opt-drums" />
-              </label>
+              <div class="segmented" id="ensemble-tabs">
+                <button class="seg active" data-ens="quartet">Quartett</button>
+                <button class="seg" data-ens="solo">Solo-Noten</button>
+              </div>
+              <div class="ens-panel active" data-enspanel="quartet">
+                <div class="chips" id="preset-chips"></div>
+                <div class="voice-grid single" id="voice-grid"></div>
+                <label class="toggle-row">
+                  <span><strong>Schlagzeug</strong><small>zusätzliche Drum-Stimme</small></span>
+                  <input type="checkbox" class="switch" id="opt-drums" />
+                </label>
+              </div>
+              <div class="ens-panel" data-enspanel="solo">
+                <div class="voice-grid single" id="solo-grid"></div>
+                <p class="muted small">Solo-Noten: Intro, Thema mit eigenen Fill-Ins, Variation, ausgeschriebenes Solo über die Akkorde, Höhepunkt und Coda – mit Akkordsymbolen für eine Begleitung. Beim Schlagzeug entsteht ein Drum-Chart mit Grooves, Fills, Hits und Drum-Solo.</p>
+              </div>
             </div>
 
             <!-- Schritt 3 -->
@@ -81,7 +91,8 @@
               <div class="step-head"><span class="step-num">3</span><h2>Stil &amp; Solo</h2></div>
               <div class="style-grid" id="style-grid"></div>
               <div class="field-grid">
-                <label class="field"><span>Hauptsolo</span><select id="opt-solo"></select></label>
+                <label class="field"><span id="solo-label">Hauptsolo</span><select id="opt-solo"></select></label>
+                <label class="field"><span>Schwierigkeit</span><select id="opt-difficulty"></select></label>
                 <label class="field"><span>Länge</span>
                   <select id="opt-length"><option value="short">Kurz</option><option value="normal" selected>Standard</option><option value="long">Lang</option></select>
                 </label>
@@ -191,6 +202,7 @@
             <div class="field-grid">
               <label class="field"><span>Stil</span><select id="set-style"></select></label>
               <label class="field"><span>Hauptsolo</span><select id="set-solo"></select></label>
+              <label class="field"><span>Schwierigkeit</span><select id="set-difficulty"></select></label>
               <label class="field"><span>Länge</span><select id="set-length"><option value="short">Kurz</option><option value="normal">Standard</option><option value="long">Lang</option></select></label>
               <label class="field"><span>Form</span><select id="set-form"><option value="compact">Kompakt (Wdh., D.S. al Coda)</option><option value="full">Ausgeschrieben</option></select></label>
             </div>

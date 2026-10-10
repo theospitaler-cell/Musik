@@ -173,7 +173,7 @@ export function exportMusicXML(arr, opts = {}) {
     const nm = nameCount[base] > 1 ? `${base} ${seen[base]}` : base;
     w.open('score-part', { id: pid });
     // Einzelstimme: Name nur oben links im Kopf (Credit), nicht vor jedem System
-    w.el('part-name', isPart ? `${nm} (${voiceLabel(ps.idx)})` : nm, isPart ? { 'print-object': 'no' } : undefined);
+    w.el('part-name', isPart ? (arr.soloMode ? `${nm} (Solo)` : `${nm} (${voiceLabel(ps.idx)})`) : nm, isPart ? { 'print-object': 'no' } : undefined);
     w.el('part-abbreviation', v.inst.short + (nameCount[base] > 1 ? ` ${seen[base]}` : ''), isPart ? { 'print-object': 'no' } : undefined);
     w.open('score-instrument', { id: `${pid}-I1` });
     w.el('instrument-name', base);
@@ -197,9 +197,9 @@ export function exportMusicXML(arr, opts = {}) {
 }
 
 function partTitle(arr, ps) {
-  if (ps.kind === 'drums') return 'Schlagzeug';
+  if (ps.kind === 'drums') return arr.soloMode ? 'Solo – Schlagzeug' : 'Schlagzeug';
   const v = arr.voices[ps.idx];
-  return `${voiceLabel(ps.idx)} – ${v.inst.name}`;
+  return arr.soloMode ? `Solo – ${v.inst.name}` : `${voiceLabel(ps.idx)} – ${v.inst.name}`;
 }
 
 function writeDefaults(w, L) {
@@ -319,6 +319,7 @@ function blockAtBar(arr, m) {
 }
 
 function blockHeading(arr, b, voiceIdx) {
+  if (arr.soloMode) return b.name;
   const seg = b.segments[0];
   const soloSeg = b.segments.find((sg) => sg.roles.includes('solo'));
   if (voiceIdx === null || voiceIdx === undefined) {

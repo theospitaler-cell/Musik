@@ -92,3 +92,15 @@ test('Schwierigkeit: Stufe 1 ohne 16tel & Effekte, Stufe pro Stimme', () => {
   const pro = arrange(song, { style: 'funk', seed: 2, difficulty: 5 });
   assert.ok(easyHi <= Math.max(...pro.voices[0].events.flatMap((e) => e.pitches)), 'leichte Stufe nicht höher als Profi');
 });
+
+test('Solo-Noten: ein Instrument bzw. Schlagzeug-Chart', () => {
+  const t = arrange(song, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1 });
+  assert.equal(t.voices.length, 1);
+  assert.equal(t.drums, null);
+  assert.ok(t.voices[0].events.length > 40);
+  assert.ok(t.blocks.some((b) => b.type === 'solo'));
+  const d = arrange(song, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
+  assert.equal(d.voices.length, 0);
+  assert.ok(d.drums.events.length > 100);
+  assert.ok(d.blocks.some((b) => b.name === 'Drum-Solo'));
+});
