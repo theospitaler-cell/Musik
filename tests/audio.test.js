@@ -4,6 +4,7 @@ import { transcribe, resampleMono } from '../src/input/audio.js';
 import { arrange } from '../src/arrange/engine.js';
 import { demoSong } from './helpers.js';
 import { performArrangement } from '../src/output/performance.js';
+import { synthSong, TEMPOS, drumScore, beatScore, downbeatScore } from './synth-audio.js';
 
 const SR = 22050;
 
@@ -175,3 +176,32 @@ test('Schlagzeug aus Audio Takt für Takt: Fills, Crash und Variationen wie im O
   assert.ok(extraKick >= 2, `Variation (Bass Drum 3+): ${extraKick}`);
   assert.ok(falseKick <= 1, `falsche Bass Drums: ${falseKick}`);
 });
+
+// Allgemeine Testsammlung: verschiedene Grooves, Taktarten und Tempoverläufe. Verbesserungen
+// müssen hier für ALLE Lieder gelten – nicht nur für einen einzelnen Song.
+const CORPUS = [
+  { name: 'Rock 8tel', groove: 'rock8', bpm: 100 },
+  { name: 'Halftime', groove: 'halftime', bpm: 80 },
+  { name: 'Shuffle', groove: 'shuffle', bpm: 96, meter: '12/8' },
+  { name: 'Walzer schnell', groove: 'waltz', bpm: 150, bars: 24, meter: '3/4' },
+  { name: 'Funk 16tel', groove: 'funk', bpm: 104 },
+  { name: 'Ride', groove: 'ride8', bpm: 120 },
+  { name: 'Ritardando', groove: 'rock8', bpm: 110, tempo: TEMPOS.rit(110, 2, 4, 0.65) },
+  { name: 'Tempowechsel 96→128', groove: 'rock8', bpm: 96, tempo: TEMPOS.change(96, 128, 32), bars: 20, tempoTol: 40 },
+  { name: 'nur Schlagzeug', groove: 'rock16', bpm: 118, band: false },
+];
+for (const c of CORPUS) {
+  test(`Audio-Testsammlung: ${c.name} – Tempo, Takt, Beats & Schlagzeug`, () => {
+    const s = synthSong({ bars: 16, ...c });
+    const song = transcribe(s.audio, { title: c.name });
+    assert.ok(Math.abs(song.tempo - c.bpm) <= (c.tempoTol || 4), `Tempo ${song.tempo} statt ${c.bpm}`);
+    assert.equal(`${song.meter.beats}/${song.meter.beatType}`, c.meter || '4/4');
+    assert.ok(beatScore(song, s.beatSec) >= 0.93, `Beats ${beatScore(song, s.beatSec)}`);
+    assert.ok(downbeatScore(song, s.barSec) >= 0.85, `Taktanfänge ${downbeatScore(song, s.barSec)}`);
+    const ds = drumScore(song, s.truth);
+    assert.ok(ds.kick.f1 >= 0.8, `Bass Drum F1 ${ds.kick.f1.toFixed(2)}`);
+    assert.ok(ds.snare.f1 >= 0.85, `Snare F1 ${ds.snare.f1.toFixed(2)}`);
+    assert.ok(ds.hat.f1 >= 0.8, `Hi-Hat/Ride F1 ${ds.hat.f1.toFixed(2)}`);
+    assert.ok(!ds.crash || ds.crash.f1 >= 0.7, `Crash F1 ${ds.crash && ds.crash.f1.toFixed(2)}`);
+  });
+}

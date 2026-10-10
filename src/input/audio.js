@@ -10,6 +10,7 @@ import { DIV } from '../core/constants.js';
 import { finalizeSong } from '../theory/analysis.js';
 import { harmonize } from '../theory/analysis.js';
 import { detectKey } from '../theory/keys.js';
+import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 
 const SR = 22050;
 const N = 2048;
@@ -101,6 +102,98 @@ const P_STEP = 0.2;
 const CANDS = [];
 for (let m = P_LO; m <= P_HI; m += P_STEP) CANDS.push(m);
 
+// Bandgrenzen (Hz): fein im Bass, gröber oben
+const SPEC_BANDS = (() => {
+  const out = [];
+  for (let f = 30; f < 11000; f *= Math.pow(2, 1 / 6)) out.push(f);
+  out.push(11025);
+  return out;
+})();
+
+const SPEC_CENTERS = SPEC_BANDS.slice(0, -1).map((f, b) => Math.sqrt(f * SPEC_BANDS[b + 1]));
+
+function median(arr, n) {
+  // kleines Insertion-Sort (n ≤ 17)
+  for (let i = 1; i < n; i++) {
+    const v = arr[i];
+    let j = i - 1;
+    while (j >= 0 && arr[j] > v) {
+      arr[j + 1] = arr[j];
+      j--;
+    }
+    arr[j + 1] = v;
+  }
+  return arr[n >> 1];
+}
+
+// Harmonisch/Perkussiv-Trennung (Median-Filter, Fitzgerald 2010): Liegeklänge (Bass, Gesang,
+// Klavier, Gitarre) sind waagrecht im Spektrogramm, Schläge senkrecht. Aus dem perkussiven Anteil
+// werden Onsets je Schlagzeug-Band berechnet – Bass & Begleitung stören die Erkennung kaum noch.
+function percussiveFlux(spec, nFrames, NB) {
+  const KT = 17; // ~340 ms waagrecht
+  const KF = 9; // ~1,5 Oktaven senkrecht
+  const H = new Float32Array(nFrames * NB);
+  const P = new Float32Array(nFrames * NB);
+  const tmp = new Float32Array(Math.max(KT, KF));
+  for (let b = 0; b < NB; b++)
+    for (let t = 0; t < nFrames; t++) {
+      let n = 0;
+      for (let k = t - (KT >> 1); k <= t + (KT >> 1); k++) tmp[n++] = k >= 0 && k < nFrames ? spec[k * NB + b] : 0;
+      H[t * NB + b] = median(tmp, n);
+    }
+  for (let t = 0; t < nFrames; t++)
+    for (let b = 0; b < NB; b++) {
+      let n = 0;
+      for (let k = b - (KF >> 1); k <= b + (KF >> 1); k++) tmp[n++] = k >= 0 && k < NB ? spec[t * NB + k] : 0;
+      P[t * NB + b] = median(tmp, n);
+    }
+  // weiche Maske
+  const Xp = new Float32Array(nFrames * NB);
+  const Xh = new Float32Array(nFrames * NB);
+  for (let i = 0; i < Xp.length; i++) {
+    const p2 = P[i] * P[i];
+    const h2 = H[i] * H[i];
+    const m = p2 / (p2 + h2 + 1e-12);
+    Xp[i] = spec[i] * m;
+    Xh[i] = spec[i] * (1 - m);
+  }
+  const bandIdx = (lo, hi) => {
+    const out = [];
+    for (let b = 0; b < NB; b++) if (SPEC_BANDS[b] >= lo && SPEC_BANDS[b + 1] <= hi * 1.06) out.push(b);
+    return out;
+  };
+  const kickB = bandIdx(35, 130);
+  const snareB = [...bandIdx(150, 320), ...bandIdx(1000, 5000)];
+  const hatB = bandIdx(6000, 11025);
+  const rideB = bandIdx(3000, 7000);
+  const fluxOf = (bands) => {
+    const out = new Float32Array(nFrames);
+    for (let t = 1; t < nFrames; t++) {
+      let f = 0;
+      for (const b of bands) {
+        const d = Math.log1p(50 * Xp[t * NB + b]) - Math.log1p(50 * Xp[(t - 1) * NB + b]);
+        if (d > 0) f += d;
+      }
+      out[t] = f;
+    }
+    return out;
+  };
+  // Nachklang im hohen Band (Ride/Crash klingen lange, geschlossene Hi-Hat nicht)
+  const sustainHigh = new Float32Array(nFrames);
+  const percHigh = new Float32Array(nFrames);
+  for (let t = 0; t < nFrames; t++) {
+    let sh = 0;
+    let ph = 0;
+    for (const b of rideB) {
+      sh += Xh[t * NB + b];
+      ph += Xp[t * NB + b];
+    }
+    sustainHigh[t] = sh;
+    percHigh[t] = ph;
+  }
+  return { lowP: fluxOf(kickB), midP: fluxOf(snareB), highP: fluxOf(hatB), sustainHigh, percHigh, Xp, NB };
+}
+
 export function analyzeFrames(x, onProgress) {
   const fft = makeFFT(N);
   const win = new Float32Array(N);
@@ -116,6 +209,14 @@ export function analyzeFrames(x, onProgress) {
   const lowF = new Float32Array(nFrames);
   const midF = new Float32Array(nFrames);
   const highF = new Float32Array(nFrames);
+  // Bandspektrogramm (log-verteilt, 30 Hz – 11 kHz) für die Schlagzeug-Trennung (HPSS)
+  const NB = SPEC_BANDS.length - 1;
+  const specBand = new Int16Array(N / 2).fill(-1);
+  for (let k = 1; k < N / 2; k++) {
+    const f = k * binHz;
+    for (let b = 0; b < NB; b++) if (f >= SPEC_BANDS[b] && f < SPEC_BANDS[b + 1]) specBand[k] = b;
+  }
+  const spec = new Float32Array(nFrames * NB);
   const bandOf = new Int8Array(N / 2).fill(-1);
   for (let k = 1; k < N / 2; k++) {
     const f = k * binHz;
@@ -167,6 +268,7 @@ export function analyzeFrames(x, onProgress) {
       }
       prevLog[k] = lg;
     }
+    for (let k = 1; k < N / 2; k++) if (specBand[k] >= 0) spec[t * NB + specBand[k]] += mag[k];
     onset[t] = flux;
     lowF[t] = lf;
     midF[t] = mf;
@@ -223,7 +325,9 @@ export function analyzeFrames(x, onProgress) {
     }
     if (onProgress && t % 200 === 0) onProgress('Spektrum wird analysiert', (t / nFrames) * 0.45);
   }
-  return { nFrames, onset, energy, chroma, bass, topP, topS, lowF, midF, highF };
+  if (onProgress) onProgress('Schlagzeug wird vom Rest getrennt', 0.45);
+  const perc = percussiveFlux(spec, nFrames, NB);
+  return { nFrames, onset, energy, chroma, bass, topP, topS, lowF, midF, highF, ...perc };
 }
 
 // ---------- Tempo & Beats ----------
@@ -243,40 +347,31 @@ export function trackBeats(onsetRaw) {
   for (let i = 0; i < n; i++) sd += o[i] * o[i];
   sd = Math.sqrt(sd / n) || 1;
   for (let i = 0; i < n; i++) o[i] /= sd;
-  // Tempo per Autokorrelation (40–220 BPM) mit Kamm über Vielfache der Periode
-  // (echte Schläge wiederholen sich auch nach 2 und 4 Schlägen), Prior um 105 BPM
-  const minLag = Math.round((60 / 220) * FR);
-  const maxLag = Math.round((60 / 40) * FR);
-  const acf = new Float32Array(4 * maxLag + 1);
-  for (let lag = 1; lag <= 4 * maxLag && lag < n; lag++) {
-    let ac = 0;
-    for (let i = lag; i < n; i++) ac += o[i] * o[i - lag];
-    acf[lag] = ac / (n - lag);
-  }
-  let bestLag = Math.round((60 / 105) * FR);
-  let bestScore = -Infinity;
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    const ac = acf[lag] + 0.5 * acf[2 * lag] + 0.25 * acf[4 * lag];
-    const bpm = (60 * FR) / lag;
-    const prior = Math.exp(-0.5 * Math.pow(Math.log2(bpm / 105) / 0.8, 2));
-    const sc = ac * prior;
-    if (sc > bestScore) {
-      bestScore = sc;
-      bestLag = lag;
-    }
-  }
-  const P = bestLag;
-  // Dynamische Programmierung (Ellis)
+  // geglättete Hüllkurve für die Periodensuche (scharfe Spitzen treffen ganzzahlige Lags sonst
+  // nur zufällig – das führte bei 16tel-Hi-Hats zu 2/3-Tempo-Fehlern)
+  const os = new Float32Array(n);
+  for (let i = 0; i < n; i++) os[i] = 0.4 * o[i] + 0.2 * ((o[i - 1] || 0) + (o[i + 1] || 0)) + 0.1 * ((o[i - 2] || 0) + (o[i + 2] || 0));
+  const tempo = tempoCurve(os);
+  const Pg = tempo.globalLag;
+  // Periode je Frame (Tempowechsel, rit./accel.)
+  const Pt = tempo.lagAt;
+  // Dynamische Programmierung (Ellis) mit örtlicher Periode
+  // Übergangskosten: Abweichung vom vorigen Schlagabstand (stetige Tempoänderung wie rit./accel.
+  // bleibt billig) und schwächer vom örtlichen Tempo der Tempokurve
   const score = new Float32Array(n);
   const back = new Int32Array(n).fill(-1);
   const tight = 100;
+  const tightCurve = 30;
   for (let t = 0; t < n; t++) {
     let best = 0;
     let arg = -1;
-    for (let tau = t - 2 * P; tau <= t - Math.round(P / 2); tau++) {
+    const P = Pt[t];
+    for (let tau = t - Math.round(2 * P); tau <= t - Math.round(P / 2); tau++) {
       if (tau < 0) continue;
-      const d = Math.log((t - tau) / P);
-      const v = score[tau] - tight * d * d;
+      const I = back[tau] >= 0 ? tau - back[tau] : P;
+      const d = Math.log((t - tau) / I);
+      const dc = Math.log((t - tau) / P);
+      const v = score[tau] - Math.min(tight * d * d, 3) - tightCurve * dc * dc;
       if (arg < 0 || v > best) {
         best = v;
         arg = tau;
@@ -288,7 +383,7 @@ export function trackBeats(onsetRaw) {
   // Ende: bestes Score im letzten Periodenfenster
   let t = n - 1;
   let bestEnd = -Infinity;
-  for (let i = Math.max(0, n - P); i < n; i++)
+  for (let i = Math.max(0, n - Math.round(Pt[n - 1] || Pg)); i < n; i++)
     if (score[i] > bestEnd) {
       bestEnd = score[i];
       t = i;
@@ -302,9 +397,124 @@ export function trackBeats(onsetRaw) {
   const ibis = [];
   for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);
   ibis.sort((a, b) => a - b);
-  const med = ibis.length ? ibis[Math.floor(ibis.length / 2)] : P;
+  const med = ibis.length ? ibis[Math.floor(ibis.length / 2)] : Pg;
   let bpm = (60 * FR) / med;
-  return { beats, bpm, onset: o };
+  return { beats, bpm, onset: o, lagAt: Pt };
+}
+
+// Autokorrelation mit Bruchteil-Lags (lineare Interpolation)
+function acfOf(x, a, z, maxLag) {
+  const acf = new Float32Array(maxLag + 2);
+  const len = z - a;
+  for (let lag = 1; lag <= maxLag + 1 && lag < len; lag++) {
+    let ac = 0;
+    for (let i = a + lag; i < z; i++) ac += x[i] * x[i - lag];
+    acf[lag] = ac / (len - lag);
+  }
+  return (lag) => {
+    const i = Math.floor(lag);
+    if (i < 1 || i + 1 >= acf.length) return 0;
+    const f = lag - i;
+    return acf[i] * (1 - f) + acf[i + 1] * f;
+  };
+}
+
+// Tempo-Kandidaten (BPM, logarithmisch, 1 %-Schritte)
+const TEMPO_CANDS = [];
+for (let b = 40; b <= 220; b *= 1.01) TEMPO_CANDS.push(b);
+
+// Bewertung eines Tempos: Periode, ihre Vielfachen (Takt-Wiederholung) und die Unterteilung
+// in Achtel (echte Schläge haben Unterteilungen; das 1,5-fache des Schlags nicht)
+function tempoSalience(A, lag) {
+  return A(lag) + 0.5 * Math.max(A(2 * lag), A(3 * lag)) + 0.25 * Math.max(A(4 * lag), A(6 * lag)) + 0.3 * Math.max(A(lag / 2), 0.7 * A(lag / 3));
+}
+const tempoPrior = (bpm) => Math.exp(-0.5 * Math.pow(Math.log2(bpm / 105) / 0.8, 2));
+
+// Tempokurve: globales Tempo + örtliches Tempo je Fenster (Viterbi über die Fenster,
+// Sprünge kosten, bleiben aber möglich – für Tempowechsel zwischen Formteilen und rit.)
+export function tempoCurve(os) {
+  const n = os.length;
+  const maxLag = Math.ceil((60 / 40) * FR * 6) + 2;
+  const Ag = acfOf(os, 0, n, Math.min(maxLag, n - 2));
+  let gBest = 105;
+  let gScore = -Infinity;
+  const gS = TEMPO_CANDS.map((bpm) => tempoSalience(Ag, (60 * FR) / bpm));
+  TEMPO_CANDS.forEach((bpm, k) => {
+    const sc = gS[k] * tempoPrior(bpm);
+    if (sc > gScore) {
+      gScore = sc;
+      gBest = bpm;
+    }
+  });
+  const globalLag = (60 * FR) / gBest;
+  const W = 400; // 8 s Fenster
+  const H = 50; // 1 s Schritt
+  const lagAt = new Float32Array(n).fill(globalLag);
+  if (n < 2 * W) return { globalLag, globalBpm: gBest, lagAt };
+  // nur Tempi in der Nähe des globalen (±45 %) – keine Oktavfehler je Fenster
+  const cands = TEMPO_CANDS.filter((b) => b >= gBest / 1.45 && b <= gBest * 1.45);
+  const wins = [];
+  for (let c = W / 2; c + W / 2 <= n; c += H) {
+    const A = acfOf(os, c - W / 2, c + W / 2, Math.min(W - 2, Math.ceil((60 * FR * 6) / cands[0]) + 2));
+    const s = cands.map((bpm) => tempoSalience(A, (60 * FR) / bpm));
+    const mx = Math.max(...s) || 1;
+    // leichte Bevorzugung des Grundtempos; typische Fehl-Lagen (3:4, 2:3 – Triolen-Vielfache,
+    // z. B. bei Shuffle) kosten etwas, echte Tempowechsel setzen sich trotzdem durch
+    // klingt das Grundtempo in diesem Fenster noch deutlich? Dann sind 3:4/2:3-Lagen Fehl-Lagen,
+    // sonst ein echter Tempowechsel (alle Anschläge haben das neue Tempo)
+    // (nur die direkte Periode zählt – gemeinsame Vielfache wie 3 alte = 4 neue Schläge nicht)
+    const direct = cands.map((bpm) => A((60 * FR) / bpm));
+    const gDirect = Math.max(A(globalLag * 0.98), A(globalLag), A(globalLag * 1.02));
+    const gStill = gDirect >= 0.6 * Math.max(...direct);
+    wins.push({
+      c,
+      s: s.map((v, k) => {
+        const r = Math.log2(cands[k] / gBest);
+        const metric = [Math.log2(3 / 4), Math.log2(4 / 3), Math.log2(2 / 3), Math.log2(3 / 2)].some((x) => Math.abs(r - x) < 0.06);
+        return v / mx + 0.15 * Math.exp(-0.5 * Math.pow(r / 0.08, 2)) - (metric && gStill ? 0.3 : 0);
+      }),
+    });
+  }
+  // Viterbi: Emission = normierte Salienz, Übergang = Kosten für Tempoänderung
+  const K = cands.length;
+  let prev = wins[0].s.map((v, k) => v + 0.3 * Math.exp(-0.5 * Math.pow(Math.log2(cands[k] / gBest) / 0.1, 2)));
+  const back = [];
+  for (let w = 1; w < wins.length; w++) {
+    const cur = new Float32Array(K);
+    const bk = new Int16Array(K);
+    for (let k = 0; k < K; k++) {
+      let best = -Infinity;
+      let arg = k;
+      for (let j = Math.max(0, k - 40); j < Math.min(K, k + 41); j++) {
+        const d = Math.abs(k - j); // 1 % je Schritt
+        const v = prev[j] - (d <= 2 ? 0.02 * d : 0.15 + 0.012 * d);
+        if (v > best) {
+          best = v;
+          arg = j;
+        }
+      }
+      cur[k] = best + wins[w].s[k];
+      bk[k] = arg;
+    }
+    back.push(bk);
+    prev = cur;
+  }
+  let k = prev.indexOf(Math.max(...prev));
+  const path = new Array(wins.length);
+  for (let w = wins.length - 1; w >= 0; w--) {
+    path[w] = k;
+    if (w > 0) k = back[w - 1][k];
+  }
+  // je Frame interpolieren
+  for (let t = 0; t < n; t++) {
+    const x = (t - wins[0].c) / H;
+    const i = Math.max(0, Math.min(wins.length - 1, Math.floor(x)));
+    const j = Math.min(wins.length - 1, i + 1);
+    const f = Math.max(0, Math.min(1, x - i));
+    const bpm = cands[path[i]] * (1 - f) + cands[path[j]] * f;
+    lagAt[t] = (60 * FR) / bpm;
+  }
+  return { globalLag, globalBpm: gBest, lagAt };
 }
 
 export function beatChroma(beats, feat, nFrames) {
@@ -395,11 +605,29 @@ export function findMeter(bc, cues = {}) {
     }
     let best = 0;
     for (let i = 1; i < m; i++) if (tot[i] > tot[best]) best = i;
+    res.all = tot;
     // Stärke: Abstand der besten Phase zum Mittel
     const raw = res[best];
-    return { phase: best, score: raw.kick + raw.bass + raw.nov * 2 + raw.onset * 0.1 };
+    return { phase: best, score: raw.kick + raw.bass + raw.nov * 2 + raw.onset * 0.1, all: tot };
   };
   const base = { kick: 1.2, snare: 0.8, bass: 1, onset: 0.3, nov: 1.2 };
+  // Snare-Muster (4/4): normaler Backbeat (2 & 4) oder Half-Time (nur 3)? Daraus folgt die "1".
+  const snarePhase = () => {
+    const cls = [0, 0, 0, 0];
+    const cnt = [0, 0, 0, 0];
+    mid.forEach((v, i) => {
+      cls[i % 4] += v;
+      cnt[i % 4]++;
+    });
+    const mean = cls.map((v, k) => v / Math.max(1, cnt[k]));
+    const order = [0, 1, 2, 3].sort((a, b) => mean[b] - mean[a]);
+    const [hi, second] = order;
+    const lowest = mean[order[3]];
+    if (mean[hi] - lowest < 0.15) return null; // kein klares Muster
+    if (mean[second] >= 0.6 * mean[hi] && (second - hi + 4) % 4 === 2) return { type: 'backbeat', phases: [(hi + 3) % 4, (hi + 1) % 4] };
+    if (mean[second] < 0.6 * mean[hi]) return { type: 'halftime', phases: [(hi + 2) % 4] };
+    return null;
+  };
   // Taktart aus den Grundmerkmalen; die Lage der "1" zusätzlich mit Crash & Fills
   // (nur wenn diese deutlich und mehrfach vorkommen – sonst sind sie Rauschen)
   // Crash & Fill nur als schwacher Zusatz-Hinweis (in dichten Mixen sind sie unzuverlässig)
@@ -407,6 +635,18 @@ export function findMeter(bc, cues = {}) {
   const m4 = evalMeter(4, base);
   const m3 = evalMeter(3, base);
   const beatsPer = m3.score > m4.score * 1.35 && m3.score > 0.05 ? 3 : 4;
+  if (beatsPer === 4) {
+    const sp = snarePhase();
+    if (sp && sp.phases.length === 1) return { beats: 4, phase: sp.phases[0], snare: sp.type };
+    if (sp) {
+      // Backbeat: nur zwei Lagen möglich – davon die mit mehr Bass-Drum/Harmoniewechsel auf der "1"
+      const keys = { kick: 1.2, bass: 1, nov: 1.2, crash: 0.4, fill: 0.3 };
+      const all = evalMeter(4, keys);
+      const scores = all.all;
+      const best = sp.phases.reduce((a, b) => (scores[b] > scores[a] ? b : a));
+      return { beats: 4, phase: best, snare: sp.type };
+    }
+  }
   return { beats: beatsPer, phase: evalMeter(beatsPer, withAcc).phase };
 }
 
@@ -643,6 +883,60 @@ function groovePattern(avg, meterBeats) {
 }
 
 // Schlagzeug je Formteil: Groove aus der Aufnahme, Takte ohne Schlagzeug bleiben leer
+// Shuffle-Erkennung: Anschläge auf dem 1. und 3. Triolen-Achtel deutlich stärker als auf der
+// geraden Achtel, und auch das mittlere Triolen-Achtel ist besetzt (Ghost-Notes, Hi-Hat)
+export function detectShuffle(feat, beats) {
+  const a = feat.midP || feat.midF;
+  const h = feat.highP || feat.highF;
+  if (!a || beats.length < 16) return false;
+  const at = (arr, f) => Math.max(arr[Math.round(f) - 1] || 0, arr[Math.round(f)] || 0, arr[Math.round(f) + 1] || 0);
+  // je Schlag abstimmen (Songs können zwischendurch gerade werden, z. B. ein Samba-Teil)
+  let shuf = 0;
+  let straight = 0;
+  for (let i = 2; i < beats.length - 2; i++) {
+    const d = beats[i + 1] - beats[i];
+    const t1 = at(a, beats[i] + d / 3) + at(h, beats[i] + d / 3);
+    const half = at(a, beats[i] + d / 2) + at(h, beats[i] + d / 2);
+    const t2 = at(a, beats[i] + (2 * d) / 3) + at(h, beats[i] + (2 * d) / 3);
+    if (t2 > 1.5 * half && t1 > 1.1 * half) shuf++;
+    else if (half > 1.2 * t2) straight++;
+  }
+  return shuf >= 0.3 * (beats.length - 4) && shuf > 1.4 * straight;
+}
+
+// Groove im 12/8 (Triolen-Raster): Hi-Hat auf den besetzten Triolen-Achteln, Bass Drum,
+// Snare-Backbeat und Ghost-Notes (leise Snare auf dem mittleren Triolen-Achtel)
+function groovePatternCompound(avg, meterBeats) {
+  const [low, mid, high] = avg;
+  const steps = meterBeats * SUB;
+  const grid = [];
+  for (let s = 0; s < steps; s += 4) grid.push(s);
+  const at = (arr, r) => mean(Array.from({ length: meterBeats }, (_, b) => arr[b * SUB + r]));
+  const hits = [];
+  const parts = [0, 4, 8].map((r) => at(high, r));
+  const pm = Math.max(...parts);
+  if (pm > 0.08) for (let b = 0; b < meterBeats; b++) [0, 4, 8].forEach((r, k) => parts[k] >= 0.35 * pm && hits.push({ s: b * SUB + r, midi: 42, vel: 80 }));
+  const kick = (s) => low[s] - 0.5 * mid[s];
+  const kMax = Math.max(...grid.map(kick));
+  const ks = [];
+  if (kMax > 0.1) {
+    ks.push(...grid.filter((s) => kick(s) >= 0.55 * kMax).sort((a, b) => kick(b) - kick(a)).slice(0, 2 * meterBeats));
+    for (const s of ks) hits.push({ s, midi: 36, vel: 100 });
+  }
+  const snare = (s) => mid[s] - 0.7 * high[s];
+  const sG = grid.map(snare).sort((a, b) => a - b);
+  const med = Math.max(0.02, sG[Math.floor(sG.length / 2)]);
+  const sMax = sG[sG.length - 1];
+  if (sMax > 0.15) {
+    const main = grid.filter((s) => snare(s) >= med + 0.5 * (sMax - med)).sort((a, b) => snare(b) - snare(a)).slice(0, meterBeats);
+    for (const s of main) hits.push({ s, midi: 38, vel: 100 });
+    // Ghost-Notes: deutlich, aber leiser – typisch auf dem mittleren Triolen-Achtel
+    for (const s of grid) if (!main.includes(s) && s % 12 === 4 && snare(s) >= med + 0.15 * (sMax - med)) hits.push({ s, midi: 38, vel: 40 });
+  }
+  const toTick = (s) => Math.floor(s / SUB) * 36 + (s % SUB) * 3;
+  return { hits: hits.map((h) => ({ pos: toTick(h.s), s: h.s, midi: h.midi, vel: h.vel })), swing: false, toTick };
+}
+
 // Schlagzeug Takt für Takt wie in der Aufnahme: Grundgroove je Formteil als Referenz,
 // dann je Takt nur die Schläge, die dort wirklich zu hören sind – plus Variationen
 // (zusätzliche Bass-Drum/Snare), Fills (dichte Schläge am Taktende -> Snare/Toms),
@@ -662,8 +956,9 @@ function bandNormFast(arr) {
   return o;
 }
 
-export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, sections) {
-  const bands = [bandNormFast(feat.lowF), bandNormFast(feat.midF), bandNormFast(feat.highF)];
+export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, sections, { compound = false } = {}) {
+  const BT = compound ? 36 : DIV;
+  const bands = feat.lowP ? [bandNormFast(feat.lowP), bandNormFast(feat.midP), bandNormFast(feat.highP)] : [bandNormFast(feat.lowF), bandNormFast(feat.midF), bandNormFast(feat.highF)];
   const valAt = (band, f) => {
     const i = Math.round(f);
     let m = 0;
@@ -702,7 +997,7 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
       for (const m of idx) for (let s = 0; s < steps; s++) a[s] += bars[m].prof[b][s] / idx.length;
       return a;
     });
-    const g = groovePattern(avg, meterBeats);
+    const g = compound ? groovePatternCompound(avg, meterBeats) : groovePattern(avg, meterBeats);
     if (!g.hits.length) continue;
     votes += idx.length;
     if (g.swing) swingVotes += idx.length;
@@ -729,7 +1024,8 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
     let actHat = 0;
     for (const m of idx) for (const st of hatOnly) actHat += (bars[m].prof[1][st] + bars[m].prof[2][st]) / (idx.length * Math.max(1, hatOnly.length));
     const grid = [];
-    for (let st = 0; st < steps; st += 3) grid.push(st);
+    for (let st = 0; st < steps; st += compound ? 4 : 3) grid.push(st);
+    const gstep = compound ? 4 : 3;
     for (const m of idx) {
       const P = bars[m].prof;
       const hits = [];
@@ -743,8 +1039,8 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
       }
       // Variationen: zusätzliche Schläge, die deutlich zu hören sind
       const extraSn = [];
-      const peakAt = (fn, st) => fn(P, st) >= (st >= 3 ? fn(P, st - 3) : 0) && fn(P, st) >= (st + 3 < steps ? fn(P, st + 3) : 0);
-      const midPeak = (st) => P[1][st] >= (st >= 3 ? P[1][st - 3] : 0) && P[1][st] >= (st + 3 < steps ? P[1][st + 3] : 0);
+      const peakAt = (fn, st) => fn(P, st) >= (st >= gstep ? fn(P, st - gstep) : 0) && fn(P, st) >= (st + gstep < steps ? fn(P, st + gstep) : 0);
+      const midPeak = (st) => P[1][st] >= (st >= gstep ? P[1][st - gstep] : 0) && P[1][st] >= (st + gstep < steps ? P[1][st + gstep] : 0);
       for (const st of grid) {
         if (!has(36, st) && typ[36] > 0.05 && kickV(P, st) >= Math.max(0.12 * typ[36], 0.2) && P[0][st] >= 0.25 && peakAt(kickV, st)) hits.push({ s: st, midi: 36, vel: 95 });
         if (has(38, st) || typ[38] <= 0.05) continue;
@@ -755,7 +1051,7 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
       // Fill: dichte Anschläge (Mitten + Höhen) im letzten Schlag, wo der Groove keine hat
       const dense = (from) => {
         let c = 0;
-        for (let st = from; st < steps; st += 3) {
+        for (let st = from; st < steps; st += gstep) {
           const a = P[1][st] + P[2][st];
           const groovePos = g.hits.some((h) => h.s === st);
           if (groovePos ? a >= 1.3 * actHat && P[1][st] >= 0.5 * midTyp : a >= Math.max(0.35 * actHat, 0.3)) c++;
@@ -763,7 +1059,7 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
         return c;
       };
       const fillFrom = dense(steps - SUB) >= 3 ? steps - SUB : null;
-      if (fillFrom !== null) for (let st = fillFrom; st < steps; st += 3) if (!extraSn.includes(st) && P[1][st] + P[2][st] >= Math.max(0.35 * actHat, 0.3)) extraSn.push(st);
+      if (fillFrom !== null) for (let st = fillFrom; st < steps; st += gstep) if (!extraSn.includes(st) && P[1][st] + P[2][st] >= Math.max(0.35 * actHat, 0.3)) extraSn.push(st);
       if (fillFrom !== null) {
         const fillSteps = [...new Set([...extraSn.filter((st) => st >= fillFrom), ...hits.filter((h) => h.midi === 38 && h.s >= fillFrom).map((h) => h.s)])].sort((a, b) => a - b);
         for (let k = hits.length - 1; k >= 0; k--) if (hits[k].s >= fillFrom && (hits[k].midi === 38 || hits[k].midi === 42)) hits.splice(k, 1);
@@ -782,11 +1078,52 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
         for (const h of g.hits) if (h.midi === 42 && h.s > 0 && !hits.some((x) => x.s === h.s && x.midi === 42)) hits.push({ s: h.s, midi: 42, vel: h.vel });
       }
       prevFill = fillFrom !== null;
-      for (const h of hits) notes.push({ start: m * meterBeats * DIV + g.toTick(h.s), dur: 6, midi: h.midi, vel: h.vel });
+      for (const h of hits) notes.push({ start: m * meterBeats * BT + g.toTick(h.s), dur: 6, midi: h.midi, vel: h.vel });
     }
   }
   return { notes: notes.sort((a, b) => a.start - b.start), swing: votes > 0 && swingVotes > votes / 2, activeBars: bars.map((b) => b.on) };
 }
+
+function linFit(y, a, z, i) {
+  let sx = 0, sy = 0, sxx = 0, sxy = 0, c = 0;
+  for (let k = a; k <= z; k++) {
+    sx += k;
+    sy += y[k];
+    sxx += k * k;
+    sxy += k * y[k];
+    c++;
+  }
+  const slope = (c * sxy - sx * sy) / (c * sxx - sx * sx || 1);
+  return (sy - slope * sx) / c + slope * i;
+}
+
+// Kleinste-Quadrate-Parabel durch y[a..z] (x = Index, um i zentriert), Wert an i
+function localQuadFit(y, a, z, i) {
+  let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, t0 = 0, t1 = 0, t2 = 0;
+  for (let k = a; k <= z; k++) {
+    const x = k - i;
+    const x2 = x * x;
+    s0 += 1;
+    s1 += x;
+    s2 += x2;
+    s3 += x2 * x;
+    s4 += x2 * x2;
+    t0 += y[k];
+    t1 += x * y[k];
+    t2 += x2 * y[k];
+  }
+  if (s0 < 4) {
+    // zu wenige Punkte: Gerade
+    const den = s0 * s2 - s1 * s1 || 1;
+    const slope = (s0 * t1 - s1 * t0) / den;
+    return (t0 - slope * s1) / s0;
+  }
+  // Normalgleichungen 3x3 (Cramer), gesucht: Achsenabschnitt c0
+  const det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+  if (Math.abs(det) < 1e-9) return y[i];
+  return (t0 * (s2 * s4 - s3 * s3) - s1 * (t1 * s4 - s3 * t2) + s2 * (t1 * s3 - s2 * t2)) / det;
+}
+
 
 // ---------- Feine Beat-Lage ----------
 // Jeder Beat wird auf die nächste Onset-Spitze (±2 Frames, mit Parabel-Interpolation auf
@@ -806,22 +1143,14 @@ export function refineBeats(beats, env) {
     // nur wenn dort wirklich ein Anschlag ist, sonst ursprüngliche Lage
     return y1 > 0.4 ? best + frac : b;
   });
-  // lokale Ausgleichsgerade über ±3 Beats (robust gegen einzelne Ausreißer)
+  // lokale Ausgleichsparabel über ±3 Beats (robust gegen einzelne Ausreißer, folgt aber
+  // stetigen Tempoänderungen wie rit./accel.)
   const out = new Array(n);
   for (let i = 0; i < n; i++) {
-    const a = Math.max(0, i - 3);
-    const z = Math.min(n - 1, i + 3);
-    let sx = 0, sy = 0, sxx = 0, sxy = 0, c = 0;
-    for (let k = a; k <= z; k++) {
-      sx += k;
-      sy += peak[k];
-      sxx += k * k;
-      sxy += k * peak[k];
-      c++;
-    }
-    const slope = (c * sxy - sx * sy) / (c * sxx - sx * sx || 1);
-    const icpt = (sy - slope * sx) / c;
-    const fit = icpt + slope * i;
+    // am Rand das Fenster verschieben (immer 7 Punkte), statt mit 4 Punkten zu extrapolieren
+    const a = Math.max(0, Math.min(i - 3, n - 7));
+    const z = Math.min(n - 1, Math.max(i + 3, 6));
+    const fit = i < 3 || i > n - 4 ? linFit(peak, a, z, i) : localQuadFit(peak, a, z, i);
     // Mischung: Anschlag selbst (Feeling) und Ausgleich (Stabilität)
     out[i] = Math.abs(peak[i] - fit) > 2 ? fit : 0.5 * peak[i] + 0.5 * fit;
   }
@@ -833,6 +1162,27 @@ export function refineBeats(beats, env) {
 // Frame-Index -> Sekunde in der Datei (Onset-Spitze liegt kurz nach Fensteranfang)
 export const FRAME_LAG = 0.75 * N;
 export const frameToSec = (f) => (f * HOP + FRAME_LAG) / SR;
+
+// Schlagzeug-Noten über die NMF-Aktivierungen (Ergebnis wird je Analyse zwischengespeichert)
+export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measureCount, sections, { compound = false } = {}) {
+  if (!feat.Xp) return estimateDrums(feat, beatFrames.map(Math.round), firstDown, meterBeats, measureCount, sections, { compound });
+  if (!feat.drumAct) feat.drumAct = drumNMF(feat.Xp, feat.nFrames, feat.NB, SPEC_CENTERS).act;
+  const bf = beatFrames;
+  const frameToBeat = (f) => {
+    const n = bf.length;
+    if (f <= bf[0]) return (f - bf[0]) / (bf[1] - bf[0]);
+    if (f >= bf[n - 1]) return n - 1 + (f - bf[n - 1]) / (bf[n - 1] - bf[n - 2]);
+    let lo = 0;
+    let hi = n - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (bf[mid] <= f) lo = mid;
+      else hi = mid;
+    }
+    return lo + (f - bf[lo]) / (bf[lo + 1] - bf[lo]);
+  };
+  return drumHitsFromActivations(feat.drumAct, bf, firstDown, meterBeats, measureCount, sections, { compound, frameToBeat, wash: feat.sustainHigh, perc: feat.percHigh });
+}
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
 export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {} } = {}) {
@@ -860,7 +1210,16 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       on.push(sn(beats[i]));
       off.push(sn((beats[i] + beats[i + 1]) / 2));
     }
-    if (bpm < 110 && mean(off) > 1.5 * mean(on) && mean(off) > 0.1) {
+    // Gleich starke Anschläge auf und zwischen den Schlägen (Bass Drum/Snare, z. B. schneller
+    // Walzer): der Puls ist doppelt so schnell
+    const kN = bandNorm(feat.lowP || feat.lowF);
+    const sN = feat.midP ? bandNorm(feat.midP) : midN;
+    const kickSnare = kN.map((v, i) => v + sN[i]);
+    const ks = (f) => Math.max(kickSnare[Math.round(f) - 1] || 0, kickSnare[Math.round(f)] || 0, kickSnare[Math.round(f) + 1] || 0);
+    const kOn = mean(beats.slice(0, -1).map(ks));
+    const kOff = mean(beats.slice(0, -1).map((b, i) => ks((b + beats[i + 1]) / 2)));
+    const evenPulse = bpm < 100 && kOn > 0.2 && kOff >= 0.8 * kOn;
+    if ((bpm < 110 && mean(off) > 1.5 * mean(on) && mean(off) > 0.1) || evenPulse) {
       const dbl = [];
       for (let i = 0; i < beats.length; i++) {
         dbl.push(beats[i]);
@@ -872,8 +1231,8 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   }
   if (beats.length < 8) throw new Error('Im Audio wurde kein durchgehender Rhythmus erkannt (zu kurz oder zu leise).');
   const bc = beatChroma(beats, feat, feat.nFrames);
-  const lowN = bandNorm(feat.lowF);
-  const midN = bandNorm(feat.midF);
+  const lowN = bandNorm(feat.lowP || feat.lowF);
+  const midN = bandNorm(feat.midP || feat.midF);
   const peak = (arr, f) => Math.max(arr[f - 1] || 0, arr[f] || 0, arr[f + 1] || 0);
   const highN = bandNorm(feat.highF);
   // Becken-Akzent: hohes Band deutlich stärker als sonst (Crash), Fill: viele Snare-Anschläge
@@ -895,7 +1254,10 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   });
   const m = meterInfo.beats;
   const firstDown = meterInfo.phase;
-  const mt = m * DIV;
+  // Shuffle mit Schlägen auf allen Triolen-Achteln (z. B. Half-Time-Shuffle) -> 12/8-Notation
+  const shuffle12 = detectShuffle(feat, beats) && m === 4;
+  const BT = shuffle12 ? 36 : DIV; // Ticks je Grundschlag
+  const mt = m * BT;
   const measureCount = Math.max(1, Math.floor((beats.length - firstDown) / m));
   // Sekunde -> Schlagposition (lineare Interpolation zwischen den Beats)
   const beatSec = refineBeats(beats, comb).map(frameToSec);
@@ -914,7 +1276,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   onProgress('Akkorde & Tonart werden erkannt', 0.5);
   const pseudo = [];
   bc.forEach((x, i) => {
-    const start = (i - firstDown) * DIV;
+    const start = (i - firstDown) * BT;
     if (start < 0) return;
     for (let k = 0; k < 12; k++) {
       if (x.c[k] > 0.35) pseudo.push({ start, dur: Math.round(DIV * x.c[k]), midi: 60 + k });
@@ -930,7 +1292,8 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   onProgress('Schlagzeug wird erkannt', 0.78);
   const roughSections = [];
   for (let s0 = 0; s0 < measureCount; s0 += 8) roughSections.push({ start: s0, length: Math.min(8, measureCount - s0) });
-  const swing = estimateDrums(feat, beats, firstDown, m, measureCount, roughSections).swing;
+  const drumsRough = transcribeDrums(feat, refineBeats(beats, comb), firstDown, m, measureCount, roughSections, { compound: shuffle12 });
+  const swing = !shuffle12 && drumsRough.swing;
 
   onProgress('Noten werden ins Taktraster gesetzt', 0.82);
   // 16tel-Raster; bei Swing liegen Offbeats auf der Triole -> als gerade Achtel notiert
@@ -938,6 +1301,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     const bp = beatPos(sec) - firstDown;
     const b = Math.floor(bp);
     const f = bp - b;
+    if (shuffle12) return b * BT + Math.round(f * 6) * 6; // 12/8: Achtel = 12, 16tel = 6 Ticks
     if (swing) {
       const opts = [0, 2 / 3, 1];
       const ticks = [0, DIV / 2, DIV];
@@ -952,7 +1316,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     const e = Math.max(s + (swing ? DIV / 2 : 6), toTick(melEndSec(n.end)));
     return { start: s, dur: e - s, midi: n.midi };
   });
-  melody = melody.filter((n) => n.start >= -mt + DIV);
+  melody = melody.filter((n) => n.start >= -mt + BT);
   // gleiche Startzeit nach dem Runden: längere Note behalten
   melody = melody.filter((n, i) => !melody.some((o, j) => j !== i && o.start === n.start && (o.dur > n.dur || (o.dur === n.dur && j < i))));
   // Notenenden lesbar machen: Mini-Lücken schließen (Ausklingen wird oft zu früh erkannt),
@@ -970,7 +1334,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     }
   });
 
-  const meter = { beats: m, beatType: 4 };
+  const meter = shuffle12 ? { beats: 3 * m, beatType: 8 } : { beats: m, beatType: 4 };
   const key = detectKey([...pseudo, ...melody.filter((n) => n.start >= 0).map((n) => ({ midi: n.midi, dur: n.dur * 0.5 }))]);
   const chords = harmonize(pseudo, { meter, key, measureCount, melodyOnly: false });
   const pickupNotes = melody.filter((n) => n.start < 0);
@@ -994,10 +1358,12 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   onProgress('Form wird bestimmt', 0.92);
   const fin = finalizeSong(song);
   fin.chordsDetected = true;
-  // Schlagzeug je Formteil
-  fin.drumNotes = estimateDrums(feat, beats, firstDown, m, measureCount, fin.sections).notes;
+  // Schlagzeug: NMF-Zerlegung in Bass Drum, Snare, Hi-Hat, Becken, Toms; Anschläge ins Raster
+  onProgress('Schlagzeug wird Instrument für Instrument getrennt', 0.93);
+  fin.drumNotes = transcribeDrums(feat, refineBeats(beats, comb), firstDown, m, measureCount, fin.sections, { compound: shuffle12 }).notes;
   // Zeitbezug zur Datei: Schlag i liegt bei beatSec[i] Sekunden; Takt 1 beginnt bei Schlag firstDown
-  fin.timing = { beatSec, firstBeat: firstDown, beatTicks: DIV };
+  fin.timing = { beatSec, firstBeat: firstDown, beatTicks: BT };
+  if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
   fin.duration = mono.length / SR;
   onProgress('Fertig', 1);
   return fin;
