@@ -500,7 +500,8 @@ export function planArrangement(songIn, opts) {
   let letter = 0;
   for (const b of blocks) {
     b.startBar = bar;
-    b.rehearsal = b.type === 'intro' ? null : String.fromCharCode(65 + (letter++ % 26));
+    if (b.copyOf !== undefined) b.rehearsal = blocks[b.copyOf].rehearsal; // D.S.-Durchgang: gleiche Buchstaben
+    else b.rehearsal = b.type === 'intro' ? null : String.fromCharCode(65 + (letter++ % 26));
     bar += b.measures;
     if (!b.key) b.key = key;
     // Segment-Startpositionen

@@ -361,7 +361,7 @@ export function arrange(songIn, options = {}) {
     meta: {
       title: song.title,
       composer: song.composer,
-      arranger: 'Arr.: Maestro-Arranger',
+      arranger: 'Arr.: NoteCode',
       subtitle: `${style.name} – Quartett`,
       keyName: keyName(song.key),
       keyNameDe: keyNameDe(song.key),

@@ -32,10 +32,11 @@ export function printedMeasures(arr) {
 }
 
 // Wiedergabe-Reihenfolge aus der gedruckten Form (zur Kontrolle/Tests)
-export function playbackOrder(printed, form) {
+export function playbackOrder(printed) {
   const order = [];
   let i = 0;
   let dsDone = false;
+  let inDsRange = false; // zwischen Segno und To Coda nach dem Rücksprung: ohne Wiederholungen
   let guard = 0;
   let repStart = 0;
   let repCount = 1;
@@ -43,23 +44,43 @@ export function playbackOrder(printed, form) {
     const m = printed[i];
     if (m.startRepeat && repCount === 1) repStart = i;
     order.push(m.src);
-    if (m.endRepeat && repCount < m.endRepeat && !dsDone) {
+    if (m.endRepeat && repCount < m.endRepeat && !inDsRange) {
       repCount++;
       i = repStart;
       continue;
     }
     if (m.endRepeat) repCount = 1;
-    if (dsDone && m.toCoda) {
+    if (inDsRange && m.toCoda) {
+      inDsRange = false;
       i = printed.findIndex((x) => x.coda);
       continue;
     }
     if (m.dalSegno && !dsDone) {
       dsDone = true;
+      inDsRange = true;
       i = printed.findIndex((x) => x.segno);
       continue;
     }
     i++;
   }
-  void form;
   return order;
+}
+
+// Zeitleisten-Takt -> Index des gedruckten Takts (für Mitlese-Markierung & Klick-Sprung)
+export function timelineToPrinted(arr, printed = printedMeasures(arr)) {
+  const map = new Map();
+  printed.forEach((pm, i) => {
+    if (!map.has(pm.src)) map.set(pm.src, i);
+  });
+  // D.S.-Kopien auf die Originaltakte abbilden
+  for (const b of arr.blocks) {
+    if (b.copyOf === undefined) continue;
+    const src = arr.blocks[b.copyOf];
+    for (let k = 0; k < b.measures; k++) if (map.has(src.startBar + k)) map.set(b.startBar + k, map.get(src.startBar + k));
+  }
+  // Wiederholungen
+  for (const r of arr.form?.repeats || []) {
+    for (let pass = 1; pass < r.times; pass++) for (let k = 0; k < r.len; k++) if (map.has(r.start + k)) map.set(r.start + pass * r.len + k, map.get(r.start + k));
+  }
+  return (bar) => (map.has(bar) ? map.get(bar) : null);
 }

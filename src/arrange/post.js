@@ -541,20 +541,20 @@ export function tempoTerm(bpm) {
 }
 
 export function tempoHeading(style, bpm) {
-  const term = tempoTerm(bpm);
+  // kurz & üblich: Stil- bzw. Tempowort, Metronomzahl folgt separat
   switch (style.id) {
     case 'swing':
-      return { text: `${bpm < 110 ? 'Slow Swing' : bpm < 170 ? 'Medium Swing' : 'Up-Tempo Swing'} (Achtel triolisch)`, hint: 'Achtel triolisch (♫ = ♩ ♪ in Triole)' };
+      return { text: bpm < 110 ? 'Slow Swing' : bpm < 170 ? 'Medium Swing' : 'Up-Tempo Swing', hint: 'Achtel triolisch' };
     case 'funk':
-      return { text: `${term} – Funky`, hint: 'Straight 16ths, tight & laid back' };
+      return { text: 'Funky', hint: 'Straight 16ths' };
     case 'secondline':
-      return { text: `${term} – Second Line`, hint: 'New Orleans Groove' };
+      return { text: 'Second Line', hint: 'New Orleans Groove' };
     case 'ballad':
-      return { text: `${term} – Ballad`, hint: 'con espressione, rubato ad lib.' };
+      return { text: 'Ballad', hint: 'con espressione' };
     case 'polka':
-      return { text: 'Tempo di Polka', hint: 'zackig, Nachschläge kurz' };
+      return { text: 'Tempo di Polka', hint: null };
     default:
-      return { text: term, hint: null };
+      return { text: tempoTerm(bpm), hint: null };
   }
 }
 

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>NoteCode – Quartett-Arrangements</title>
+    <meta name="description" content="NoteCode arrangiert Songs automatisch für Quartette (Brass, Sax, Streicher …) – mit Noten, Wiedergabe, PDF, Bildern und MuseScore-Export." />
+    <meta name="theme-color" content="#f6f6f3" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="app.css" />
+    <script src="config.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#arrange" data-nav="arrange" aria-label="NoteCode Startseite">
+        <img src="icon.svg" alt="" width="34" height="34" />
+        <span class="wordmark">Note<span>Code</span></span>
+      </a>
+      <nav class="nav" aria-label="Hauptnavigation">
+        <button class="nav-btn active" data-nav="arrange"><svg><use href="#i-wand" /></svg><span>Arrangieren</span></button>
+        <button class="nav-btn" data-nav="library"><svg><use href="#i-library" /></svg><span>Bibliothek</span></button>
+        <button class="nav-btn" data-nav="settings"><svg><use href="#i-settings" /></svg><span>Einstellungen</span></button>
+      </nav>
+      <div class="top-right">
+        <span class="sync-pill" id="sync-pill" title="Synchronisierungsstatus"><span class="dot"></span><span id="sync-text">lokal</span></span>
+        <button class="account-btn" id="account-btn" aria-label="Konto">
+          <span class="avatar" id="avatar"><svg><use href="#i-user" /></svg></span>
+          <span id="account-label">Anmelden</span>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <!-- ====================== ARRANGIEREN ====================== -->
+      <section class="view active" id="view-arrange">
+        <div class="arrange-grid">
+          <aside class="steps">
+            <!-- Schritt 1 -->
+            <div class="card step" id="step-source">
+              <div class="step-head"><span class="step-num">1</span><h2>Vorlage</h2></div>
+              <div class="segmented" role="tablist" id="source-tabs">
+                <button class="seg active" data-src="demo">Demo-Songs</button>
+                <button class="seg" data-src="file">Datei</button>
+                <button class="seg" data-src="abc">Text (ABC)</button>
+              </div>
+              <div class="src-panel active" data-panel="demo">
+                <div class="demo-list" id="demo-list"></div>
+              </div>
+              <div class="src-panel" data-panel="file">
+                <label class="dropzone" id="dropzone">
+                  <input type="file" id="file-input" accept=".musicxml,.xml,.mxl,.mid,.midi,.abc,.txt" hidden />
+                  <svg class="dz-icon"><use href="#i-upload" /></svg>
+                  <strong>Datei hierher ziehen oder tippen</strong>
+                  <span>MusicXML / MXL (z. B. von MuseScore), MIDI oder ABC</span>
+                </label>
+              </div>
+              <div class="src-panel" data-panel="abc">
+                <textarea id="abc-input" spellcheck="false" rows="9" placeholder="X:1&#10;T:Mein Song&#10;M:4/4&#10;L:1/8&#10;K:Bb&#10;&quot;Bb7&quot;B2 d2 f2 d2|..."></textarea>
+                <div class="row-end"><button class="btn ghost small" id="abc-load">Übernehmen</button></div>
+              </div>
+              <div class="analysis hidden" id="analysis"></div>
+            </div>
+
+            <!-- Schritt 2 -->
+            <div class="card step" id="step-band">
+              <div class="step-head"><span class="step-num">2</span><h2>Besetzung</h2></div>
+              <div class="chips" id="preset-chips"></div>
+              <div class="voice-grid" id="voice-grid"></div>
+              <label class="toggle-row">
+                <span><strong>Schlagzeug</strong><small>zusätzliche Drum-Stimme</small></span>
+                <input type="checkbox" class="switch" id="opt-drums" />
+              </label>
+            </div>
+
+            <!-- Schritt 3 -->
+            <div class="card step" id="step-style">
+              <div class="step-head"><span class="step-num">3</span><h2>Stil &amp; Solo</h2></div>
+              <div class="style-grid" id="style-grid"></div>
+              <div class="field-grid">
+                <label class="field"><span>Hauptsolo</span><select id="opt-solo"></select></label>
+                <label class="field"><span>Länge</span>
+                  <select id="opt-length"><option value="short">Kurz</option><option value="normal" selected>Standard</option><option value="long">Lang</option></select>
+                </label>
+                <label class="field"><span>Anpassung des Songs</span>
+                  <select id="opt-adapt"><option value="0">Nah am Original</option><option value="1" selected>Stilisiert</option><option value="2">Frei</option></select>
+                </label>
+                <label class="field"><span>Form</span>
+                  <select id="opt-form"><option value="compact" selected>Kompakt (Wdh., D.S. al Coda)</option><option value="full">Ausgeschrieben</option></select>
+                </label>
+                <label class="field"><span>Tempo (BPM)</span><input type="number" id="opt-tempo" min="40" max="260" placeholder="auto" /></label>
+                <label class="field"><span>Tonart</span>
+                  <select id="opt-transpose"></select>
+                </label>
+              </div>
+              <div class="seed-row">
+                <span class="muted">Variante</span>
+                <input type="number" id="opt-seed" value="1" min="1" />
+                <button class="icon-btn" id="dice" title="Neue Variante würfeln"><svg><use href="#i-dice" /></svg></button>
+              </div>
+              <button class="btn primary big" id="generate"><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
+            </div>
+          </aside>
+
+          <!-- Arbeitsbereich -->
+          <section class="workspace card">
+            <div class="empty-state" id="empty-state">
+              <div class="empty-art"><img src="icon.svg" alt="" /></div>
+              <h1>Dein Quartett-Arrangement in Sekunden</h1>
+              <p>Song wählen, Besetzung &amp; Stil festlegen – NoteCode schreibt Intro, Gegenstimmen, Solo, Shout Chorus und Coda. Mit Noten zum Mitlesen, Wiedergabe mit Mischpult und Export als PDF, Bild oder für MuseScore.</p>
+              <div class="feature-row">
+                <span class="feature"><svg><use href="#i-music" /></svg>Echter Kontrapunkt</span>
+                <span class="feature"><svg><use href="#i-sliders" /></svg>Mischpult</span>
+                <span class="feature"><svg><use href="#i-download" /></svg>PDF · PNG · MuseScore</span>
+              </div>
+            </div>
+
+            <div class="result hidden" id="result">
+              <div class="result-head">
+                <div>
+                  <h1 id="res-title">–</h1>
+                  <div class="meta-chips" id="res-meta"></div>
+                </div>
+                <div class="export-group">
+                  <button class="btn ghost" id="save-btn" title="In der Bibliothek speichern"><svg><use href="#i-save" /></svg><span>Speichern</span></button>
+                  <div class="menu-wrap">
+                    <button class="btn primary" id="export-btn"><svg><use href="#i-download" /></svg><span>Exportieren</span></button>
+                    <div class="menu" id="export-menu">
+                      <div class="menu-title">MuseScore / Notensatz</div>
+                      <button data-export="mscz-zip"><svg><use href="#i-file" /></svg>MuseScore-Paket (Partitur + Stimmen, .zip)</button>
+                      <button data-export="xml-current"><svg><use href="#i-file" /></svg>Aktuelle Ansicht (.musicxml)</button>
+                      <div class="menu-title">PDF</div>
+                      <button data-export="pdf-current"><svg><use href="#i-pdf" /></svg>Aktuelle Ansicht als PDF</button>
+                      <button data-export="pdf-all"><svg><use href="#i-pdf" /></svg>Partitur + alle Stimmen (ein PDF)</button>
+                      <div class="menu-title">Bild</div>
+                      <button data-export="png-current"><svg><use href="#i-image" /></svg>Aktuelle Ansicht als PNG</button>
+                      <div class="menu-title">Audio &amp; Plan</div>
+                      <button data-export="midi"><svg><use href="#i-music" /></svg>MIDI-Datei</button>
+                      <button data-export="plan"><svg><use href="#i-list" /></svg>Regieplan (.md)</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="tabs" role="tablist">
+                <button class="tab active" data-tab="notes">Noten</button>
+                <button class="tab" data-tab="plan">Regieplan</button>
+                <button class="tab" data-tab="quality">Prüfbericht</button>
+              </div>
+
+              <div class="tab-panel active" data-tabpanel="notes">
+                <div class="score-toolbar">
+                  <div class="segmented small" id="view-tabs"></div>
+                  <div class="zoom">
+                    <button class="icon-btn" id="zoom-out" title="Kleiner">−</button>
+                    <span id="zoom-label">100 %</span>
+                    <button class="icon-btn" id="zoom-in" title="Größer">+</button>
+                  </div>
+                </div>
+                <div class="pages" id="pages"><div class="loader" id="loader"><span></span><span></span><span></span></div></div>
+              </div>
+              <div class="tab-panel" data-tabpanel="plan"><div id="plan"></div></div>
+              <div class="tab-panel" data-tabpanel="quality"><div id="quality"></div></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ====================== BIBLIOTHEK ====================== -->
+      <section class="view" id="view-library">
+        <div class="page-head">
+          <div>
+            <h1>Bibliothek</h1>
+            <p class="muted" id="library-sub">Deine gespeicherten Arrangements</p>
+          </div>
+          <button class="btn ghost" id="sync-now"><svg><use href="#i-sync" /></svg><span>Jetzt synchronisieren</span></button>
+        </div>
+        <div class="library-grid" id="library-grid"></div>
+      </section>
+
+      <!-- ====================== EINSTELLUNGEN ====================== -->
+      <section class="view" id="view-settings">
+        <div class="page-head"><div><h1>Einstellungen</h1><p class="muted">Standardwerte, Notenbild, Konto &amp; Synchronisierung</p></div></div>
+        <div class="settings-grid">
+          <div class="card">
+            <h3>Standard für neue Arrangements</h3>
+            <div class="voice-grid" id="set-voices"></div>
+            <div class="field-grid">
+              <label class="field"><span>Stil</span><select id="set-style"></select></label>
+              <label class="field"><span>Hauptsolo</span><select id="set-solo"></select></label>
+              <label class="field"><span>Länge</span><select id="set-length"><option value="short">Kurz</option><option value="normal">Standard</option><option value="long">Lang</option></select></label>
+              <label class="field"><span>Form</span><select id="set-form"><option value="compact">Kompakt (Wdh., D.S. al Coda)</option><option value="full">Ausgeschrieben</option></select></label>
+            </div>
+            <label class="toggle-row"><span><strong>Schlagzeug standardmäßig</strong><small>Drum-Stimme automatisch dazu</small></span><input type="checkbox" class="switch" id="set-drums" /></label>
+            <label class="toggle-row"><span><strong>Bläserfreundliche Tonart</strong><small>automatisch transponieren (z. B. E → Es)</small></span><input type="checkbox" class="switch" id="set-transpose" /></label>
+            <label class="toggle-row"><span><strong>Automatisch speichern</strong><small>jedes erstellte Arrangement in der Bibliothek ablegen</small></span><input type="checkbox" class="switch" id="set-autosave" /></label>
+          </div>
+          <div class="card">
+            <h3>Notenbild &amp; Export</h3>
+            <div class="field-grid">
+              <label class="field"><span>Papierformat</span><select id="set-paper"><option value="A4">A4 Hochformat</option><option value="Letter">US-Letter Hochformat</option></select></label>
+              <label class="field"><span>Notengröße</span><select id="set-zoom"><option value="0.85">Klein</option><option value="1">Normal</option><option value="1.12">Groß</option></select></label>
+              <label class="field"><span>Partitur</span><select id="set-concert"><option value="false">Transponiert</option><option value="true">Klingend (C-Partitur)</option></select></label>
+              <label class="field"><span>Akkordsymbole</span><select id="set-chords"><option value="solo">Nur in Soli</option><option value="all">Überall</option><option value="none">Keine</option></select></label>
+            </div>
+            <label class="toggle-row"><span><strong>Tenorschlüssel</strong><small>für hohe Lagen von Posaune, Cello, Fagott (sonst immer Bassschlüssel)</small></span><input type="checkbox" class="switch" id="set-tenor" /></label>
+            <label class="toggle-row"><span><strong>Erscheinungsbild</strong><small>Hell oder automatisch nach System</small></span>
+              <select id="set-theme" class="compact-select"><option value="light">Hell</option><option value="auto">Automatisch</option></select>
+            </label>
+          </div>
+          <div class="card" id="account-card">
+            <h3>Konto &amp; Synchronisierung</h3>
+            <p class="muted small">Mit einem Konto siehst du deine Arrangements auf allen Geräten. NoteCode nutzt dafür ein eigenes, kostenloses <a href="https://supabase.com" target="_blank" rel="noopener">Supabase</a>-Projekt (Anleitung im README).</p>
+            <div class="account-status" id="account-status"></div>
+            <details class="sync-config" id="sync-config">
+              <summary>Server-Verbindung (Supabase)</summary>
+              <label class="field"><span>Projekt-URL</span><input type="url" id="set-sb-url" placeholder="https://xxxx.supabase.co" /></label>
+              <label class="field"><span>Anon-Key (public)</span><input type="text" id="set-sb-key" placeholder="eyJhbGciOi…" /></label>
+              <div class="row-end"><button class="btn ghost small" id="sb-save">Verbindung speichern</button></div>
+            </details>
+          </div>
+          <div class="card">
+            <h3>Daten</h3>
+            <p class="muted small">Sicherung aller Arrangements als Datei – z. B. zum Umziehen auf ein Gerät ohne Konto.</p>
+            <div class="row-start">
+              <button class="btn ghost" id="backup-export"><svg><use href="#i-download" /></svg><span>Sicherung exportieren</span></button>
+              <label class="btn ghost"><svg><use href="#i-upload" /></svg><span>Sicherung importieren</span><input type="file" id="backup-import" accept=".json" hidden /></label>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ====================== PLAYER ====================== -->
+    <footer class="player hidden" id="player">
+      <div class="transport">
+        <button class="icon-btn" id="p-stop" title="Stopp"><svg><use href="#i-stop" /></svg></button>
+        <button class="play-btn" id="p-play" title="Abspielen (Leertaste)"><svg id="p-play-icon"><use href="#i-play" /></svg></button>
+      </div>
+      <div class="timeline">
+        <div class="time-row"><span id="p-time">0:00</span><span class="bar-info" id="p-bar">Takt 1</span><span id="p-total">0:00</span></div>
+        <input type="range" id="p-seek" min="0" max="1000" value="0" />
+      </div>
+      <div class="player-right">
+        <label class="speed" title="Wiedergabe-Tempo"><span id="p-speed-label">100 %</span><input type="range" id="p-speed" min="50" max="130" value="100" /></label>
+        <button class="btn ghost small" id="p-mixer"><svg><use href="#i-sliders" /></svg><span>Mischpult</span></button>
+      </div>
+    </footer>
+
+    <div class="drawer" id="mixer" aria-hidden="true">
+      <div class="drawer-head">
+        <h3>Mischpult</h3>
+        <button class="icon-btn" id="mixer-close" aria-label="Schließen">✕</button>
+      </div>
+      <div class="strips" id="strips"></div>
+      <div class="master-row"><span>Gesamt</span><input type="range" id="master" min="0" max="100" value="90" /></div>
+    </div>
+
+    <dialog id="auth-dialog">
+      <form method="dialog" class="auth-form" id="auth-form">
+        <div class="auth-head"><img src="icon.svg" alt="" width="40" /><h2 id="auth-title">Anmelden</h2></div>
+        <p class="muted small" id="auth-hint">Melde dich an, um deine Arrangements auf allen Geräten zu sehen.</p>
+        <label class="field"><span>E-Mail</span><input type="email" id="auth-email" autocomplete="email" required /></label>
+        <label class="field"><span>Passwort</span><input type="password" id="auth-pass" autocomplete="current-password" minlength="6" required /></label>
+        <div class="auth-error" id="auth-error"></div>
+        <div class="auth-actions">
+          <button type="button" class="btn ghost" id="auth-cancel">Abbrechen</button>
+          <button type="submit" class="btn primary" id="auth-submit">Anmelden</button>
+        </div>
+        <button type="button" class="link-btn" id="auth-switch">Noch kein Konto? Registrieren</button>
+      </form>
+    </dialog>
+
+    <div class="toasts" id="toasts"></div>
+
+    <!-- Icons -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <symbol id="i-wand" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M15 9h.01M17.8 6.2 19 5M3 21l9-9M12.2 6.2 11 5" /></symbol>
+        <symbol id="i-library" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 19.5V5a2 2 0 0 1 2-2h12v18H6.5A2.5 2.5 0 0 1 4 18.5M8 7h6M8 11h6" /></symbol>
+        <symbol id="i-settings" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></g></symbol>
+        <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></g></symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></symbol>
+        <symbol id="i-download" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></symbol>
+        <symbol id="i-dice" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4" /><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" /><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor" /><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor" /><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor" /></g></symbol>
+        <symbol id="i-music" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></g></symbol>
+        <symbol id="i-sliders" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></symbol>
+        <symbol id="i-save" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8" /></symbol>
+        <symbol id="i-file" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M10 17V11l5-1v6M10 17a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zM15 16a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z" /></symbol>
+        <symbol id="i-pdf" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5" /></symbol>
+        <symbol id="i-image" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></g></symbol>
+        <symbol id="i-list" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></symbol>
+        <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.14v13.72a1 1 0 0 0 1.52.85l11-6.86a1 1 0 0 0 0-1.7l-11-6.86A1 1 0 0 0 8 5.14z" /></symbol>
+        <symbol id="i-pause" viewBox="0 0 24 24"><g fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2" /><rect x="14" y="5" width="4" height="14" rx="1.2" /></g></symbol>
+        <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" /></symbol>
+        <symbol id="i-sync" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5" /></symbol>
+        <symbol id="i-trash" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></symbol>
+      </defs>
+    </svg>
+
+    <script type="module" src="src/web/app.js"></script>
+  </body>
+</html>

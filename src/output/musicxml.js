@@ -88,8 +88,10 @@ function emptyBars(events, totalBars, mt) {
   return busy.map((x) => !x);
 }
 
-function clefForBlock(events, inst, a0, a1) {
+function clefForBlock(events, inst, a0, a1, tenorClef = false) {
   if (!inst || !inst.highClef) return inst ? inst.clef : 'G2';
+  // Tenorschlüssel nur auf Wunsch (Einstellungen) – sonst immer der Grundschlüssel
+  if (inst.highClef === 'C4' && !tenorClef) return inst.clef;
   const ps = events.filter((e) => e.start >= a0 && e.start < a1).flatMap((e) => e.pitches);
   if (ps.length < 3) return null; // unverändert lassen
   const sorted = [...ps].sort((a, b) => a - b);
@@ -126,9 +128,9 @@ export function exportMusicXML(arr, opts = {}) {
   if (isPart) w.el('movement-title', partTitle(arr, partSpecs[0]));
   w.open('identification');
   if (arr.meta.composer) w.el('creator', arr.meta.composer, { type: 'composer' });
-  w.el('creator', 'Maestro-Arranger', { type: 'arranger' });
+  w.el('creator', 'NoteCode', { type: 'arranger' });
   w.open('encoding');
-  w.el('software', 'Maestro-Arranger Quartett-Engine');
+  w.el('software', 'NoteCode Quartett-Engine');
   w.el('encoding-date', new Date().toISOString().slice(0, 10));
   w.el('supports', null, { element: 'accidental', type: 'yes' });
   w.el('supports', null, { element: 'beam', type: 'yes' });
@@ -187,7 +189,7 @@ export function exportMusicXML(arr, opts = {}) {
   partSpecs.forEach((ps, k) => {
     w.open('part', { id: ps.pid });
     if (ps.kind === 'drums') writeDrumPart(w, arr, ps, { isPart, layout, first: k === 0, useSimile: !!opts.simile });
-    else writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first: k === 0, useSimile: !!opts.simile });
+    else writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first: k === 0, useSimile: !!opts.simile, tenorClef: !!opts.tenorClef });
     w.close('part');
   });
   w.close('score-partwise');
@@ -493,7 +495,7 @@ function roleAtFactory(arr, idx) {
   };
 }
 
-function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, useSimile = false }) {
+function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, useSimile = false, tenorClef = false }) {
   void layout;
   const v = arr.voices[ps.idx];
   const inst = v.inst;
@@ -543,8 +545,8 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
           }
         }
       }
-      // Takt 1 bleibt ausgeschrieben (Tempo- & Stilangabe gut sichtbar)
-      const startK = k === 0 ? 1 : k;
+      // Takte 1–2 bleiben ausgeschrieben, damit die Tempoangabe nicht mit der Pausenzahl kollidiert
+      const startK = k === 0 ? Math.min(2, len) : k;
       const restLen = len - cueBars - (startK - k);
       if (restLen >= 2) multiRest.set(startK, restLen);
       k = e;
@@ -573,7 +575,7 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     const pk = partKeyFifths(block.key.fifths, tr);
     let clef = null;
     if (blockStart) {
-      const c = clefForBlock(v.events, inst, block.startBar * mt, (block.startBar + block.measures) * mt);
+      const c = clefForBlock(v.events, inst, block.startBar * mt, (block.startBar + block.measures) * mt, tenorClef);
       if (c && c !== currentClef) clef = c;
     }
     const keyChanged = currentKey === null || currentKey.fifths !== pk.fifths || currentKey.mode !== block.key.mode;
@@ -692,7 +694,8 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
 function writeTempoHeading(w, arr) {
   w.open('direction', { placement: 'above' });
   w.open('direction-type');
-  w.el('words', arr.meta.tempoText, { 'font-weight': 'bold', 'font-size': 12 });
+  // feste Leerzeichen, damit Tempowort und Metronomangabe nicht aneinanderkleben
+  w.el('words', `${arr.meta.tempoText}\u00a0\u00a0`, { 'font-weight': 'bold', 'font-size': 12 });
   w.close('direction-type');
   w.open('direction-type');
   w.open('metronome', { parentheses: 'yes' });
@@ -894,9 +897,11 @@ function writeNotations(w, it, e, k, nPitches, isDrum, cue) {
     }
     const arts = [];
     if (it.first) {
-      if (e.art.includes('accent')) arts.push('accent');
-      if (e.art.includes('marcato')) arts.push(['strong-accent', { type: 'up' }]);
-      if (e.art.includes('staccato') && it.last) arts.push('staccato');
+      // Akzent + Staccato = Dach-Akzent (^, "kurz & betont") – ruhigeres Notenbild
+      const shortAccent = !isDrum && e.art.includes('accent') && e.art.includes('staccato') && it.last;
+      if (shortAccent || e.art.includes('marcato')) arts.push(['strong-accent', { type: 'up' }]);
+      else if (e.art.includes('accent')) arts.push('accent');
+      if (e.art.includes('staccato') && it.last && !shortAccent) arts.push('staccato');
       if (e.art.includes('tenuto')) arts.push('tenuto');
       if (!isDrum && !cue && e.fx.includes('scoop')) arts.push('scoop');
       if (!isDrum && !cue && e.fx.includes('plop')) arts.push('plop');
@@ -1014,7 +1019,7 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false }) {
       }
       let e = k;
       while (e < printed.length && emptyPrinted[e] && (e === k || !blockStarts.has(printed[e].src))) e++;
-      const startK = k === 0 ? 1 : k;
+      const startK = k === 0 ? Math.min(2, e - k) : k;
       if (e - startK >= 2) multiRest.set(startK, e - startK);
       k = e;
     }
