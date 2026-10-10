@@ -14,7 +14,9 @@ self.onmessage = async (e) => {
     if (useAi) {
       try {
         progress('Lokale KI wird geladen', 0.01);
-        const { runBasicPitch, aiNotes } = await import('../input/ai-pitch.js');
+        const { runBasicPitch, aiNotes, loadAi } = await import('../input/ai-pitch.js');
+        await loadAi();
+        progress('Lokale KI hört die Noten', 0.02);
         const out = await runBasicPitch(mono, (f) => progress('Lokale KI hört die Noten', 0.02 + 0.53 * f));
         ai = aiNotes(out);
       } catch (err) {

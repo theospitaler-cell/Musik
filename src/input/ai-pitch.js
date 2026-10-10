@@ -87,6 +87,13 @@ export function aiNotes(out, { onsetThresh = 0.5, frameThresh = 0.3, minNoteLen 
   return noteFramesToTime(raw).map((n) => ({ start: n.startTimeSeconds, end: n.startTimeSeconds + n.durationSeconds, midi: n.pitchMidi, amp: n.amplitude }));
 }
 
+// KI vorab laden (Modell & Rechen-Backend), damit der erste Analyseschritt sichtbar wird
+export async function loadAi() {
+  const tf = await getTf();
+  await tf.ready();
+  await getModel();
+}
+
 // Ist die KI verfügbar (TensorFlow.js lädt)?
 export async function aiAvailable() {
   try {
