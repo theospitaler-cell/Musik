@@ -3,7 +3,8 @@ import { mod } from '../core/constants.js';
 import { buildChord, transposeChord } from '../theory/chords.js';
 import { transposeKey } from '../theory/keys.js';
 import { semisToLofDelta } from '../theory/pitch.js';
-import { getInstrument, fitOctave } from './instruments.js';
+import { getInstrument, fitOctave, withRange } from './instruments.js';
+import { difficultyRange, levelFor } from './difficulty.js';
 import { getStyle } from './styles.js';
 import {
   songMeasureTicks,
@@ -125,7 +126,8 @@ function soloRoles(sv, insts) {
 // ---- Hauptfunktion -----------------------------------------------------
 export function planArrangement(songIn, opts) {
   const style = getStyle(opts.style);
-  const insts = opts.voices.map(getInstrument);
+  // Schwierigkeit (Lage) zuerst, eigener Tonumfang hat Vorrang
+  const insts = opts.voices.map((id, i) => withRange(difficultyRange(getInstrument(id), levelFor(opts, i)), opts.ranges ? opts.ranges[i] : null));
   const shift = chooseTransposition(songIn, opts.voices, opts);
   const song = transposeSong(songIn, shift);
   const key = song.key;

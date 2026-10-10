@@ -13,6 +13,7 @@ import { genTutti, genHits, genRiff, genFinal } from './gen/tutti.js';
 import { genSolo } from './gen/solo.js';
 import { genDrumsSegment } from './gen/drums.js';
 import { fitOctave } from './instruments.js';
+import { levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
 import {
   enforceRange,
   ensureMovement,
@@ -105,7 +106,8 @@ export function arrange(songIn, options = {}) {
         songMotif,
         prevState,
       });
-      b.preSolo = { v: soloVs[0], line: genSolo(sctx, soloVs[0], { lyrical: style.id === 'ballad' || style.id === 'classical' }) };
+      const lvS = levelFor(opts, soloVs[0]);
+      b.preSolo = { v: soloVs[0], line: genSolo(sctx, soloVs[0], { lyrical: style.id === 'ballad' || style.id === 'classical' || (lvS !== null && lvS <= 2) }) };
     }
     b.segments.forEach((seg, si) => {
       const s0 = seg.startBar * mt;
@@ -293,10 +295,24 @@ export function arrange(songIn, options = {}) {
     keyAt,
     tempo,
   };
+  arr.levels = voices.map((_, i) => levelFor(opts, i));
   for (const v of voices) enforceRange(v.events, v.inst, report);
+  // Schwierigkeit: Rhythmus & Sprünge vereinfachen
+  voices.forEach((v, i) => {
+    const lv = arr.levels[i];
+    if (!lv || lv >= 4) return;
+    v.events = limitLeaps(simplifyRhythm(v.events, lv, mt, beat), lv, v.inst);
+    enforceRange(v.events, v.inst, report);
+  });
+  if (opts.drums) {
+    const dl = levelFor({ difficulty: opts.difficulty, voiceDifficulty: [opts.drumDifficulty ?? null] }, 0);
+    const simple = [...simplifyDrums(drumEvents, dl)];
+    drumEvents.length = 0;
+    drumEvents.push(...simple);
+  }
   ensureMovement(arr, report);
   fixParallels(arr, report);
-  for (const v of voices) insertBreaths(v, v.inst, tempo, report);
+  voices.forEach((v, i) => insertBreaths(v, v.inst, tempo, report, arr.levels[i] && arr.levels[i] <= 2 ? 0.75 : 1));
   decorate(arr, report);
   applyDynamics(arr);
   simplifyForReading(arr, song.meter);
@@ -325,6 +341,21 @@ export function arrange(songIn, options = {}) {
       const d = copyRange(drumEvents, (x) => x.start, (x, t) => (x.start = t), c);
       drumEvents.length = 0;
       drumEvents.push(...d);
+    }
+  }
+  // Atemraum an den Nahtstellen nach eingesetzten Kopien (z. B. Tag -> Schlussakkord)
+  for (const c of copies) {
+    const t = c.dst + c.len;
+    for (const v of voices) {
+      if (!v.inst.breath) continue;
+      const e = v.events.find((x) => x.start < t && x.start + x.dur === t);
+      const next = v.events.find((x) => x.start === t);
+      if (e && next && e.dur >= 18) {
+        const cut = e.dur >= 36 ? 12 : 6;
+        e.dur -= cut;
+        if (e.playDur) e.playDur = Math.min(e.playDur, e.dur);
+        report.breaths++;
+      }
     }
   }
   for (const v of voices) v.dirs.sort((a, b) => a.t - b.t);
@@ -389,6 +420,7 @@ export function arrange(songIn, options = {}) {
     form,
     report,
     options: opts,
+    levels: arr.levels,
     roleNames: ROLE_NAMES,
   };
 }

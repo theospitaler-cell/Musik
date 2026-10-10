@@ -12,6 +12,7 @@ import { chordAt } from '../model/song.js';
 import { keyCenter, lofNear } from '../theory/pitch.js';
 import { chordScale } from '../theory/chords.js';
 import { meterInfo, singleValueDur } from '../output/notation.js';
+import { fxAllowed } from './difficulty.js';
 import { slideGlissPossible, trombonePartialFor, doubleStopPossible, mutes, isWind, hasFx } from './instruments.js';
 import { ev, addArt, addFx, chordToneNear, lofForChordPc, isChordTone, cleanLine } from './context.js';
 
@@ -28,14 +29,21 @@ export function keyAtFactory(blocks, mt) {
 
 // ---------- Tonumfang ----------------------------------------------------------
 export function enforceRange(line, inst, report) {
+  const fit = (m) => {
+    let x = m;
+    while (x < inst.range[0]) x += 12;
+    while (x > inst.range[1]) x -= 12;
+    if (x < inst.range[0]) x = inst.range[0]; // nur bei extrem engem Umfang
+    return x;
+  };
   for (const e of line) {
     e.pitches = e.pitches.map((m) => {
-      let x = m;
-      while (x < inst.range[0]) x += 12;
-      while (x > inst.range[1]) x -= 12;
+      const x = fit(m);
       if (x !== m) report.rangeFixes++;
       return x;
     });
+    e.pitches = [...new Set(e.pitches)];
+    if (e.lofs && e.lofs.length > e.pitches.length) e.lofs = e.lofs.slice(0, e.pitches.length);
     if (e.grace) {
       while (e.grace.midi < inst.range[0]) e.grace.midi += 12;
       while (e.grace.midi > inst.range[1]) e.grace.midi -= 12;
@@ -179,10 +187,10 @@ export function fixParallels(arr, report) {
 }
 
 // ---------- Atmung --------------------------------------------------------
-export function insertBreaths(line, inst, tempo, report) {
+export function insertBreaths(line, inst, tempo, report, factor = 1) {
   if (!isWind(inst)) return;
   const sec = 60 / tempo / 24; // Sekunden pro Tick
-  const maxTicks = inst.breath / sec;
+  const maxTicks = (inst.breath * factor) / sec;
   const minGap = Math.max(6, Math.round(0.22 / sec / 6) * 6);
   const evs = line.events;
   let runStart = evs.length ? evs[0].start : 0;
@@ -243,9 +251,11 @@ export function decorate(arr, report) {
   const { voices, style, rng, mt, blocks } = arr;
   const rate = style.fxRate;
   const jazzy = style.id === 'funk' || style.id === 'secondline' || style.id === 'swing';
-  for (let v = 0; v < 4; v++) {
+  for (let v = 0; v < voices.length; v++) {
     const line = voices[v];
     const inst = line.inst;
+    const lv = arr.levels ? arr.levels[v] : null;
+    const ok = (fx) => fxAllowed(lv, fx);
     const evs = line.events;
     const brassy = inst.family === 'brass' || inst.family === 'sax';
     let lastGliss = -Infinity;
@@ -254,20 +264,20 @@ export function decorate(arr, report) {
       const first = ph[0];
       const last = ph[ph.length - 1];
       const leadish = (e) => LEAD_ROLES.has(e.role) || e.role === 'tutti';
-      if (brassy && jazzy && leadish(last) && last.dur >= arr.beat && !last.fermata && rng.chance(rate * 0.45)) {
+      if (ok('falloff') && brassy && jazzy && leadish(last) && last.dur >= arr.beat && !last.fermata && rng.chance(rate * 0.45)) {
         addFx(last, 'falloff');
         report.fx.falloff++;
-      } else if (brassy && jazzy && leadish(last) && last.dur <= 12 && last.art.includes('accent') && hasFx(inst, 'doit') && rng.chance(rate * 0.2)) {
+      } else if (ok('doit') && brassy && jazzy && leadish(last) && last.dur <= 12 && last.art.includes('accent') && hasFx(inst, 'doit') && rng.chance(rate * 0.2)) {
         addFx(last, 'doit');
         report.fx.doit++;
       }
-      if ((inst.family === 'sax' || inst.id === 'trombone' || (jazzy && brassy)) && leadish(first) && first.dur >= arr.beat && style.id !== 'classical' && style.id !== 'polka' && rng.chance(rate * 0.3)) {
+      if (ok('scoop') && (inst.family === 'sax' || inst.id === 'trombone' || (jazzy && brassy)) && leadish(first) && first.dur >= arr.beat && style.id !== 'classical' && style.id !== 'polka' && rng.chance(rate * 0.3)) {
         addFx(first, 'scoop');
         report.fx.scoop++;
       }
     }
     // Posaunen-Glissando (nur physikalisch mögliche Züge auf demselben Teilton)
-    if (hasFx(inst, 'gliss') && inst.family === 'brass') {
+    if (ok('gliss') && hasFx(inst, 'gliss') && inst.family === 'brass') {
       for (let i = 0; i < evs.length - 1; i++) {
         const a = evs[i];
         const b = evs[i + 1];
@@ -286,11 +296,11 @@ export function decorate(arr, report) {
     }
     for (const e of evs) {
       // Schluss-Hits & Haltetöne
-      if (e.finalHit && brassy && style.id !== 'classical' && style.id !== 'ballad') {
+      if (ok('falloff') && e.finalHit && brassy && style.id !== 'classical' && style.id !== 'ballad') {
         addFx(e, 'falloff');
         report.fx.falloff++;
       }
-      if (e.finalHold || e.soloClimax) {
+      if ((e.finalHold || e.soloClimax) && ok('shake')) {
         if (inst.id === 'trumpet' || inst.id === 'cornet') {
           if (jazzy && e.pitches[0] >= inst.comfort[1] - 6) {
             e.orn = ['shake'];
@@ -315,12 +325,12 @@ export function decorate(arr, report) {
         }
       }
       // Horn: gestopfte Töne bei kurzen Akzenten in Stabs
-      if (inst.id === 'horn' && e.role === 'stabs' && e.art.includes('accent') && rng.chance(0.25)) {
+      if (ok('stopped') && inst.id === 'horn' && e.role === 'stabs' && e.art.includes('accent') && rng.chance(0.25)) {
         addFx(e, 'stopped');
         report.fx.stopped++;
       }
       // Streicher-Doppelgriffe im Tutti
-      if (inst.strings && ['tutti', 'hits', 'final'].includes(e.role) && e.pitches.length === 1 && e.dur >= arr.beat) {
+      if (ok('doubleStops') && inst.strings && ['tutti', 'hits', 'final'].includes(e.role) && e.pitches.length === 1 && e.dur >= arr.beat) {
         const chord = chordAt(arr.chordTrack, e.start);
         const top = e.pitches[0];
         for (let d = 3; d <= 9; d++) {

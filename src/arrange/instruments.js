@@ -262,3 +262,27 @@ export function fitOctave(notes, inst, { allowClimax = false, prefer = 0 } = {})
   }
   return best;
 }
+
+// Eigener Tonumfang (notierte Tonhöhe, wie der Spieler liest) -> Instrument-Kopie.
+// r = {lo, hi} (MIDI, notiert) – null/undefined = automatisch
+export function withRange(inst, r) {
+  if (!r || ((r.lo === null || r.lo === undefined) && (r.hi === null || r.hi === undefined))) return inst;
+  const semis = inst.transpose.semis;
+  let lo = r.lo === null || r.lo === undefined ? inst.range[0] : r.lo - semis;
+  let hi = r.hi === null || r.hi === undefined ? inst.range[1] : r.hi - semis;
+  if (hi < lo) [lo, hi] = [hi, lo];
+  // mindestens eine Oktave, damit Oktavierungen immer passen
+  if (hi - lo < 12) {
+    if (r.hi === null || r.hi === undefined) hi = lo + 12;
+    else lo = hi - 12;
+  }
+  let comfort = [Math.max(inst.comfort[0], lo), Math.min(inst.comfort[1], hi)];
+  if (comfort[1] - comfort[0] < 9) comfort = [lo + Math.min(2, (hi - lo) / 6), hi - Math.min(2, (hi - lo) / 6)].map(Math.round);
+  return { ...inst, range: [lo, hi], comfort, customRange: { lo: r.lo ?? null, hi: r.hi ?? null } };
+}
+
+// Auswahlbereich für die Oberfläche (notiert): etwas über den Standard hinaus
+export function writtenRangeChoices(inst) {
+  const s = inst.transpose.semis;
+  return { min: inst.range[0] + s - 3, max: inst.range[1] + s + 4, defLo: inst.range[0] + s, defHi: inst.range[1] + s };
+}
