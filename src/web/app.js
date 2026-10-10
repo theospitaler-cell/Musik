@@ -502,7 +502,7 @@ function applyOptsToUi(o) {
   difficultyOptions($('#opt-solo-difficulty'), S.opts.difficulty ?? 'auto');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
   $('#opt-drums').checked = !!o.drums;
-  $('#opt-fills').checked = o.drumFills !== false;
+  $('#opt-fills').checked = o.drumFills === true;
   $('#opt-adapt').value = String(o.adapt ?? 1);
   $('#opt-form').value = o.form || 'compact';
   $('#opt-tempo').value = o.tempo || '';
@@ -821,6 +821,8 @@ function setupPlayer() {
     onEnd: () => setPlayIcon(false),
     audioUrl: wantsAudio ? S.audioUrl : null,
   });
+  window.__player = S.player; // für Diagnose/Tests
+  if (wantsAudio && S.audioUrl) S.player.preload();
   if (wantsAudio && !S.audioUrl) toast('Die Original-Aufnahme liegt nur auf dem Gerät, auf dem sie geladen wurde – zum Mitspielen die Datei hier erneut laden.', 'error');
   if (prevMix)
     for (const m of prevMix) {
@@ -1252,7 +1254,7 @@ async function main() {
     ranges: [null, null, null, null],
     playback: false,
     playParts: null,
-    drumFills: true,
+    drumFills: false,
   };
   renderPresets();
   applyOptsToUi(S.opts);

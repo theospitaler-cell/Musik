@@ -188,7 +188,7 @@ export function arrangePlayAlong(song, opts) {
       drumEvents = drumEvents.filter((e) => e.start < lastBar);
       const fin = genDrumsSegment(new BlockCtx({ style, rng: rng.fork('fin'), key, meter: song.meter, measures: 1, chords: [], tempo, inst: [null], block: blocks[0], prevState: [{}] }), { mode: 'final', bars: 1, isBlockStart: false, isBlockEnd: true, hitsLine: [{ start: 0, dur: mt, finalHit: true }], intensity: 1 });
       drumEvents.push(...fin.map((e) => ({ ...e, start: e.start + lastBar })));
-    } else if (opts.drumFills !== false && dLv !== 1) {
+    } else if (opts.drumFills === true && dLv !== 1) {
       // Fills im Groove: am Ende jedes Formteils (2 Schläge) und nach 8-Takt-Phrasen (1 Schlag)
       const fillBars = [];
       sections.forEach((sec, i) => {

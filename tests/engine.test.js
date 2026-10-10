@@ -148,7 +148,7 @@ test('Schlagzeug-Play-along: Drum-Spur 1:1, Fills nur im Groove ergänzt', () =>
   const kit = drumNotes.filter((n) => n.midi !== 60);
   assert.equal(plain.drums.events.length, kit.length, '1:1 übernommen');
   for (const n of kit) assert.ok(plain.drums.events.some((e) => e.start === n.start && e.pitches[0] === n.midi));
-  const filled = arrange(song, { ensemble: 'solo', playback: true, soloInstrument: 'drums' });
+  const filled = arrange(song, { ensemble: 'solo', playback: true, soloInstrument: 'drums', drumFills: true });
   assert.equal(filled.totalBars, song.measureCount);
   const fillBar = 7; // Ende von Teil A
   const toms = filled.drums.events.filter((e) => e.start >= fillBar * mt && e.start < (fillBar + 1) * mt && [48, 45, 41].includes(e.pitches[0]));

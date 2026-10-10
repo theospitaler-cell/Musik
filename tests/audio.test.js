@@ -8,7 +8,7 @@ import { performArrangement } from '../src/output/performance.js';
 const SR = 22050;
 
 // Testaufnahme synthetisieren: Melodie (Obertonklang) + Bass Drum 1/3, Snare 2/4, Hi-Hat Achtel
-function synth(song, { bpm = 100, lead = 0.37, seed = 7 } = {}) {
+function synth(song, { bpm = 100, lead = 0.37, seed = 7, drums = true } = {}) {
   let r = seed;
   const rnd = () => ((r = (r * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
   const spb = 60 / bpm;
@@ -44,7 +44,7 @@ function synth(song, { bpm = 100, lead = 0.37, seed = 7 } = {}) {
     }
   }
   let prev = 0;
-  for (let b = 0; b < bars * 4; b++) {
+  for (let b = 0; b < (drums ? bars * 4 : 0); b++) {
     const tb = lead + b * spb;
     if (b % 2 === 0) add(tb, 0.2, (s) => 0.6 * Math.exp(-s / 0.05) * Math.sin(2 * Math.PI * (50 + 70 * Math.exp(-s / 0.03)) * s));
     else add(tb, 0.15, (s) => Math.exp(-s / 0.04) * (0.35 * rnd() + 0.2 * Math.sin(2 * Math.PI * 200 * s)));
@@ -69,7 +69,7 @@ test('Audio-Import: Tempo, Taktanfang, Melodie & Schlagzeug aus einer Aufnahme',
   const t1 = song.timing.beatSec[song.timing.firstBeat];
   const barSec = 4 * 0.6;
   const off = ((t1 - lead) / barSec) - Math.round((t1 - lead) / barSec);
-  assert.ok(Math.abs(off * barSec) < 0.04, `Taktanfang ${t1.toFixed(3)} s`);
+  assert.ok(Math.abs(off * barSec) < 0.015, `Taktanfang ${t1.toFixed(3)} s`);
   const shiftBars = Math.round((t1 - lead) / barSec);
   // Melodie: Großteil der Töne mit richtiger Tonhöhe an richtiger Stelle
   let hitCount = 0;
@@ -78,6 +78,14 @@ test('Audio-Import: Tempo, Taktanfang, Melodie & Schlagzeug aus einer Aufnahme',
     if (song.melody.some((m) => Math.abs(m.start - tick) <= 6 && m.midi === n.midi)) hitCount++;
   }
   assert.ok(hitCount / src.melody.length > 0.7, `Melodie ${hitCount}/${src.melody.length}`);
+  // rhythmisch exakt: Einsatz genau auf dem richtigen 16tel (für synchrones Playback)
+  let exact = 0;
+  for (const n of src.melody) if (song.melody.some((m) => m.start === n.start - shiftBars * 96 && m.midi === n.midi)) exact++;
+  assert.ok(exact / src.melody.length >= 0.8, `exakte Einsätze ${exact}/${src.melody.length}`);
+  // Beats auf ±15 ms genau
+  const bs = song.timing.beatSec;
+  const errs = bs.slice(2, -2).map((b) => Math.abs(((b - lead) / 0.6 - Math.round((b - lead) / 0.6)) * 0.6));
+  assert.ok(Math.max(...errs) < 0.015, `Beat-Abweichung max ${(Math.max(...errs) * 1000).toFixed(1)} ms`);
   // Schlagzeug: Bass Drum auf 1, Snare auf 2 und 4, Hi-Hat in Achteln
   const bar = 4 * 96;
   const inBar = song.drumNotes.filter((d) => d.start >= bar && d.start < bar + 96).map((d) => `${d.start - bar}:${d.midi}`);
@@ -97,4 +105,73 @@ test('Play-along aus Audio: Noten laufen synchron zur Aufnahme', () => {
   const bar1 = perf.barToSec(a.sourceOffset / a.mt);
   assert.ok(Math.abs(bar1 - perf.audioStart - song.timing.beatSec[song.timing.firstBeat]) < 0.002);
   void resampleMono;
+});
+
+// Schlagzeug mit Variationen: Fills (16tel Snare/Toms) am Ende jeder 4-Takt-Phrase,
+// Crash danach, zusätzliche Bass-Drum auf "3+" in jedem dritten Takt der Phrase
+function synthDrums(bars, { bpm = 100, lead = 0.4, seed = 5 } = {}) {
+  let r = seed;
+  const rnd = () => ((r = (r * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
+  const spb = 60 / bpm;
+  const x = new Float32Array(Math.ceil((lead + (bars * 4 + 2) * spb) * SR));
+  const add = (t0, len, fn) => {
+    const a = Math.floor(t0 * SR);
+    for (let i = 0; i < len * SR && a + i < x.length; i++) if (a + i >= 0) x[a + i] += fn(i / SR);
+  };
+  const kick = (t) => add(t, 0.2, (s) => 0.6 * Math.exp(-s / 0.05) * Math.sin(2 * Math.PI * (50 + 70 * Math.exp(-s / 0.03)) * s));
+  const snare = (t, lvl = 1) => add(t, 0.15, (s) => lvl * Math.exp(-s / 0.04) * (0.35 * rnd() + 0.2 * Math.sin(2 * Math.PI * 200 * s)));
+  let prev = 0;
+  const hat = (t, lvl = 0.12, dec = 0.05) => add(t, dec * 3, (s) => {
+    const n = rnd();
+    const v = n - prev;
+    prev = n;
+    return lvl * v * Math.exp(-s / dec);
+  });
+  for (let b = 0; b < bars; b++) {
+    const t0 = lead + b * 4 * spb;
+    const fill = b % 4 === 3;
+    const crash = b % 4 === 0 && b > 0;
+    for (let q = 0; q < 4; q++) {
+      const tq = t0 + q * spb;
+      if (q === 0 || q === 2) kick(tq);
+      if (q === 1 || (q === 3 && !fill)) snare(tq);
+      if (!(fill && q === 3)) for (const h of [0, 0.5]) if (!(crash && q === 0 && h === 0)) hat(tq + h * spb);
+    }
+    if (crash) hat(t0, 0.35, 0.5);
+    if (b % 4 === 2) kick(t0 + 2.5 * spb);
+    if (fill) for (let k = 0; k < 4; k++) snare(t0 + 3 * spb + (k * spb) / 4, 0.9);
+  }
+  return x;
+}
+
+test('Schlagzeug aus Audio Takt für Takt: Fills, Crash und Variationen wie im Original', () => {
+  const bars = 16;
+  const lead = 0.4;
+  // Band (Melodie, Bass, Akkorde) + Schlagzeug mit Variationen
+  const band = synth(demoSong('ode'), { bpm: 100, lead, drums: false });
+  const drums = synthDrums(bars, { lead });
+  const audio = new Float32Array(Math.max(band.length, drums.length));
+  for (let i = 0; i < audio.length; i++) audio[i] = (band[i] || 0) + (drums[i] || 0);
+  const song = transcribe(audio, { title: 'Drums' });
+  const t1 = song.timing.beatSec[song.timing.firstBeat];
+  const shift = Math.round((t1 - lead) / 2.4);
+  const inBar = (b) => song.drumNotes.filter((d) => d.start >= (b - shift) * 96 && d.start < (b - shift + 1) * 96).map((d) => ({ t: d.start - (b - shift) * 96, m: d.midi }));
+  let fills = 0;
+  let crashes = 0;
+  let extraKick = 0;
+  let falseKick = 0;
+  let checked = 0;
+  for (let b = 1; b < bars - 1; b++) {
+    if (b - shift < 0 || b - shift >= song.measureCount) continue;
+    checked++;
+    const h = inBar(b);
+    if (b % 4 === 3 && h.filter((x) => x.t >= 72 && [38, 48, 45, 41].includes(x.m)).length >= 3) fills++;
+    if (b % 4 === 0 && h.some((x) => x.t === 0 && x.m === 49)) crashes++;
+    if (h.some((x) => x.t === 60 && x.m === 36)) (b % 4 === 2 ? extraKick++ : falseKick++);
+  }
+  assert.ok(checked >= 12);
+  assert.ok(fills >= 2, `Fills erkannt: ${fills}`);
+  assert.ok(crashes >= 2, `Crashes erkannt: ${crashes}`);
+  assert.ok(extraKick >= 2, `Variation (Bass Drum 3+): ${extraKick}`);
+  assert.ok(falseKick <= 1, `falsche Bass Drums: ${falseKick}`);
 });

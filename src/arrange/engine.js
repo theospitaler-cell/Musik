@@ -46,7 +46,7 @@ export const DEFAULT_OPTIONS = {
   soloInstrument: 'trumpet', // bei Solo: Instrument-ID oder 'drums'
   playback: false, // bei Solo: true = Play-along 1:1 wie die Vorlage, false = freies Solo-Arrangement
   playParts: null, // Play-along: [{source: 'melody'|'drums'|Spur-ID, inst: Instrument-ID|'drums'}]
-  drumFills: true, // Play-along: Fills im Groove ergänzen
+  drumFills: false, // Play-along: zusätzliche Fills im Groove (Standard: Original 1:1)
   difficulty: 'auto', // 'auto' | 1..5
   tempo: null,
   transpose: 'auto', // 'auto' | Zahl (Halbtöne)

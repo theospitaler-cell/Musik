@@ -92,6 +92,11 @@ export class Player {
     this.master = 0.9;
   }
 
+  // Aufnahme schon vor dem ersten Start dekodieren (sonst kurz Media-Element)
+  preload() {
+    if (this.audioUrl) this.ensureCtx();
+  }
+
   ensureCtx() {
     if (this.ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -116,9 +121,24 @@ export class Player {
       } else p.gain.connect(this.out);
     }
     this.noise = this.makeNoise();
-    // Aufnahme über ein Media-Element (Tempo-Regler ohne Tonhöhenänderung)
+    // Aufnahme: bei Originaltempo sample-genau als AudioBuffer im selben AudioContext wie die
+    // Noten (exakt synchron); beim Üben mit anderem Tempo über ein Media-Element, das die
+    // Tonhöhe hält (regelmäßig nachsynchronisiert).
     const ap = this.parts.find((p) => p.audio);
     if (ap && this.audioUrl) {
+      this.audioPart = ap;
+      this.bufferReady = fetch(this.audioUrl)
+        .then((r) => r.arrayBuffer())
+        .then((b) => this.ctx.decodeAudioData(b))
+        .then((buf) => {
+          this.audioBuffer = buf;
+          // läuft gerade das Media-Element bei Originaltempo -> auf den Puffer umschalten
+          if (this.playing && this.speed === 1) {
+            this.audioEl?.pause();
+            this.startBuffer();
+          }
+        })
+        .catch(() => (this.audioBuffer = null));
       const el = new Audio();
       el.src = this.audioUrl;
       el.preload = 'auto';
@@ -132,10 +152,47 @@ export class Player {
     this.applyMix();
   }
 
+  // Aufnahme als AudioBuffer: Start exakt auf der Zeitachse der Noten
+  startBuffer() {
+    this.stopBuffer();
+    if (!this.audioBuffer || !this.playing) return;
+    const audioStart = this.perf.audioStart || 0;
+    const pos = this.position();
+    const offsetInFile = pos - audioStart;
+    if (offsetInFile >= this.audioBuffer.duration) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.audioBuffer;
+    src.connect(this.audioPart.gain);
+    // Kontext-Zeit, zu der Partiturzeit "pos" erklingt (gleiche Rechnung wie für die Noten)
+    const scoreToCtx = (t) => this.startedAt + (t - this.offset) / this.speed;
+    if (offsetInFile >= 0) src.start(Math.max(this.ctx.currentTime, scoreToCtx(pos)), offsetInFile);
+    else src.start(scoreToCtx(audioStart), 0);
+    this.bufferSrc = src;
+  }
+  stopBuffer() {
+    if (this.bufferSrc) {
+      try {
+        this.bufferSrc.stop();
+      } catch {
+        /* schon beendet */
+      }
+      this.bufferSrc.disconnect();
+      this.bufferSrc = null;
+    }
+  }
+
   // Aufnahme an die Partiturposition koppeln
   syncAudio(force = false) {
     const el = this.audioEl;
     if (!el) return;
+    if (this.audioBuffer && this.speed === 1) {
+      // Puffer-Wiedergabe ist sample-genau – Media-Element bleibt stumm
+      el.pause();
+      if (!this.playing) this.stopBuffer();
+      else if (force) this.startBuffer();
+      return;
+    }
+    this.stopBuffer();
     const want = this.position() - (this.perf.audioStart || 0);
     clearTimeout(this.audioTimer);
     if (!this.playing) {
@@ -153,7 +210,7 @@ export class Player {
       el.pause();
       return;
     }
-    if (force || el.paused || Math.abs(el.currentTime - want) > 0.08) el.currentTime = want;
+    if (force || el.paused || Math.abs(el.currentTime - want) > 0.04) el.currentTime = want;
     if (el.paused) el.play().catch(() => {});
   }
 
@@ -230,7 +287,7 @@ export class Player {
     this.timer = setInterval(() => this.schedule(), 40);
     this.schedule();
     this.syncAudio(true);
-    this.audioCheck = setInterval(() => this.syncAudio(), 1000);
+    this.audioCheck = setInterval(() => this.syncAudio(), 500);
     const tick = () => {
       if (!this.playing) return;
       const pos = this.position();
@@ -452,6 +509,7 @@ export class Player {
 
   dispose() {
     this.stop();
+    this.stopBuffer();
     if (this.audioEl) {
       this.audioEl.pause();
       this.audioEl.removeAttribute('src');

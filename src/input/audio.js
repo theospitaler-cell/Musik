@@ -349,13 +349,15 @@ export function findMeter(bc, cues = {}) {
   const low = cues.low || new Array(n).fill(0);
   const mid = cues.mid || new Array(n).fill(0);
   const onset = cues.onset || new Array(n).fill(0);
+  const crash = cues.crash || new Array(n).fill(0); // Becken-Akzent auf dem Schlag
+  const fillPre = cues.fillPre || new Array(n).fill(0); // dichte Schläge im Schlag davor (Fill)
   const bassChange = bc.map((x, i) => (i ? 1 - cosine(x.b, bc[i - 1].b) : 0));
   const z = (arr) => {
     const m = mean(arr);
     const sd = Math.sqrt(mean(arr.map((v) => (v - m) ** 2))) || 1;
     return arr.map((v) => (v - m) / sd);
   };
-  const evalMeter = (m) => {
+  const evalMeter = (m, keys) => {
     const res = [];
     for (let ph = 0; ph < m; ph++) {
       const on = (i) => (((i - ph) % m) + m) % m === 0;
@@ -378,11 +380,12 @@ export function findMeter(bc, cues = {}) {
         snare: m === 4 ? mean(mid.filter((_, i) => back(i))) - mean(mid.filter((_, i) => !back(i))) : 0,
         bass: avgOn(bassChange),
         onset: avgOn(onset),
+        crash: avgOn(crash),
+        fill: avgOn(fillPre),
         nov,
       });
     }
     // je Merkmal über die Phasen normieren und gewichten
-    const keys = { kick: 1.2, snare: 0.8, bass: 1, onset: 0.3, nov: 1.2 };
     const tot = new Array(m).fill(0);
     for (const [k, w] of Object.entries(keys)) {
       const vals = res.map((r) => r[k]);
@@ -396,10 +399,15 @@ export function findMeter(bc, cues = {}) {
     const raw = res[best];
     return { phase: best, score: raw.kick + raw.bass + raw.nov * 2 + raw.onset * 0.1 };
   };
-  const m4 = evalMeter(4);
-  const m3 = evalMeter(3);
-  if (m3.score > m4.score * 1.35 && m3.score > 0.05) return { beats: 3, phase: m3.phase };
-  return { beats: 4, phase: m4.phase };
+  const base = { kick: 1.2, snare: 0.8, bass: 1, onset: 0.3, nov: 1.2 };
+  // Taktart aus den Grundmerkmalen; die Lage der "1" zusätzlich mit Crash & Fills
+  // (nur wenn diese deutlich und mehrfach vorkommen – sonst sind sie Rauschen)
+  // Crash & Fill nur als schwacher Zusatz-Hinweis (in dichten Mixen sind sie unzuverlässig)
+  const withAcc = { ...base, crash: 0.4, fill: 0.3 };
+  const m4 = evalMeter(4, base);
+  const m3 = evalMeter(3, base);
+  const beatsPer = m3.score > m4.score * 1.35 && m3.score > 0.05 ? 3 : 4;
+  return { beats: beatsPer, phase: evalMeter(beatsPer, withAcc).phase };
 }
 
 // ---------- Melodie ----------
@@ -459,21 +467,33 @@ export function trackMelody(feat, onProgress) {
       k = j;
     }
   const path = new Float32Array(nFrames);
+  const sal = new Float32Array(nFrames); // Salienz des gewählten Tons (für Neuanschläge)
   for (let t = nFrames - 1; t >= 0; t--) {
     path[t] = pitchOf(t, k);
+    sal[t] = k < 4 ? topS[t * 4 + k] : 0;
     k = back[t * K + k];
   }
+  path.sal = sal;
   return path; // MIDI (Bruchteile) oder -1
 }
 
-export function segmentNotes(path) {
+export function segmentNotes(path, sal = path.sal) {
   const notes = [];
   let cur = null;
+  // Neuanschlag desselben Tons: Salienz bricht kurz ein und steigt wieder
+  const reattack = (t) => {
+    if (!sal || t < 3 || t + 2 >= sal.length) return false;
+    let mx = 0;
+    for (let k = t - 6; k < t; k++) if (k >= 0) mx = Math.max(mx, sal[k]);
+    return sal[t] < 0.6 * mx && sal[t + 2] > sal[t] * 1.3 && sal[t] <= sal[t - 1] && sal[t] <= sal[t + 1];
+  };
   const flush = () => {
     if (!cur) return;
     const vals = cur.vals.slice().sort((a, b) => a - b);
     const med = vals[Math.floor(vals.length / 2)];
-    if (cur.end - cur.start >= 4) notes.push({ start: cur.start, end: cur.end, midi: Math.round(med) });
+    let sm = 0;
+    if (sal) for (let k = cur.start; k < cur.end; k++) sm += sal[k];
+    if (cur.end - cur.start >= 3) notes.push({ start: cur.start, end: cur.end, midi: Math.round(med), sal: sal ? sm / (cur.end - cur.start) : 1 });
     cur = null;
   };
   for (let t = 0; t < path.length; t++) {
@@ -484,7 +504,7 @@ export function segmentNotes(path) {
     }
     if (cur) {
       const ref = cur.vals.slice(-6).reduce((s, x) => s + x, 0) / Math.min(6, cur.vals.length);
-      if (Math.abs(p - ref) > 0.7) {
+      if (Math.abs(p - ref) > 0.7 || (t - cur.start >= 4 && reattack(t))) {
         flush();
         cur = { start: t, end: t + 1, vals: [p] };
       } else {
@@ -498,7 +518,47 @@ export function segmentNotes(path) {
   const merged = [];
   for (const n of notes) {
     const p = merged[merged.length - 1];
-    if (p && p.midi === n.midi && n.start - p.end <= 3) p.end = n.end;
+    if (p && p.midi === n.midi && n.start - p.end <= 1) p.end = n.end;
+    else merged.push({ ...n });
+  }
+  return merged;
+}
+
+// Übergangs-Schnipsel und Fremdtöne entfernen: zu kurze Töne (weicher Einsatz, Vibrato,
+// Gleiten zwischen zwei Tönen), unsichere kurze Töne, Bass-/Begleittöne weit unter der
+// Melodielage; Oktavfehler zur Melodielage hin korrigieren.
+export function cleanMelodyNotes(notes) {
+  if (!notes.length) return notes;
+  const len = (n) => n.end - n.start;
+  const sals = notes.map((n) => n.sal).sort((a, b) => a - b);
+  const medSal = sals[Math.floor(sals.length / 2)] || 1;
+  // Melodielage: längengewichteter Median
+  const weighted = [];
+  for (const n of notes) for (let k = 0; k < Math.min(50, len(n)); k++) weighted.push(n.midi);
+  weighted.sort((a, b) => a - b);
+  const medP = weighted[Math.floor(weighted.length / 2)];
+  const out = [];
+  notes.forEach((n, i) => {
+    const prev = notes[i - 1];
+    const next = notes[i + 1];
+    const L = len(n);
+    // schnelle Läufe (mehrere kurze, eng aufeinanderfolgende Töne in Stufen) bleiben
+    const inRun = prev && next && n.start - prev.end <= 2 && next.start - n.end <= 2 && len(prev) < 10 && len(next) < 10 && Math.abs(n.midi - prev.midi) <= 2 && Math.abs(next.midi - n.midi) <= 2;
+    if (L < 5 && !inRun) return;
+    if (L < 9 && n.sal < 0.8 * medSal && !inRun) return;
+    // kurzer Ton direkt vor einem längeren, nur Übergang dorthin
+    if (L < 7 && next && next.start - n.end <= 1 && len(next) >= 2 * L && Math.abs(next.midi - n.midi) <= 7 && !inRun) return;
+    let m = n.midi;
+    if (m < medP - 14 && L < 15) return; // Bass/Begleitung
+    while (m > medP + 14) m -= 12;
+    while (m < medP - 14) m += 12;
+    out.push({ ...n, midi: m });
+  });
+  // gleiche Tonhöhe mit Mini-Lücke (nach dem Entfernen) zusammenführen
+  const merged = [];
+  for (const n of out) {
+    const p = merged[merged.length - 1];
+    if (p && p.midi === n.midi && n.start - p.end <= 1) p.end = n.end;
     else merged.push({ ...n });
   }
   return merged;
@@ -579,12 +639,31 @@ function groovePattern(avg, meterBeats) {
     const r = s % SUB;
     return b * DIV + (swing && r === 8 ? DIV / 2 : Math.round((r * DIV) / SUB));
   };
-  return { hits: hits.map((h) => ({ pos: toTick(h.s), midi: h.midi, vel: h.vel })), swing };
+  return { hits: hits.map((h) => ({ pos: toTick(h.s), s: h.s, midi: h.midi, vel: h.vel })), swing, toTick };
 }
 
 // Schlagzeug je Formteil: Groove aus der Aufnahme, Takte ohne Schlagzeug bleiben leer
+// Schlagzeug Takt für Takt wie in der Aufnahme: Grundgroove je Formteil als Referenz,
+// dann je Takt nur die Schläge, die dort wirklich zu hören sind – plus Variationen
+// (zusätzliche Bass-Drum/Snare), Fills (dichte Schläge am Taktende -> Snare/Toms),
+// Crash nach Fills bzw. am Formteil-Anfang, Takte ohne Hi-Hat bzw. ganz ohne Schlagzeug.
+// Wie bandNorm, aber mit kurzem Fenster: schnelle Folgen (Fills, Doppelschläge) bleiben sichtbar
+function bandNormFast(arr) {
+  const n = arr.length;
+  const o = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let base = Infinity;
+    for (let k = Math.max(0, i - 4); k < i; k++) base = Math.min(base, arr[k]);
+    o[i] = Math.max(0, arr[i] - (base === Infinity ? 0 : base));
+  }
+  const sorted = Array.from(o).sort((a, b) => a - b);
+  const p = sorted[Math.floor(0.97 * (n - 1))] || 1;
+  for (let i = 0; i < n; i++) o[i] = Math.min(3, o[i] / p);
+  return o;
+}
+
 export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, sections) {
-  const bands = [bandNorm(feat.lowF), bandNorm(feat.midF), bandNorm(feat.highF)];
+  const bands = [bandNormFast(feat.lowF), bandNormFast(feat.midF), bandNormFast(feat.highF)];
   const valAt = (band, f) => {
     const i = Math.round(f);
     let m = 0;
@@ -606,9 +685,14 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
   const acts = bars.map((b) => b.act).sort((a, b) => a - b);
   const medAct = acts[Math.floor(acts.length / 2)] || 0;
   for (const b of bars) b.on = medAct > 0 && b.act > 0.35 * medAct;
+  const kickV = (P, s) => P[0][s] - 0.5 * P[1][s];
+  const snareV = (P, s) => P[1][s] - 0.7 * P[2][s];
+  const hatV = (P, s) => P[2][s];
+  const valFor = (midi, P, s) => (midi === 36 ? kickV(P, s) : midi === 38 ? snareV(P, s) : hatV(P, s));
   const notes = [];
   let swingVotes = 0;
   let votes = 0;
+  let prevFill = false;
   for (const sec of sections) {
     const idx = [];
     for (let m = sec.start; m < sec.start + sec.length; m++) if (bars[m] && bars[m].on) idx.push(m);
@@ -619,11 +703,130 @@ export function estimateDrums(feat, beats, firstDown, meterBeats, measureCount, 
       return a;
     });
     const g = groovePattern(avg, meterBeats);
+    if (!g.hits.length) continue;
     votes += idx.length;
     if (g.swing) swingVotes += idx.length;
-    for (const m of idx) for (const h of g.hits) notes.push({ start: m * meterBeats * DIV + h.pos, dur: 6, midi: h.midi, vel: h.vel });
+    // typische Stärke der Groove-Schläge in diesem Formteil
+    const typ = {};
+    for (const midi of [36, 38, 42]) {
+      const hs = g.hits.filter((h) => h.midi === midi);
+      let sum = 0;
+      let c = 0;
+      for (const m of idx) for (const h of hs) {
+        sum += valFor(midi, bars[m].prof, h.s);
+        c++;
+      }
+      typ[midi] = c ? sum / c : 0;
+    }
+    const has = (midi, s) => g.hits.some((h) => h.midi === midi && h.s === s);
+    // Übersprechen der Hi-Hat in die Mitten (Snare-Band) an reinen Hi-Hat-Positionen
+    const hatOnly = g.hits.filter((h) => h.midi === 42 && !has(38, h.s) && !has(36, h.s)).map((h) => h.s);
+    let leak = 0;
+    let midTyp = 0;
+    for (const m of idx) for (const st of hatOnly) leak += snareV(bars[m].prof, st) / (idx.length * Math.max(1, hatOnly.length));
+    for (const m of idx) for (const h of g.hits.filter((x) => x.midi === 38)) midTyp += bars[m].prof[1][h.s] / (idx.length * Math.max(1, g.hits.filter((x) => x.midi === 38).length));
+    // Aktivität (Mitten + Höhen) an Hi-Hat-Positionen als Maß für "normale" Dichte
+    let actHat = 0;
+    for (const m of idx) for (const st of hatOnly) actHat += (bars[m].prof[1][st] + bars[m].prof[2][st]) / (idx.length * Math.max(1, hatOnly.length));
+    const grid = [];
+    for (let st = 0; st < steps; st += 3) grid.push(st);
+    for (const m of idx) {
+      const P = bars[m].prof;
+      const hits = [];
+      // Hi-Hat nur, wenn in diesem Takt überhaupt Becken zu hören sind
+      const hatSteps = g.hits.filter((h) => h.midi === 42);
+      const hatLevel = hatSteps.length ? hatSteps.reduce((a, h) => a + hatV(P, h.s), 0) / hatSteps.length : 0;
+      for (const h of g.hits) {
+        if (h.midi === 42 && (hatLevel < 0.3 * typ[42] || hatV(P, h.s) < 0.3 * typ[42])) continue;
+        if (h.midi !== 42 && typ[h.midi] > 0.05 && valFor(h.midi, P, h.s) < 0.3 * typ[h.midi]) continue; // im Takt nicht gespielt
+        hits.push({ s: h.s, midi: h.midi, vel: h.vel });
+      }
+      // Variationen: zusätzliche Schläge, die deutlich zu hören sind
+      const extraSn = [];
+      const peakAt = (fn, st) => fn(P, st) >= (st >= 3 ? fn(P, st - 3) : 0) && fn(P, st) >= (st + 3 < steps ? fn(P, st + 3) : 0);
+      const midPeak = (st) => P[1][st] >= (st >= 3 ? P[1][st - 3] : 0) && P[1][st] >= (st + 3 < steps ? P[1][st + 3] : 0);
+      for (const st of grid) {
+        if (!has(36, st) && typ[36] > 0.05 && kickV(P, st) >= Math.max(0.12 * typ[36], 0.2) && P[0][st] >= 0.25 && peakAt(kickV, st)) hits.push({ s: st, midi: 36, vel: 95 });
+        if (has(38, st) || typ[38] <= 0.05) continue;
+        // an Hi-Hat-Positionen nur, was deutlich über dem Übersprechen liegt; sonst jeder klare Mitten-Anschlag
+        const onHat = has(42, st);
+        if (onHat ? snareV(P, st) >= leak + 0.6 * Math.max(0.1, typ[38] - leak) : P[1][st] >= Math.max(0.35 * midTyp, 0.2) && midPeak(st)) extraSn.push(st);
+      }
+      // Fill: dichte Anschläge (Mitten + Höhen) im letzten Schlag, wo der Groove keine hat
+      const dense = (from) => {
+        let c = 0;
+        for (let st = from; st < steps; st += 3) {
+          const a = P[1][st] + P[2][st];
+          const groovePos = g.hits.some((h) => h.s === st);
+          if (groovePos ? a >= 1.3 * actHat && P[1][st] >= 0.5 * midTyp : a >= Math.max(0.35 * actHat, 0.3)) c++;
+        }
+        return c;
+      };
+      const fillFrom = dense(steps - SUB) >= 3 ? steps - SUB : null;
+      if (fillFrom !== null) for (let st = fillFrom; st < steps; st += 3) if (!extraSn.includes(st) && P[1][st] + P[2][st] >= Math.max(0.35 * actHat, 0.3)) extraSn.push(st);
+      if (fillFrom !== null) {
+        const fillSteps = [...new Set([...extraSn.filter((st) => st >= fillFrom), ...hits.filter((h) => h.midi === 38 && h.s >= fillFrom).map((h) => h.s)])].sort((a, b) => a - b);
+        for (let k = hits.length - 1; k >= 0; k--) if (hits[k].s >= fillFrom && (hits[k].midi === 38 || hits[k].midi === 42)) hits.splice(k, 1);
+        const seq = [38, 38, 48, 48, 45, 45, 41, 41];
+        fillSteps.forEach((st, k) => hits.push({ s: st, midi: seq[Math.min(seq.length - 1, Math.floor((k * seq.length) / fillSteps.length))], vel: 100 }));
+        for (const st of extraSn.filter((x) => x < fillFrom)) hits.push({ s: st, midi: 38, vel: 85 });
+      } else for (const st of extraSn) hits.push({ s: st, midi: 38, vel: 85 });
+      // Crash: nach einem Fill bzw. am Formteil-Anfang – starkes Becken auf der "1" oder ein
+      // nachklingendes Becken, das die folgenden Hi-Hat-Schläge überdeckt
+      const firstHalfHats = hatOnly.filter((st) => st > 0 && st < steps / 2);
+      const masked = firstHalfHats.length && firstHalfHats.reduce((a, st) => a + hatV(P, st), 0) / firstHalfHats.length < 0.5 * typ[42];
+      if ((prevFill || (m === sec.start && m > 0)) && (hatV(P, 0) >= 1.2 * Math.max(0.2, typ[42]) || masked)) {
+        for (let k = hits.length - 1; k >= 0; k--) if (hits[k].s === 0 && hits[k].midi === 42) hits.splice(k, 1);
+        hits.push({ s: 0, midi: 49, vel: 105 });
+        // unter dem Becken spielt der Groove weiter (Hi-Hat wird nur überdeckt)
+        for (const h of g.hits) if (h.midi === 42 && h.s > 0 && !hits.some((x) => x.s === h.s && x.midi === 42)) hits.push({ s: h.s, midi: 42, vel: h.vel });
+      }
+      prevFill = fillFrom !== null;
+      for (const h of hits) notes.push({ start: m * meterBeats * DIV + g.toTick(h.s), dur: 6, midi: h.midi, vel: h.vel });
+    }
   }
   return { notes: notes.sort((a, b) => a.start - b.start), swing: votes > 0 && swingVotes > votes / 2, activeBars: bars.map((b) => b.on) };
+}
+
+// ---------- Feine Beat-Lage ----------
+// Jeder Beat wird auf die nächste Onset-Spitze (±2 Frames, mit Parabel-Interpolation auf
+// Bruchteile eines Frames) gezogen; danach werden die Abstände geglättet, damit die Noten
+// gleichmäßig auf dem Raster liegen und nicht mit einzelnen Ausreißern "wackeln".
+export function refineBeats(beats, env) {
+  const n = beats.length;
+  if (n < 4) return beats.slice();
+  const peak = beats.map((b) => {
+    let best = b;
+    for (let k = b - 2; k <= b + 2; k++) if (k > 0 && k < env.length - 1 && env[k] > env[best]) best = k;
+    const y0 = env[best - 1] || 0;
+    const y1 = env[best] || 0;
+    const y2 = env[best + 1] || 0;
+    const den = y0 - 2 * y1 + y2;
+    const frac = den < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (y0 - y2)) / den)) : 0;
+    // nur wenn dort wirklich ein Anschlag ist, sonst ursprüngliche Lage
+    return y1 > 0.4 ? best + frac : b;
+  });
+  // lokale Ausgleichsgerade über ±3 Beats (robust gegen einzelne Ausreißer)
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = Math.max(0, i - 3);
+    const z = Math.min(n - 1, i + 3);
+    let sx = 0, sy = 0, sxx = 0, sxy = 0, c = 0;
+    for (let k = a; k <= z; k++) {
+      sx += k;
+      sy += peak[k];
+      sxx += k * k;
+      sxy += k * peak[k];
+      c++;
+    }
+    const slope = (c * sxy - sx * sy) / (c * sxx - sx * sx || 1);
+    const icpt = (sy - slope * sx) / c;
+    const fit = icpt + slope * i;
+    // Mischung: Anschlag selbst (Feeling) und Ausgleich (Stabilität)
+    out[i] = Math.abs(peak[i] - fit) > 2 ? fit : 0.5 * peak[i] + 0.5 * fit;
+  }
+  for (let i = 1; i < n; i++) if (out[i] <= out[i - 1]) out[i] = out[i - 1] + 0.5;
+  return out;
 }
 
 // ---------- Gesamtablauf ----------
@@ -672,17 +875,30 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   const lowN = bandNorm(feat.lowF);
   const midN = bandNorm(feat.midF);
   const peak = (arr, f) => Math.max(arr[f - 1] || 0, arr[f] || 0, arr[f + 1] || 0);
+  const highN = bandNorm(feat.highF);
+  // Becken-Akzent: hohes Band deutlich stärker als sonst (Crash), Fill: viele Snare-Anschläge
+  // zwischen dem vorigen und diesem Schlag
+  const hiAt = beats.map((b) => peak(highN, b));
+  const hiMed = [...hiAt].sort((a, b) => a - b)[Math.floor(hiAt.length / 2)] || 0;
   const meterInfo = findMeter(bc, {
     low: beats.map((b) => peak(lowN, b)),
     mid: beats.map((b) => peak(midN, b)),
     onset: beats.map((b) => onset[b] || 0),
+    crash: hiAt.map((v) => Math.max(0, v - 1.4 * hiMed)),
+    fillPre: beats.map((b, i) => {
+      if (!i) return 0;
+      const a = beats[i - 1];
+      let c = 0;
+      for (let f = a + 2; f < b - 1; f++) if (midN[f] > 0.6 && midN[f] >= midN[f - 1] && midN[f] >= midN[f + 1]) c++;
+      return c >= 2 ? c : 0;
+    }),
   });
   const m = meterInfo.beats;
   const firstDown = meterInfo.phase;
   const mt = m * DIV;
   const measureCount = Math.max(1, Math.floor((beats.length - firstDown) / m));
   // Sekunde -> Schlagposition (lineare Interpolation zwischen den Beats)
-  const beatSec = beats.map(frameToSec);
+  const beatSec = refineBeats(beats, comb).map(frameToSec);
   const beatPos = (sec) => {
     const b = beatSec;
     if (sec <= b[0]) return (sec - b[0]) / (b[1] - b[0]);
@@ -691,8 +907,8 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     return last + (sec - b[last]) / (b[last] - b[last - 1]);
   };
   // Tonhöhen-Frames: Salienz setzt erst ein, wenn der Ton das Fenster füllt
-  const melStartSec = (f) => (f * HOP) / SR - 0.015;
-  const melEndSec = (f) => (f * HOP) / SR + 0.06;
+  const melStartSec = (f) => (f * HOP) / SR + 0.034;
+  const melEndSec = (f) => (f * HOP) / SR - 0.1;
 
   // Akkorde: Chroma pro Schlag als gewichtete "Noten" an den Harmonisierer
   onProgress('Akkorde & Tonart werden erkannt', 0.5);
@@ -708,7 +924,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
 
   onProgress('Melodie wird erkannt', 0.55);
   const path = trackMelody(feat, onProgress);
-  const notesF = segmentNotes(path);
+  const notesF = cleanMelodyNotes(segmentNotes(path));
 
   // Schlagzeug (vorläufige Formteile = 8-Takt-Gruppen, danach mit der echten Form)
   onProgress('Schlagzeug wird erkannt', 0.78);
