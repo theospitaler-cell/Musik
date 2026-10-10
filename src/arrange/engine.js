@@ -16,6 +16,7 @@ import { fitOctave } from './instruments.js';
 import { levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
 import { arrangeSoloFree } from './solo-free.js';
 import { enforceContraryMotion, motionStats } from './voicing.js';
+import { embellishLine } from './embellish.js';
 import { arrangePlayAlong } from './playalong.js';
 import {
   enforceRange,
@@ -311,7 +312,13 @@ export function arrange(songIn, options = {}) {
   // Schwierigkeit: Rhythmus & Sprünge vereinfachen
   voices.forEach((v, i) => {
     const lv = arr.levels[i];
-    if (!lv || lv >= 4) return;
+    if (lv && lv >= 4) {
+      // Fortgeschritten/Profi: Läufe, Sprünge, Verzierungen in Melodie & Gegenstimmen
+      v.events = embellishLine(v.events, lv, { chordTrack: arr.chordTrack, keyAt, inst: v.inst, style, mt, beat, rng: rng.fork(`emb${i}`) });
+      enforceRange(v.events, v.inst, report);
+      return;
+    }
+    if (!lv) return;
     v.events = limitLeaps(simplifyRhythm(v.events, lv, mt, beat), lv, v.inst);
     enforceRange(v.events, v.inst, report);
   });

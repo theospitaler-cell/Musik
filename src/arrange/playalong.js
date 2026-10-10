@@ -14,6 +14,7 @@ import { ROLE_NAMES } from './planner.js';
 import { difficultyRange, levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
 import { BlockCtx, cleanLine, ev } from './context.js';
 import { articulate } from './gen/melody.js';
+import { embellishLine } from './embellish.js';
 import { genDrumsSegment, drumsFromNotes, addGrooveFills } from './gen/drums.js';
 import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, newReport, keyAtFactory } from './post.js';
 
@@ -204,6 +205,7 @@ export function arrangePlayAlong(song, opts) {
   const arr = { voices, blocks, mt, beat, style, rng: rng.fork('post'), chordTrack, keyAt: keyAtFactory(blocks, mt), tempo, levels };
   voices.forEach((v, i) => {
     const lv = levels[i];
+    v.events = embellishLine(v.events, lv, { chordTrack, keyAt: arr.keyAt, inst: v.inst, style, mt, beat, rng: rng.fork(`emb${i}`) });
     enforceRange(v.events, v.inst, report);
     if (lv && lv < 4) {
       v.events = limitLeaps(simplifyRhythm(v.events, lv, mt, beat), lv, v.inst);

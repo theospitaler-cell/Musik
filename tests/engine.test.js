@@ -274,3 +274,23 @@ test('Quartett: Wiedererkennung – Solo beginnt mit der Melodie, Backgrounds zi
   assert.ok(riffs.length > 0, 'Hook-Riffs vorhanden');
   assert.ok(riffs.every((e) => motif.includes(e.start % a.mt)), 'Riff-Rhythmus = Hook-Rhythmus');
 });
+
+test('Schwierigkeit verändert die Noten: Profi mit Läufen & Verzierungen, Originaltöne bleiben (auch Playback)', () => {
+  const s = demoSong('saints');
+  for (const playback of [false, true]) {
+    const mk = (difficulty) => arrange(s, { ensemble: 'solo', soloInstrument: 'trumpet', style: 'funk', difficulty, playback, seed: 1 });
+    const mid = mk(3);
+    const adv = mk(4);
+    const pro = mk(5);
+    const n = (a) => a.voices[0].events.length;
+    assert.ok(n(adv) > n(mid) || n(adv) > mk('auto').voices[0].events.length, 'Fortgeschritten hat mehr Töne');
+    assert.ok(n(pro) >= n(mid) * 1.4, `Profi deutlich mehr Töne (${n(pro)} vs ${n(mid)})`);
+    assert.ok(pro.voices[0].events.some((e) => e.embellish && e.dur === 6), 'Profi: 16tel-Läufe');
+    assert.equal(pro.totalBars, mid.totalBars, 'Länge bleibt gleich');
+    // jeder Melodieton steht weiterhin an seinem Platz
+    const off = playback ? pro.sourceOffset : null;
+    if (playback) for (const m of s.melody) assert.ok(pro.voices[0].events.some((e) => e.start === m.start + off && (((e.pitches[0] - m.midi) % 12) + 12) % 12 === 0));
+    const inst = pro.voices[0].inst;
+    assert.ok(pro.voices[0].events.every((e) => e.pitches[0] >= inst.range[0] && e.pitches[0] <= inst.range[1]));
+  }
+});

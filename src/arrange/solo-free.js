@@ -18,6 +18,7 @@ import { chooseTransposition, ROLE_NAMES } from './planner.js';
 import { difficultyRange, levelFor, simplifyRhythm, limitLeaps, simplifyDrums, fxAllowed } from './difficulty.js';
 import { BlockCtx, cleanLine, ev, addArt, addFx } from './context.js';
 import { articulate } from './gen/melody.js';
+import { embellishLine } from './embellish.js';
 import { genDrumsSegment, genDrumHits } from './gen/drums.js';
 import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, newReport, keyAtFactory } from './post.js';
 
@@ -175,6 +176,8 @@ export function arrangeSoloFree(songIn, opts) {
   const report = newReport();
   const arr = { voices, blocks, mt, beat, style, rng: rng.fork('post'), chordTrack: normalizeChords(chordTrack, totalBars * mt), keyAt: keyAtFactory(blocks, mt), tempo, levels: [lv] };
   for (const v of voices) {
+    // Schwierigkeit nach oben: Läufe, Sprünge, Verzierungen (Originaltöne bleiben an ihrem Platz)
+    v.events = embellishLine(v.events, lv, { chordTrack: arr.chordTrack, keyAt: arr.keyAt, inst: v.inst, style, mt, beat, rng: rng.fork('emb') });
     enforceRange(v.events, v.inst, report);
     if (lv && lv < 4) {
       v.events = limitLeaps(simplifyRhythm(v.events, lv, mt, beat), lv, v.inst);
