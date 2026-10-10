@@ -1,6 +1,6 @@
 // NoteCode – Einstellungen (lokal gespeichert, bei Anmeldung mit der Cloud synchronisiert).
 export const DEFAULT_SETTINGS = {
-  defaultVoices: ['trumpet', 'trumpet', 'trombone', 'sousaphone'],
+  defaultVoices: ['trumpet', 'trumpet', 'trombone', 'sousaphone'], // 2–8 Stimmen
   defaultStyle: 'funk',
   defaultDrums: false,
   defaultSolo: 0,
@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS = {
   transposeAuto: true,
   theme: 'light', // light | auto
   autoSave: true,
+  folders: [], // eigene Ordner der Bibliothek: { id, name, createdAt, updatedAt, deleted? }
   supabaseUrl: '',
   supabaseKey: '',
 };
