@@ -236,6 +236,10 @@ function writeDefaults(w, L) {
 }
 
 function writeCredits(w, arr, L, partName, drumLegend = false) {
+  void drumLegend;
+  // Kopf in Zeilen, damit nichts überlappt (auch bei langen Titeln):
+  //   Zeile 1: Titel (mittig)            Zeile 2: Untertitel (mittig)
+  //   Zeile 3: Stimme (links) · Komponist (rechts)   Zeile 4: Arrangeur (rechts)
   const cx = L.width / 2;
   const top = L.height - L.top * 0.45;
   const credit = (text, x, y, size, justify, type, weight) => {
@@ -244,12 +248,19 @@ function writeCredits(w, arr, L, partName, drumLegend = false) {
     w.el('credit-words', text, { 'default-x': Math.round(x), 'default-y': Math.round(y), justify, valign: 'top', 'font-size': size, 'font-weight': weight });
     w.close('credit');
   };
-  credit(arr.meta.title, cx, top, 22, 'center', 'title', 'bold');
+  const title = arr.meta.title || '';
+  credit(title, cx, top, title.length > 40 ? 17 : 22, 'center', 'title', 'bold');
   credit(arr.meta.subtitle, cx, top - 45, 12, 'center', 'subtitle');
+  // Leerzeilen schieben linke/rechte Spalte unter Titel & Untertitel
+  const spacer = (x, justify) => {
+    credit('\u00a0', x, top - 1, 12, justify);
+    credit('\u00a0', x, top - 2, 12, justify);
+  };
+  spacer(L.left, 'left');
+  spacer(L.width - L.right, 'right');
+  if (partName) credit(partName, L.left, top - 70, 13, 'left', 'part name', 'bold');
   if (arr.meta.composer) credit(arr.meta.composer, L.width - L.right, top - 70, 10, 'right', 'composer');
   credit(arr.meta.arranger, L.width - L.right, top - 88, 10, 'right', 'arranger');
-  if (partName) credit(partName, L.left, top - 70, 13, 'left', 'part name', 'bold');
-  void drumLegend;
 }
 
 function chordForPart(chord, tr, enh) {
