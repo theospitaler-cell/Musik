@@ -1,0 +1,163 @@
+// Standard-MIDI-Datei (Typ 0/1) -> Song. Quantisiert auf 16tel bzw. Triolen.
+import { DIV } from '../core/constants.js';
+import { makeKey } from '../theory/keys.js';
+import { finalizeSong } from '../theory/analysis.js';
+
+function readVarLen(d, p) {
+  let v = 0;
+  let b;
+  do {
+    b = d[p.i++];
+    v = (v << 7) | (b & 0x7f);
+  } while (b & 0x80 && p.i < d.length);
+  return v;
+}
+
+export function parseMidi(buffer) {
+  const d = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const str = (i, n) => String.fromCharCode(...d.subarray(i, i + n));
+  if (str(0, 4) !== 'MThd') throw new Error('Keine MIDI-Datei');
+  const u16 = (i) => (d[i] << 8) | d[i + 1];
+  const u32 = (i) => ((d[i] << 24) >>> 0) + (d[i + 1] << 16) + (d[i + 2] << 8) + d[i + 3];
+  const hlen = u32(4);
+  const ntrks = u16(10);
+  const division = u16(12);
+  if (division & 0x8000) throw new Error('SMPTE-Zeitbasis wird nicht unterstützt');
+  let p = 8 + hlen;
+  const tracks = [];
+  const meta = { tempo: null, timeSig: null, keySig: null };
+  for (let t = 0; t < ntrks && p < d.length; t++) {
+    if (str(p, 4) !== 'MTrk') break;
+    const len = u32(p + 4);
+    const end = p + 8 + len;
+    const ptr = { i: p + 8 };
+    let tick = 0;
+    let status = 0;
+    const open = new Map();
+    const notes = [];
+    let name = null;
+    let program = null;
+    while (ptr.i < end) {
+      tick += readVarLen(d, ptr);
+      let b = d[ptr.i];
+      if (b & 0x80) {
+        status = b;
+        ptr.i++;
+      }
+      const type = status & 0xf0;
+      const ch = status & 0x0f;
+      if (status === 0xff) {
+        const mt = d[ptr.i++];
+        const ml = readVarLen(d, ptr);
+        const md = d.subarray(ptr.i, ptr.i + ml);
+        ptr.i += ml;
+        if (mt === 0x51 && !meta.tempo) meta.tempo = 60000000 / ((md[0] << 16) | (md[1] << 8) | md[2]);
+        else if (mt === 0x58 && !meta.timeSig) meta.timeSig = { beats: md[0], beatType: 2 ** md[1] };
+        else if (mt === 0x59 && !meta.keySig) meta.keySig = { fifths: (md[0] << 24) >> 24, minor: md[1] === 1 };
+        else if (mt === 0x03 && !name) name = new TextDecoder().decode(md);
+        continue;
+      }
+      if (status === 0xf0 || status === 0xf7) {
+        const l = readVarLen(d, ptr);
+        ptr.i += l;
+        continue;
+      }
+      if (type === 0x90 || type === 0x80) {
+        const key = d[ptr.i++];
+        const vel = d[ptr.i++];
+        const id = ch * 128 + key;
+        if (type === 0x90 && vel > 0) {
+          if (open.has(id)) {
+            const o = open.get(id);
+            notes.push({ ...o, end: tick });
+          }
+          open.set(id, { start: tick, key, vel, ch });
+        } else if (open.has(id)) {
+          const o = open.get(id);
+          open.delete(id);
+          notes.push({ ...o, end: tick });
+        }
+      } else if (type === 0xa0 || type === 0xb0 || type === 0xe0) ptr.i += 2;
+      else if (type === 0xc0) {
+        program = d[ptr.i++];
+      } else if (type === 0xd0) ptr.i += 1;
+      else ptr.i++;
+    }
+    tracks.push({ name: name || `Spur ${t + 1}`, notes, program, drum: notes.length > 0 && notes.every((n) => n.ch === 9) });
+    p = end;
+  }
+  return { division, tracks, meta };
+}
+
+function quantizeTick(q, beat) {
+  const b = Math.floor(q / beat) * beat;
+  const r = q - b;
+  const s16 = Math.round(r / (beat / 4)) * (beat / 4);
+  const s3 = Math.round(r / (beat / 3)) * (beat / 3);
+  return b + (Math.abs(r - s16) <= Math.abs(r - s3) + 1 ? s16 : s3);
+}
+
+export function describeMidiTracks(parsed) {
+  return parsed.tracks.map((t, i) => {
+    const avg = t.notes.length ? t.notes.reduce((s, n) => s + n.key, 0) / t.notes.length : 0;
+    return { index: i, name: t.name, noteCount: t.notes.length, avgPitch: avg, unpitched: t.drum };
+  });
+}
+
+export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
+  const parsed = parseMidi(buffer);
+  const desc = describeMidiTracks(parsed);
+  const usable = desc.filter((t) => t.noteCount > 0 && !t.unpitched);
+  if (!usable.length) throw new Error('Die MIDI-Datei enthält keine Noten');
+  let melIdx = melodyPart;
+  if (melIdx === null || melIdx === undefined) {
+    const maxCount = Math.max(...usable.map((t) => t.noteCount));
+    let best = null;
+    for (const t of usable) {
+      if (t.noteCount < maxCount * 0.2) continue;
+      let score = t.avgPitch;
+      if (/(melod|lead|vocal|voice|sing|gesang|melodie)/i.test(t.name)) score += 10;
+      if (/(bass|drum|piano|klavier|pad|chord)/i.test(t.name)) score -= 6;
+      if (!best || score > best.score) best = { ...t, score };
+    }
+    melIdx = (best || usable[0]).index;
+  }
+  const conv = (tk) => (tk * DIV) / parsed.division;
+  const toEvents = (notes) =>
+    notes
+      .filter((n) => n.ch !== 9)
+      .map((n) => {
+        const s = quantizeTick(conv(n.start), DIV);
+        let e = quantizeTick(conv(n.end), DIV);
+        if (e <= s) e = s + DIV / 4;
+        return { start: Math.round(s), dur: Math.round(e - s), midi: n.key };
+      });
+  const melody = toEvents(parsed.tracks[melIdx].notes);
+  const allNotes = parsed.tracks.filter((t) => !t.drum).flatMap((t) => toEvents(t.notes));
+  const meter = parsed.meta.timeSig || { beats: 4, beatType: 4 };
+  const key = parsed.meta.keySig ? makeKey(parsed.meta.keySig.fifths, parsed.meta.keySig.minor ? 'minor' : 'major') : null;
+  // Melodie-Start: führende Leertakte entfernen
+  const mt = (meter.beats * DIV * 4) / meter.beatType;
+  const firstStart = Math.min(...melody.map((n) => n.start));
+  const shift = Math.floor(firstStart / mt) * mt;
+  for (const n of melody) n.start -= shift;
+  for (const n of allNotes) n.start -= shift;
+  const song = {
+    title: title || parsed.tracks.find((t) => t.name && !/^Spur/.test(t.name))?.name || 'MIDI-Import',
+    composer: null,
+    key,
+    meter,
+    tempo: parsed.meta.tempo ? Math.round(parsed.meta.tempo) : 100,
+    swing: false,
+    pickup: 0,
+    measureCount: 0,
+    melody,
+    chords: [],
+    sections: [],
+    warnings: ['MIDI enthält keine Akkordsymbole – Harmonik wurde automatisch analysiert.'],
+    source: 'midi',
+    parts: desc,
+    melodyPart: melIdx,
+  };
+  return finalizeSong(song, { allNotes: allNotes.filter((n) => n.start >= 0) });
+}

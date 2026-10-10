@@ -1,0 +1,12 @@
+{
+  "name": "maestro-arranger",
+  "version": "1.0.0",
+  "description": "Quartett-Arrangier- & Notations-Engine (Brass/Funk/Swing/Klassik) – läuft im Browser",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/",
+    "serve": "python3 -m http.server 8000"
+  },
+  "license": "MIT"
+}
