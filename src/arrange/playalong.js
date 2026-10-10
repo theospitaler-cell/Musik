@@ -83,6 +83,34 @@ export function defaultPlayParts(opts) {
   return [{ source: 'melody', inst: opts.soloInstrument || 'trumpet' }];
 }
 
+// Tempo je Takt aus den Schlagzeiten der Aufnahme (in Vierteln; 12/8: punktierte Viertel × 1,5)
+function tempoMapFromTiming(song, { leadBars, mt, tempo, compound }) {
+  const tg = song.timing;
+  // Datei mit ausdrücklichen Tempowechseln (MIDI/MusicXML): genau diese übernehmen
+  if ((!tg || !tg.beatSec) && song.tempoEvents && song.tempoEvents.length > 1) {
+    const scale = tempo / song.tempoEvents[0].bpm; // vom Benutzer geändertes Grundtempo
+    return song.tempoEvents.map((e, i) => ({ t: i ? e.t + leadBars * mt : 0, bpm: Math.round(e.bpm * scale) }));
+  }
+  if (!tg || !tg.beatSec || tg.beatSec.length < 2) return [{ t: 0, bpm: tempo }];
+  const map = [];
+  const bt = tg.beatTicks || DIV;
+  const beatsPerBar = mt / bt;
+  let last = 0;
+  for (let bar = 0; bar < song.measureCount; bar++) {
+    const a = tg.firstBeat + bar * beatsPerBar;
+    const z = a + beatsPerBar;
+    if (a < 0 || z >= tg.beatSec.length) continue;
+    let bpm = (60 * beatsPerBar) / (tg.beatSec[z] - tg.beatSec[a]);
+    if (compound) bpm *= 1.5;
+    bpm = Math.round(bpm);
+    if (!map.length || Math.abs(bpm - last) >= 1) {
+      map.push({ t: map.length ? (leadBars + bar) * mt : 0, bpm });
+      last = bpm;
+    }
+  }
+  return map.length ? map : [{ t: 0, bpm: tempo }];
+}
+
 export function arrangePlayAlong(song, opts) {
   const style = getStyle(opts.style);
   const key = song.key; // keine Transposition: klingt wie die Datei
@@ -225,6 +253,19 @@ export function arrangePlayAlong(song, opts) {
   for (const v of voices) v.dirs.sort((a, b) => a.t - b.t);
   const drums = drumPart ? { name: 'Schlagzeug', events: dedupeDrums(simplifyDrums(drumEvents, dLv)), dirs: [] } : null;
   if (drums) addPerformanceMarks({ ...arr, voices: [] }, drums);
+  // Tempo wie in der Aufnahme: sichtbare Wechsel (♩ = …, rit., accel., a tempo) und eine
+  // Tempo-Map je Takt für MIDI/MusicXML-Wiedergabe in anderen Programmen
+  arr.tempoMap = tempoMapFromTiming(song, { leadBars, mt, tempo, compound });
+  for (const tm of song.tempoMarks || []) {
+    if (tm.kind === 'tempo' && tm.bar === 0) continue;
+    const t = (leadBars + tm.bar) * mt;
+    const scale = song.tempoEvents && !song.timing ? tempo / song.tempoEvents[0].bpm : 1;
+    const dir = tm.kind === 'tempo' ? { t, kind: 'metro', bpm: Math.round(tm.bpm * scale), meter: song.meter } : { t, kind: 'words', text: { rit: 'rit.', accel: 'accel.', atempo: 'a tempo' }[tm.kind] };
+    for (const v of voices) v.dirs.push({ ...dir });
+    if (drums) drums.dirs.push({ ...dir });
+  }
+  for (const v of voices) v.dirs.sort((a, b) => a.t - b.t);
+  if (drums) drums.dirs.sort((a, b) => a.t - b.t);
   const th = tempoHeading(style, tempo);
   report.notes = notes;
   const who = [...voices.map((v) => v.inst.name), ...(drums ? ['Schlagzeug'] : [])];

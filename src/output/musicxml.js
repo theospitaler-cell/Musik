@@ -713,13 +713,22 @@ function writeTempoHeading(w, arr) {
   w.el('words', `${arr.meta.tempoText}\u00a0\u00a0`, { 'font-weight': 'bold', 'font-size': 12 });
   w.close('direction-type');
   w.open('direction-type');
-  w.open('metronome', { parentheses: 'yes' });
-  w.el('beat-unit', 'quarter');
-  w.el('per-minute', arr.tempo);
-  w.close('metronome');
+  writeMetronome(w, arr, arr.tempo, true);
   w.close('direction-type');
   w.el('sound', null, { tempo: arr.tempo });
   w.close('direction');
+}
+
+// Metronomangabe: Tempo ist immer in Vierteln gespeichert; zusammengesetzte Takte (6/8, 12/8)
+// zeigen die punktierte Viertel
+function writeMetronome(w, arr, bpm, parentheses = false) {
+  const m = arr.meter || { beats: 4, beatType: 4 };
+  const compound = m.beatType === 8 && m.beats % 3 === 0 && m.beats > 3;
+  w.open('metronome', parentheses ? { parentheses: 'yes' } : {});
+  w.el('beat-unit', 'quarter');
+  if (compound) w.el('beat-unit-dot');
+  w.el('per-minute', compound ? Math.round(bpm / 1.5) : bpm);
+  w.close('metronome');
 }
 
 function buildCue(arr, selfIdx, bar, tr) {
@@ -961,6 +970,18 @@ function writeDirection(w, d, offset) {
     w.close('direction-type');
     if (offset) w.el('offset', offset);
     w.close('direction');
+  } else if (d.kind === 'metro') {
+    // sichtbarer Tempowechsel (♩ = 128) mit Wiedergabe-Tempo
+    w.open('direction', { placement: 'above' });
+    w.open('direction-type');
+    writeMetronome(w, { meter: d.meter }, d.bpm);
+    w.close('direction-type');
+    if (offset) w.el('offset', offset);
+    w.el('sound', null, { tempo: d.bpm });
+    w.close('direction');
+  } else if (d.kind === 'tempo' && !offset) {
+    // unsichtbare Tempoanpassung am Taktanfang (Wiedergabe folgt der Aufnahme)
+    w.el('sound', null, { tempo: d.bpm });
   } else if (d.kind === 'tempo') {
     w.open('direction', { placement: 'above' });
     w.open('direction-type');

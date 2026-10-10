@@ -41,7 +41,7 @@ export function measureDurations(xml) {
 
 // Minimale Standard-MIDI-Datei schreiben (Typ 1, 96 Ticks/Viertel).
 // tracks: [{name, events: [{t, d, key, ch, vel}], programs: {ch: prog}}]
-export function makeMidi(tracks, { tempo = 100 } = {}) {
+export function makeMidi(tracks, { tempo = 100, tempos = null, timeSigs = null } = {}) {
   const vlq = (n) => {
     const b = [n & 0x7f];
     while ((n >>= 7)) b.unshift((n & 0x7f) | 0x80);
@@ -49,8 +49,22 @@ export function makeMidi(tracks, { tempo = 100 } = {}) {
   };
   const chunk = (id, data) => [...id].map((c) => c.charCodeAt(0)).concat([(data.length >>> 24) & 255, (data.length >>> 16) & 255, (data.length >>> 8) & 255, data.length & 255], data);
   const out = [...chunk('MThd', [0, 1, 0, tracks.length + 1, 0, 96])];
-  const us = Math.round(60000000 / tempo);
-  out.push(...chunk('MTrk', [0, 0xff, 0x51, 3, (us >> 16) & 255, (us >> 8) & 255, us & 255, 0, 0xff, 0x58, 4, 4, 2, 24, 8, 0, 0xff, 0x2f, 0]));
+  // Dirigentenspur: Tempo- und Taktart-Events (t in Ticks, 96 je Viertel)
+  const cond = [];
+  for (const e of tempos || [{ t: 0, bpm: tempo }]) {
+    const us = Math.round(60000000 / e.bpm);
+    cond.push({ t: e.t, b: [0xff, 0x51, 3, (us >> 16) & 255, (us >> 8) & 255, us & 255] });
+  }
+  for (const e of timeSigs || [{ t: 0, beats: 4, beatType: 4 }]) cond.push({ t: e.t, b: [0xff, 0x58, 4, e.beats, Math.log2(e.beatType), 24, 8] });
+  cond.sort((a, b) => a.t - b.t);
+  const cd = [];
+  let lt = 0;
+  for (const e of cond) {
+    cd.push(...vlq(e.t - lt), ...e.b);
+    lt = e.t;
+  }
+  cd.push(0, 0xff, 0x2f, 0);
+  out.push(...chunk('MTrk', cd));
   for (const tr of tracks) {
     const ev = [];
     if (tr.name) {

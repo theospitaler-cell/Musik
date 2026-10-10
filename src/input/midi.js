@@ -1,6 +1,7 @@
 // Standard-MIDI-Datei (Typ 0/1) -> Song. Quantisiert auf 16tel bzw. Triolen.
 import { DIV } from '../core/constants.js';
 import { pickLead } from './lead.js';
+import { marksFromEvents } from './tempo-marks.js';
 import { makeKey } from '../theory/keys.js';
 import { finalizeSong } from '../theory/analysis.js';
 
@@ -26,7 +27,7 @@ export function parseMidi(buffer) {
   if (division & 0x8000) throw new Error('SMPTE-Zeitbasis wird nicht unterstützt');
   let p = 8 + hlen;
   const tracks = [];
-  const meta = { tempo: null, timeSig: null, keySig: null };
+  const meta = { tempo: null, timeSig: null, keySig: null, tempos: [], timeSigs: [] };
   for (let t = 0; t < ntrks && p < d.length; t++) {
     if (str(p, 4) !== 'MTrk') break;
     const len = u32(p + 4);
@@ -53,8 +54,15 @@ export function parseMidi(buffer) {
         const ml = readVarLen(d, ptr);
         const md = d.subarray(ptr.i, ptr.i + ml);
         ptr.i += ml;
-        if (mt === 0x51 && !meta.tempo) meta.tempo = 60000000 / ((md[0] << 16) | (md[1] << 8) | md[2]);
-        else if (mt === 0x58 && !meta.timeSig) meta.timeSig = { beats: md[0], beatType: 2 ** md[1] };
+        if (mt === 0x51) {
+          const bpm = 60000000 / ((md[0] << 16) | (md[1] << 8) | md[2]);
+          if (!meta.tempo) meta.tempo = bpm;
+          meta.tempos.push({ tick, bpm });
+        } else if (mt === 0x58) {
+          const ts = { beats: md[0], beatType: 2 ** md[1] };
+          if (!meta.timeSig) meta.timeSig = ts;
+          meta.timeSigs.push({ tick, ...ts });
+        }
         else if (mt === 0x59 && !meta.keySig) meta.keySig = { fifths: (md[0] << 24) >> 24, minor: md[1] === 1 };
         else if (mt === 0x03 && !name) name = new TextDecoder().decode(md);
         continue;
@@ -185,5 +193,13 @@ export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
     parts: desc,
     melodyPart: melIdx,
   };
+  // Tempowechsel der Datei (rit./accel. als viele kleine Schritte)
+  if (parsed.meta.tempos.length > 1) {
+    const { marks, map } = marksFromEvents(parsed.meta.tempos.map((e) => ({ t: Math.round(conv(e.tick)), bpm: e.bpm })), [], mt);
+    if (map.length > 1) {
+      song.tempoMarks = marks;
+      song.tempoEvents = map;
+    }
+  }
   return finalizeSong(song, { allNotes: allNotes.filter((n) => n.start >= 0) });
 }

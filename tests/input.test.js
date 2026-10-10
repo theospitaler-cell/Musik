@@ -96,3 +96,27 @@ test('Lead-Erkennung MIDI: Melodie in Mittellage unter einem hohen Pad', () => {
   ]);
   assert.equal(melodyOf(songFromMidi(mid)), saintsKeys);
 });
+
+test('MIDI mit Tempowechseln: neues Tempo und rit. landen in Noten & Wiedergabe', async () => {
+  const { arrange } = await import('../src/arrange/engine.js');
+  const { performArrangement } = await import('../src/output/performance.js');
+  const { exportMusicXML } = await import('../src/output/musicxml.js');
+  // 16 Takte Melodie in Vierteln; Takt 9: Tempo 140; Takt 15–16: rit. in kleinen Schritten
+  const events = [];
+  for (let q = 0; q < 64; q++) events.push({ t: q * 96, d: 90, ch: 0, key: 72 + ((q * 5) % 7) });
+  const tempos = [{ t: 0, bpm: 100 }, { t: 8 * 384, bpm: 140 }];
+  for (let k = 0; k < 6; k++) tempos.push({ t: 14 * 384 + k * 96, bpm: 140 - (k + 1) * 10 });
+  const bytes = makeMidi([{ name: 'Melodie', events }], { tempos });
+  const song = songFromMidi(bytes);
+  assert.equal(song.tempo, 100);
+  assert.deepEqual(song.tempoMarks.map((m) => `${m.bar}:${m.kind}`), ['0:tempo', '8:tempo', '14:rit']);
+  const a = arrange(song, { ensemble: 'solo', soloInstrument: 'trumpet', playback: true });
+  const perf = performArrangement(a);
+  // Takt 9 beginnt nach 8 Takten à 2,4 s; danach 140 BPM
+  const off = a.sourceOffset / a.mt;
+  assert.ok(Math.abs(perf.barToSec(off + 8) - perf.barToSec(off) - 19.2) < 0.01);
+  assert.ok(Math.abs(perf.barToSec(off + 9) - perf.barToSec(off + 8) - (4 * 60) / 140) < 0.01);
+  const xml = exportMusicXML(a);
+  assert.ok(/<per-minute>140<\/per-minute>/.test(xml), 'Metronomangabe ♩ = 140');
+  assert.ok(/>rit\.</.test(xml), 'rit. in den Noten');
+});

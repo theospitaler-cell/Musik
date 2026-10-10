@@ -1,5 +1,6 @@
 // MusicXML / MXL (z. B. aus MuseScore exportiert oder heruntergeladen) -> Song.
 import { pickLead } from './lead.js';
+import { marksFromEvents } from './tempo-marks.js';
 import { DIV, mod } from '../core/constants.js';
 import { parseXML } from '../core/xml.js';
 import { unzip } from '../core/zip.js';
@@ -165,14 +166,21 @@ export function scanScore(xmlText) {
           }
           case 'direction': {
             const snd = el.child('sound');
-            if (snd?.attrs.tempo && !tempo) tempo = Number(snd.attrs.tempo);
+            let here = snd?.attrs.tempo ? Number(snd.attrs.tempo) : null;
             const met = el.find('metronome')[0];
-            if (met && !tempo) {
+            if (met && !here) {
               const pm = met.num('per-minute');
               const bu = met.val('beat-unit');
               const dotted = met.has('beat-unit-dot');
               const f = { whole: 4, half: 2, quarter: 1, eighth: 0.5, '16th': 0.25 }[bu] || 1;
-              if (pm) tempo = Math.round(pm * f * (dotted ? 1.5 : 1));
+              if (pm) here = Math.round(pm * f * (dotted ? 1.5 : 1));
+            }
+            if (here && !tempo) tempo = here;
+            // Tempowechsel & Vortragsworte (rit./accel./a tempo) – Position im Takt
+            if (pIdx === 0) {
+              const at = Math.round((pos + el.num('offset', 0)) * (DIV / divisions));
+              if (here) (mm.tempos = mm.tempos || []).push({ t: at, bpm: here });
+              for (const w of el.find('words')) if (w.text && /rit|rall|allarg|accel|string|a\s*tempo|tempo\s*(i|1|primo)/i.test(w.text)) (mm.words = mm.words || []).push({ t: at, text: w.text });
             }
             const reh = el.find('rehearsal')[0];
             if (reh && reh.text) mm.label = reh.text.slice(0, 6);
@@ -405,7 +413,19 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
     if (lab && starts[k] >= 0) sections.push({ label: lab, start: Math.round(starts[k] / mt) });
   });
 
+  // Tempowechsel aus der Partitur (ausgeschriebene Reihenfolge)
+  const tEvents = [];
+  const tWords = [];
+  order.forEach((mIdx, k) => {
+    const mm = scan.measureMeta[mIdx];
+    for (const x of mm.tempos || []) tEvents.push({ t: starts[k] + x.t, bpm: x.bpm });
+    for (const x of mm.words || []) tWords.push({ t: starts[k] + x.t, text: x.text });
+  });
+  const tm = marksFromEvents(tEvents, tWords, mt);
+
   const song = {
+    tempoMarks: tm.marks.length > 1 ? tm.marks : undefined,
+    tempoEvents: tm.map.length > 1 ? tm.map : undefined,
     title: scan.title,
     composer: scan.composer,
     key: scan.key,

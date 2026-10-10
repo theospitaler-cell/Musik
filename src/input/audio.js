@@ -11,6 +11,7 @@ import { finalizeSong } from '../theory/analysis.js';
 import { harmonize } from '../theory/analysis.js';
 import { detectKey } from '../theory/keys.js';
 import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
+import { tempoMarksFromTiming } from './tempo-marks.js';
 
 const SR = 22050;
 const N = 2048;
@@ -1344,7 +1345,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     key,
     keyDetected: true,
     meter,
-    tempo: Math.round(bpm),
+    tempo: Math.round(shuffle12 ? bpm * 1.5 : bpm), // immer in Vierteln (12/8: punktierte Viertel × 1,5)
     swing,
     pickup: pickupNotes.length ? -Math.min(...pickupNotes.map((n) => n.start)) : 0,
     measureCount,
@@ -1363,6 +1364,12 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   fin.drumNotes = transcribeDrums(feat, refineBeats(beats, comb), firstDown, m, measureCount, fin.sections, { compound: shuffle12 }).notes;
   // Zeitbezug zur Datei: Schlag i liegt bei beatSec[i] Sekunden; Takt 1 beginnt bei Schlag firstDown
   fin.timing = { beatSec, firstBeat: firstDown, beatTicks: BT };
+  // Tempowechsel, rit./accel. aus den echten Schlagzeiten
+  const tm = tempoMarksFromTiming(fin.timing, m, measureCount);
+  fin.tempoMarks = tm.marks.map((x) => ({ ...x, bpm: Math.round(shuffle12 ? x.bpm * 1.5 : x.bpm) }));
+  // Tempoangabe am Anfang = Anfangstempo (wie in gedruckten Noten), nicht der Durchschnitt
+  if (tm.marks.length > 1 && fin.tempoMarks[0]) fin.tempo = fin.tempoMarks[0].bpm;
+  if (tm.marks.length > 1) fin.warnings.push(`Tempo ändert sich im Stück (${tm.marks.filter((x) => x.kind !== 'tempo' || x.bar > 0).map((x) => `Takt ${x.bar + 1}: ${x.kind === 'rit' ? 'rit.' : x.kind === 'accel' ? 'accel.' : x.kind === 'atempo' ? 'a tempo' : (shuffle12 ? '♩. = ' + Math.round(x.bpm / 1.5) : '♩ = ' + x.bpm)}`).join(', ')}).`);
   if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
   fin.duration = mono.length / SR;
   onProgress('Fertig', 1);

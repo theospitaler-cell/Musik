@@ -186,15 +186,18 @@ const CORPUS = [
   { name: 'Walzer schnell', groove: 'waltz', bpm: 150, bars: 24, meter: '3/4' },
   { name: 'Funk 16tel', groove: 'funk', bpm: 104 },
   { name: 'Ride', groove: 'ride8', bpm: 120 },
-  { name: 'Ritardando', groove: 'rock8', bpm: 110, tempo: TEMPOS.rit(110, 2, 4, 0.65) },
-  { name: 'Tempowechsel 96→128', groove: 'rock8', bpm: 96, tempo: TEMPOS.change(96, 128, 32), bars: 20, tempoTol: 40 },
+  { name: 'Ritardando', groove: 'rock8', bpm: 110, tempo: TEMPOS.rit(110, 2, 4, 0.65), marks: ['rit@14'] },
+  { name: 'Tempowechsel 96→128', groove: 'rock8', bpm: 96, tempo: TEMPOS.change(96, 128, 32), bars: 20, marks: ['tempo@8'] },
+  { name: 'leichtes Schwanken (kein Tempowechsel)', groove: 'rock8', bpm: 112, tempo: TEMPOS.drift(112, 0.05), tempoTol: 8, marks: [] },
   { name: 'nur Schlagzeug', groove: 'rock16', bpm: 118, band: false },
 ];
 for (const c of CORPUS) {
   test(`Audio-Testsammlung: ${c.name} – Tempo, Takt, Beats & Schlagzeug`, () => {
     const s = synthSong({ bars: 16, ...c });
     const song = transcribe(s.audio, { title: c.name });
-    assert.ok(Math.abs(song.tempo - c.bpm) <= (c.tempoTol || 4), `Tempo ${song.tempo} statt ${c.bpm}`);
+    // Tempo wird immer in Vierteln angegeben (12/8: punktierte Viertel × 1,5)
+    const want = c.meter === '12/8' ? c.bpm * 1.5 : c.bpm;
+    assert.ok(Math.abs(song.tempo - want) <= (c.tempoTol || 4), `Tempo ${song.tempo} statt ${want}`);
     assert.equal(`${song.meter.beats}/${song.meter.beatType}`, c.meter || '4/4');
     assert.ok(beatScore(song, s.beatSec) >= 0.93, `Beats ${beatScore(song, s.beatSec)}`);
     assert.ok(downbeatScore(song, s.barSec) >= 0.85, `Taktanfänge ${downbeatScore(song, s.barSec)}`);
@@ -203,5 +206,9 @@ for (const c of CORPUS) {
     assert.ok(ds.snare.f1 >= 0.85, `Snare F1 ${ds.snare.f1.toFixed(2)}`);
     assert.ok(ds.hat.f1 >= 0.8, `Hi-Hat/Ride F1 ${ds.hat.f1.toFixed(2)}`);
     assert.ok(!ds.crash || ds.crash.f1 >= 0.7, `Crash F1 ${ds.crash && ds.crash.f1.toFixed(2)}`);
+    // Tempoangaben: nur echte Wechsel (rit., neues Tempo), keine für kleine Schwankungen
+    const marks = (song.tempoMarks || []).filter((m) => m.bar > 0).map((m) => `${m.kind}@${m.bar}`);
+    if (c.marks) assert.deepEqual(marks, c.marks);
+    else assert.deepEqual(marks, [], `unerwartete Tempoangaben ${marks}`);
   });
 }
