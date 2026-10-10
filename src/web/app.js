@@ -14,6 +14,9 @@ import { printedMeasures, timelineToPrinted } from '../output/form.js';
 import { zip } from '../core/zip.js';
 import { keyNameDe, transposeKey } from '../theory/keys.js';
 import { Player } from './player.js';
+import { ScoreFollower } from './follow.js';
+import { bindPractice, syncPractice } from './practice.js';
+import { openAudioExport } from './audio-dialog.js';
 import { renderPages, responsiveSvg, pagesToPngs, xmlsToPdf, loadVerovio } from './render.js';
 import { LocalStore, Library } from './store.js';
 import { loadSettings, saveSettings } from './settings.js';
@@ -40,7 +43,7 @@ const S = {
   printed: [],
   t2p: () => null,
   renderToken: 0,
-  follow: true,
+  follower: null, // Mitlesen: Takt-Markierung, Cursor, automatisches Umblättern
 };
 
 // ---------------------------------------------------------------- Hilfen
@@ -815,6 +818,8 @@ async function renderNotes(onProgress = null) {
       box.appendChild(div);
     }
     S.measureEls = $$('g.measure', box);
+    S.follower.attach(S.printed.length);
+    if (S.player) updatePosition(S.player.displayPosition(), S.player.perf.secToBar(S.player.displayPosition()));
     own?.done();
   } catch (e) {
     own?.done();
@@ -868,6 +873,7 @@ function setupPlayer() {
   $('#player').classList.remove('hidden');
   $('#p-total').textContent = fmtTime(S.player.duration);
   $('#p-seek').value = 0;
+  syncPractice(S.player, S.arr, toast);
   updatePosition(0, 0);
   setPlayIcon(false);
   renderMixer();
@@ -877,7 +883,6 @@ function setPlayIcon(playing) {
   $('#p-play-icon use').setAttribute('href', playing ? '#i-pause' : '#i-play');
 }
 
-let lastHighlight = -1;
 function updatePosition(sec, bar) {
   const p = S.player;
   if (!p) return;
@@ -885,17 +890,12 @@ function updatePosition(sec, bar) {
   if (!S.seeking) $('#p-seek').value = Math.round((sec / p.duration) * 1000);
   const idx = S.t2p(bar);
   $('#p-bar').textContent = idx !== null ? `Takt ${idx + 1}` : '';
-  if (idx !== lastHighlight) {
-    if (lastHighlight >= 0 && S.measureEls[lastHighlight]) S.measureEls[lastHighlight].classList.remove('playing');
-    if (idx !== null && S.measureEls[idx] && p.playing) {
-      S.measureEls[idx].classList.add('playing');
-      if (S.follow) {
-        const r = S.measureEls[idx].getBoundingClientRect();
-        if (r.top < 90 || r.bottom > window.innerHeight - 120) S.measureEls[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }
-    lastHighlight = p.playing ? idx : -1;
-  }
+  // Mitlesen: Takt markieren, Cursor im Takt, Seiten automatisch weiterblättern
+  const b0 = p.perf.barToSec(bar);
+  const b1 = p.perf.barToSec(bar + 1);
+  const frac = b1 > b0 ? (sec - b0) / (b1 - b0) : 0;
+  const show = p.playing || sec > 0.01;
+  S.follower.update(show ? idx : null, frac, { playing: p.playing, visible: $('#pages').offsetParent !== null });
 }
 
 function renderMixer() {
@@ -930,6 +930,7 @@ function togglePlay() {
     p.pause();
     setPlayIcon(false);
   } else {
+    S.follower.resume();
     p.play();
     setPlayIcon(true);
   }
@@ -942,6 +943,7 @@ async function doExport(kind) {
   const base = safeName(a.meta.title);
   const st = S.settings;
   const single = a.soloMode && a.voices.length + (a.drums ? 1 : 0) === 1;
+  if (kind === 'mp3') return openAudioExport({ player: S.player, arr: a, baseName: base, safeName, progress, download, toast });
   const partName = (i) => (a.playAlong ? `${safeName(a.voices[i].label)}_${safeName(a.voices[i].inst.name)}` : single ? `Solo_${safeName(a.voices[i].inst.name)}` : `Stimme_${i + 1}_${safeName(a.voices[i].inst.name)}`);
   const pg = progress('Export wird erstellt');
   const onProgress = (t, f) => pg.set(t, f);
@@ -1389,6 +1391,7 @@ async function main() {
   S.settings = await loadSettings(S.local);
   applyTheme();
   S.library = new Library(S.local);
+  S.follower = new ScoreFollower($('#pages'));
   await S.library.init(S.settings);
   S.opts = {
     voices: [...S.settings.defaultVoices],
@@ -1510,7 +1513,7 @@ async function main() {
   $('#pages').addEventListener('click', (e) => {
     const m = e.target.closest('g.measure');
     if (!m || !S.player) return;
-    const idx = S.measureEls.indexOf(m);
+    const idx = S.follower.indexOf(m);
     if (idx >= 0 && S.printed[idx]) {
       S.player.seekBar(S.printed[idx].src);
       if (!S.player.playing) toast(`Start ab Takt ${idx + 1}`);
@@ -1522,7 +1525,7 @@ async function main() {
   $('#p-stop').addEventListener('click', () => {
     S.player?.stop();
     setPlayIcon(false);
-    S.measureEls.forEach((m) => m.classList.remove('playing'));
+    S.follower.hide();
   });
   const seek = $('#p-seek');
   seek.addEventListener('input', () => (S.seeking = true));
@@ -1530,10 +1533,8 @@ async function main() {
     S.seeking = false;
     S.player?.seekSec((seek.value / 1000) * S.player.duration);
   });
-  $('#p-speed').addEventListener('input', (e) => {
-    $('#p-speed-label').textContent = `${e.target.value} %`;
-    S.player?.setSpeed(e.target.value / 100);
-  });
+  bindPractice({ getPlayer: () => S.player, follower: S.follower });
+  $('#mixer-mp3').addEventListener('click', () => doExport('mp3'));
   $('#p-mixer').addEventListener('click', () => $('#mixer').classList.toggle('open'));
   $('#mixer-close').addEventListener('click', () => $('#mixer').classList.remove('open'));
   $('#master').addEventListener('input', (e) => S.player?.setMaster(e.target.value / 100));

@@ -60,7 +60,8 @@ export async function renderPages(xml, { paper = 'A4', part = true, zoom = 1, sc
   onProgress?.('Notensatz wird geladen', 0.02);
   const tk = await loadVerovio();
   const opts = verovioOptions(paper, { scale, part, zoom: (part ? 1 : 0.78) * zoom });
-  tk.setOptions(opts);
+  // Taktnummer (data-n) an jedem Takt: Mitlesen & Klick-Sprung auch bei Mehrtaktpausen
+  tk.setOptions({ ...opts, svgAdditionalAttribute: ['measure@n'] });
   onProgress?.('Noten werden gesetzt', 0.08);
   await tick();
   tk.loadData(xml);

@@ -182,6 +182,7 @@
                       <div class="menu-title">Bild</div>
                       <button data-export="png-current"><svg><use href="#i-image" /></svg>Aktuelle Ansicht als PNG</button>
                       <div class="menu-title">Audio &amp; Plan</div>
+                      <button data-export="mp3"><svg><use href="#i-wave" /></svg>Audio als MP3 (Mix oder einzelne Stimme)</button>
                       <button data-export="midi"><svg><use href="#i-music" /></svg>MIDI-Datei</button>
                       <button data-export="plan"><svg><use href="#i-list" /></svg>Regieplan (.md)</button>
                     </div>
@@ -298,7 +299,13 @@
         <input type="range" id="p-seek" min="0" max="1000" value="0" />
       </div>
       <div class="player-right">
-        <label class="speed" title="Wiedergabe-Tempo"><span id="p-speed-label">100 %</span><input type="range" id="p-speed" min="50" max="130" value="100" /></label>
+        <div class="speed" id="practice" role="group" aria-labelledby="p-speed-title" title="Wiedergabe-Tempo: Noten und Aufnahme gemeinsam langsamer (Tasten + / −)">
+          <span class="pr-title" id="p-speed-title">Tempo</span>
+          <span class="pr-quick" id="p-speed-quick"><button type="button" data-speed="50" aria-label="Tempo 50 %">50</button><button type="button" data-speed="75" aria-label="Tempo 75 %">75</button><button type="button" data-speed="100" class="active" aria-label="Originaltempo 100 %">100</button></span>
+          <input type="range" id="p-speed" min="50" max="120" step="5" value="100" aria-label="Wiedergabe-Tempo in Prozent" />
+          <span class="pr-value" id="p-speed-label">100 %</span>
+        </div>
+        <button class="btn ghost small follow-btn on" id="p-follow" type="button" aria-pressed="true" title="Mitlaufen: Noten blättern beim Abspielen automatisch mit"><svg><use href="#i-follow" /></svg><span>Mitlaufen</span></button>
         <button class="btn ghost small" id="p-mixer"><svg><use href="#i-sliders" /></svg><span>Mischpult</span></button>
       </div>
     </footer>
@@ -310,6 +317,7 @@
       </div>
       <div class="strips" id="strips"></div>
       <div class="master-row"><span>Gesamt</span><input type="range" id="master" min="0" max="100" value="90" /></div>
+      <div class="mixer-foot"><button class="btn ghost small" id="mixer-mp3" type="button"><svg><use href="#i-wave" /></svg><span>Als MP3 speichern</span></button></div>
     </div>
 
     <dialog id="auth-dialog">
@@ -357,6 +365,8 @@
         <symbol id="i-sync" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5" /></symbol>
         <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
         <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-wave" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 10v4M7 7v10M11 4v16M15 8v8M19 10v4M23 11v2" /></symbol>
+        <symbol id="i-follow" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h11M3 11h7M3 16h5M18 3v13" /><path d="M14.5 13 18 16.5 21.5 13M8 21h13" /></g></symbol>
         <symbol id="i-trash" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></symbol>
       </defs>
     </svg>
