@@ -739,6 +739,20 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   melody = melody.filter((n) => n.start >= -mt + DIV);
   // gleiche Startzeit nach dem Runden: längere Note behalten
   melody = melody.filter((n, i) => !melody.some((o, j) => j !== i && o.start === n.start && (o.dur > n.dur || (o.dur === n.dur && j < i))));
+  // Notenenden lesbar machen: Mini-Lücken schließen (Ausklingen wird oft zu früh erkannt),
+  // sonst auf Achtel runden – Einsätze bleiben exakt
+  melody.sort((a, b) => a.start - b.start);
+  const unit = swing ? DIV / 2 : 6;
+  melody.forEach((n, i) => {
+    const next = melody[i + 1];
+    const end = n.start + n.dur;
+    if (next && next.start - end <= DIV / 4 + 1) n.dur = next.start - n.start;
+    else {
+      let e = Math.round(end / (DIV / 2)) * (DIV / 2);
+      if (next) e = Math.min(e, next.start);
+      n.dur = Math.max(unit, e - n.start);
+    }
+  });
 
   const meter = { beats: m, beatType: 4 };
   const key = detectKey([...pseudo, ...melody.filter((n) => n.start >= 0).map((n) => ({ midi: n.midi, dur: n.dur * 0.5 }))]);

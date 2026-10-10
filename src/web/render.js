@@ -53,15 +53,26 @@ async function loadJsPdf() {
 
 // MusicXML -> SVG-Seiten. Der Umweg über MEI übernimmt Titel/Komponist/
 // Stimmenname aus den MusicXML-Credits in den Seitenkopf.
-export async function renderPages(xml, { paper = 'A4', part = true, zoom = 1, scale = 100 } = {}) {
+// onProgress(text, anteil 0..1) – zwischen den Seiten wird kurz an den Browser abgegeben,
+// damit die Fortschrittsanzeige sichtbar weiterläuft.
+const tick = () => new Promise((r) => setTimeout(r, 0));
+export async function renderPages(xml, { paper = 'A4', part = true, zoom = 1, scale = 100, onProgress = null } = {}) {
+  onProgress?.('Notensatz wird geladen', 0.02);
   const tk = await loadVerovio();
   const opts = verovioOptions(paper, { scale, part, zoom: (part ? 1 : 0.78) * zoom });
   tk.setOptions(opts);
+  onProgress?.('Noten werden gesetzt', 0.08);
+  await tick();
   tk.loadData(xml);
   tk.loadData(tk.getMEI({}));
   const n = tk.getPageCount();
   const pages = [];
-  for (let p = 1; p <= n; p++) pages.push(tk.renderToSVG(p));
+  for (let p = 1; p <= n; p++) {
+    onProgress?.(`Seite ${p} von ${n} wird gezeichnet`, 0.15 + (0.85 * (p - 1)) / n);
+    await tick();
+    pages.push(tk.renderToSVG(p));
+  }
+  onProgress?.('Fertig', 1);
   return pages;
 }
 
@@ -112,11 +123,12 @@ async function svgToCanvas(svgText, widthPx) {
 }
 
 // PNG-Bilder (eine Datei pro Seite), ~250 dpi
-export async function pagesToPngs(xml, { paper = 'A4', part = true, zoom = 1 } = {}) {
-  const pages = await renderPages(xml, { paper, part, zoom, scale: 100 });
+export async function pagesToPngs(xml, { paper = 'A4', part = true, zoom = 1, onProgress = null } = {}) {
+  const pages = await renderPages(xml, { paper, part, zoom, scale: 100, onProgress: (t, f) => onProgress?.(t, f * 0.5) });
   const widthPx = Math.round((PAPERS[paper] || PAPERS.A4).wMm * 9.84); // ≈ 250 dpi
   const out = [];
-  for (const svg of pages) {
+  for (const [i, svg] of pages.entries()) {
+    onProgress?.(`Bild ${i + 1} von ${pages.length}`, 0.5 + (0.5 * i) / pages.length);
     const c = await svgToCanvas(svg, widthPx);
     const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
     out.push(new Uint8Array(await blob.arrayBuffer()));
@@ -125,15 +137,20 @@ export async function pagesToPngs(xml, { paper = 'A4', part = true, zoom = 1 } =
 }
 
 // PDF (mehrere Notensätze nacheinander, z. B. alle Stimmen in einer Datei)
-export async function xmlsToPdf(xmlList, { paper = 'A4', zoom = 1, title = 'NoteCode' } = {}) {
+export async function xmlsToPdf(xmlList, { paper = 'A4', zoom = 1, title = 'NoteCode', onProgress = null } = {}) {
   const JsPDF = await loadJsPdf();
   const P = PAPERS[paper] || PAPERS.A4;
   const pdf = new JsPDF({ unit: 'mm', format: paper === 'Letter' ? 'letter' : 'a4', orientation: 'portrait', compress: true });
   pdf.setProperties({ title, creator: 'NoteCode' });
   let first = true;
-  for (const { xml, part } of xmlList) {
-    const pages = await renderPages(xml, { paper, part, zoom, scale: 100 });
-    for (const svg of pages) {
+  for (const [k, { xml, part, name }] of xmlList.entries()) {
+    const base = k / xmlList.length;
+    const span = 1 / xmlList.length;
+    const label = name ? `${name}: ` : xmlList.length > 1 ? `Teil ${k + 1}/${xmlList.length}: ` : '';
+    const pages = await renderPages(xml, { paper, part, zoom, scale: 100, onProgress: (t, f) => onProgress?.(label + t, base + span * f * 0.6) });
+    for (const [i, svg] of pages.entries()) {
+      onProgress?.(`${label}PDF-Seite ${i + 1} von ${pages.length}`, base + span * (0.6 + (0.4 * i) / pages.length));
+      await tick();
       const c = await svgToCanvas(svg, Math.round(P.wMm * 9.84));
       if (!first) pdf.addPage();
       first = false;

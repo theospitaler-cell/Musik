@@ -1,10 +1,11 @@
 // NoteCode – App-Steuerung (Oberfläche).
-import { DEMOS } from '../demos.js';
 import { INSTRUMENTS, PRESETS, FAMILIES, writtenRangeChoices } from '../arrange/instruments.js';
 import { DIFFICULTY_LEVELS } from '../arrange/difficulty.js';
 import { STYLE_LIST } from '../arrange/styles.js';
 import { loadSong, detectFormat } from '../input/index.js';
 import { arrange } from '../arrange/engine.js';
+import { playAlongSources, defaultPlayParts } from '../arrange/playalong.js';
+import { decodeAudio, analyzeAudio } from './audio-import.js';
 import { exportMusicXML } from '../output/musicxml.js';
 import { exportMidi } from '../output/midi.js';
 import { buildPlan, planMarkdown } from '../output/report.js';
@@ -22,6 +23,7 @@ const VOICE_COLORS = ['#1f3a5f', '#4f6d8f', '#8a6a2f', '#5b5f66', '#2f7d4f'];
 const STYLE_TAG = { funk: 'Funk', secondline: 'New Orleans', swing: 'Jazz', ballad: 'Pop', classical: 'Klassik', polka: 'Blasmusik' };
 
 const S = {
+  audioUrl: null,
   settings: null,
   library: null,
   local: null,
@@ -52,6 +54,48 @@ function toast(msg, kind = '') {
     t.style.transform = 'translateX(16px)';
     setTimeout(() => t.remove(), 320);
   }, kind === 'error' ? 5200 : 2600);
+}
+
+// ---------------------------------------------------------------- Fortschritt
+// Eine Anzeige für alles, was dauert: Datei lesen, Audio analysieren, Arrangieren,
+// Noten setzen, Exportieren. Ein neuer Vorgang übernimmt die Anzeige.
+let progressJob = 0;
+function progress(title) {
+  const id = ++progressJob;
+  const box = $('#progress');
+  $('#pg-title').textContent = title;
+  $('#pg-text').textContent = '';
+  box.classList.remove('hidden');
+  const api = {
+    set(text, frac = null) {
+      if (id !== progressJob) return api;
+      if (text !== undefined && text !== null) $('#pg-text').textContent = text;
+      const ind = frac === null || frac === undefined;
+      box.classList.toggle('indeterminate', ind);
+      $('#pg-fill').style.width = ind ? '' : `${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%`;
+      $('#pg-pct').textContent = ind ? '' : `${Math.round(Math.max(0, Math.min(1, frac)) * 100)} %`;
+      return api;
+    },
+    title(t) {
+      if (id === progressJob) $('#pg-title').textContent = t;
+      return api;
+    },
+    done() {
+      if (id === progressJob) box.classList.add('hidden');
+    },
+  };
+  return api.set('', 0);
+}
+const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+
+function readFileWithProgress(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    fr.onload = () => resolve(new Uint8Array(fr.result));
+    fr.onerror = () => reject(fr.error || new Error('Datei konnte nicht gelesen werden'));
+    fr.readAsArrayBuffer(file);
+  });
 }
 
 function download(name, data, mime = 'application/octet-stream') {
@@ -89,11 +133,14 @@ function b64ToBytes(b64) {
 
 function serializeSource(src) {
   if (!src) return null;
+  // Audio: die Analyse wird gespeichert (synchronisiert), die Aufnahme selbst nur lokal
+  if (src.format === 'audio') return { name: src.name, format: 'audio', audioId: src.audioId, song: src.song };
   if (typeof src.data === 'string') return { name: src.name, format: src.format, text: src.data, melodyPart: src.melodyPart ?? null };
   return { name: src.name, format: src.format, b64: bytesToB64(new Uint8Array(src.data)), melodyPart: src.melodyPart ?? null };
 }
 function deserializeSource(s) {
   if (!s) return null;
+  if (s.format === 'audio') return { ...s };
   return { name: s.name, format: s.format, data: s.text ?? b64ToBytes(s.b64), melodyPart: s.melodyPart ?? null };
 }
 
@@ -250,11 +297,99 @@ function renderSoloGrid() {
   box.appendChild(slot);
 }
 
+// ---------------------------------------------------------------- Solo: Playback
+function setPlayback(on) {
+  S.opts.playback = !!on;
+  updatePlaybackUi();
+}
+function updatePlaybackUi() {
+  const on = !!S.opts.playback;
+  $('#opt-playback').checked = on;
+  const pb = S.opts.ensemble === 'solo' && on;
+  $('#solo-free').classList.toggle('hidden', on);
+  $('#solo-playback').classList.toggle('hidden', !on);
+  $$('.free-only').forEach((el) => el.classList.toggle('hidden', pb));
+  $$('.playback-only').forEach((el) => el.classList.toggle('hidden', !pb));
+  $('#generate span').textContent = pb ? 'Playback-Noten erstellen' : 'Arrangement erstellen';
+  if (pb) renderPlaybackList();
+}
+
+// gewählte Stimmen in der Reihenfolge der Quellen (Melodie, Spuren, Schlagzeug)
+function currentPlayParts(sources) {
+  const ids = new Set(sources.map((x) => x.id));
+  let parts = (S.opts.playParts || []).filter((p) => ids.has(p.source));
+  if (!parts.length) parts = defaultPlayParts(S.opts).filter((p) => ids.has(p.source));
+  return sources.map((src) => parts.find((p) => p.source === src.id)).filter(Boolean);
+}
+
+function renderPlaybackList() {
+  const box = $('#pb-list');
+  box.innerHTML = '';
+  if (!S.song) {
+    box.innerHTML = '<div class="pb-empty">Lade zuerst einen Song – dann erscheinen hier seine Stimmen (Gesang, Bass, Gitarre, Schlagzeug …) zur Auswahl.</div>';
+    $('#pb-fills-row').classList.add('hidden');
+    return;
+  }
+  const sources = playAlongSources(S.song);
+  const parts = currentPlayParts(sources);
+  S.opts.playParts = parts;
+  const setParts = (next) => {
+    S.opts.playParts = sources.map((src) => next.find((p) => p.source === src.id)).filter(Boolean);
+    // Stimmen-Reihenfolge ändert sich -> Feineinstellungen zurücksetzen
+    S.opts.voiceDifficulty = [];
+    S.opts.ranges = [];
+    renderPlaybackList();
+  };
+  const melodic = parts.filter((p) => p.inst !== 'drums');
+  for (const src of sources) {
+    const part = parts.find((p) => p.source === src.id);
+    const row = document.createElement('div');
+    row.className = 'pb-item' + (part ? ' on' : '');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!part;
+    cb.title = 'Diese Stimme übernehmen';
+    const name = document.createElement('div');
+    name.className = 'pb-name';
+    name.innerHTML = `${src.name}${src.count ? `<small>${src.count} ${src.kind === 'drums' ? 'Schläge' : 'Noten'}</small>` : ''}`;
+    row.append(cb, name);
+    const defInst = src.kind === 'drums' ? 'drums' : src.suggest || (S.opts.soloInstrument !== 'drums' ? S.opts.soloInstrument : null) || 'trumpet';
+    cb.addEventListener('change', () => {
+      const others = parts.filter((p) => p.source !== src.id);
+      setParts(cb.checked ? [...others, { source: src.id, inst: defInst }] : others);
+    });
+    const target = document.createElement('div');
+    target.className = 'pb-target';
+    if (src.kind === 'drums') {
+      target.innerHTML = '<span>→ Schlagzeug (Drum-Chart)</span>';
+    } else {
+      const lab = document.createElement('span');
+      lab.textContent = '→';
+      const sel = instrumentSelect(part ? part.inst : defInst, (v) => {
+        const next = parts.filter((p) => p.source !== src.id);
+        next.push({ source: src.id, inst: v });
+        if (S.opts.ranges) S.opts.ranges[melodic.findIndex((p) => p.source === src.id)] = null;
+        setParts(next);
+      });
+      sel.disabled = !part;
+      target.append(lab, sel);
+    }
+    row.appendChild(target);
+    if (part) {
+      const idx = part.inst === 'drums' ? melodic.length : melodic.indexOf(part);
+      voiceExtras(row, idx, part.inst);
+    }
+    box.appendChild(row);
+  }
+  $('#pb-fills-row').classList.toggle('hidden', !parts.some((p) => p.inst === 'drums'));
+}
+
 function setEnsemble(ens) {
   S.opts.ensemble = ens;
   $$('#ensemble-tabs .seg').forEach((b) => b.classList.toggle('active', b.dataset.ens === ens));
   $$('.ens-panel').forEach((p) => p.classList.toggle('active', p.dataset.enspanel === ens));
   const solo = ens === 'solo';
+  updatePlaybackUi();
   $('#solo-label').textContent = solo ? 'Solo-Teil' : 'Hauptsolo';
   const sel = $('#opt-solo');
   const prev = sel.value;
@@ -312,7 +447,7 @@ function readOpts() {
     style: S.opts.style,
     drums: $('#opt-drums').checked,
     solo: solo === 'rotate' || solo === 'none' ? solo : Number(solo),
-    length: $('#opt-length').value,
+    length: 'normal', // immer ca. Originallänge
     adapt: Number($('#opt-adapt').value),
     form: $('#opt-form').value,
     tempo,
@@ -323,6 +458,9 @@ function readOpts() {
     difficulty: $('#opt-difficulty').value === 'auto' ? 'auto' : Number($('#opt-difficulty').value),
     voiceDifficulty: [...(S.opts.voiceDifficulty || [null, null, null, null])],
     ranges: [...(S.opts.ranges || [null, null, null, null])],
+    playback: !!S.opts.playback,
+    playParts: S.opts.playParts ? S.opts.playParts.map((p) => ({ ...p })) : null,
+    drumFills: $('#opt-fills').checked,
   };
 }
 
@@ -343,7 +481,7 @@ function applyOptsToUi(o) {
   difficultyOptions($('#opt-difficulty'), S.opts.difficulty ?? 'auto');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
   $('#opt-drums').checked = !!o.drums;
-  $('#opt-length').value = o.length || 'normal';
+  $('#opt-fills').checked = o.drumFills !== false;
   $('#opt-adapt').value = String(o.adapt ?? 1);
   $('#opt-form').value = o.form || 'compact';
   $('#opt-tempo').value = o.tempo || '';
@@ -401,31 +539,42 @@ function renderStyles() {
 }
 
 // ---------------------------------------------------------------- Vorlage
-function renderDemos() {
-  const box = $('#demo-list');
-  box.innerHTML = '';
-  for (const d of DEMOS) {
-    const b = document.createElement('button');
-    b.className = 'demo';
-    b.dataset.demo = d.id;
-    b.innerHTML = `<strong>${d.title}</strong><span>${d.info}</span>`;
-    b.addEventListener('click', () => setSource({ name: `${d.id}.abc`, format: 'abc', data: d.abc }, b));
-    box.appendChild(b);
-  }
-}
-
-async function setSource(src, demoBtn = null) {
+async function setSource(src) {
   try {
     const song = await loadSong(src);
     S.source = src;
     S.song = song;
-    $$('.demo').forEach((x) => x.classList.toggle('active', x === demoBtn));
+    await attachAudio(src);
     renderAnalysis();
     fillTransposeSelect();
     if (song.tempo) $('#opt-tempo').placeholder = `auto (${song.tempo})`;
+    $('#generate').disabled = false;
+    S.opts.playParts = null; // Stimmen gehören zum Song
+    if (S.opts.ensemble === 'solo' && S.opts.playback) renderPlaybackList();
+    return true;
   } catch (e) {
     console.error(e);
     toast('Vorlage konnte nicht gelesen werden: ' + e.message, 'error');
+    return false;
+  }
+}
+
+// Original-Aufnahme (nur lokal gespeichert) für das Playback bereitstellen
+async function attachAudio(src) {
+  if (S.audioUrl && S.audioFor !== src.audioId) {
+    URL.revokeObjectURL(S.audioUrl);
+    S.audioUrl = null;
+    S.audioFor = null;
+  }
+  if (src.format !== 'audio' || !src.audioId || S.audioUrl) return;
+  try {
+    const blob = await S.local.getKV(`audio:${src.audioId}`);
+    if (blob instanceof Blob) {
+      S.audioUrl = URL.createObjectURL(blob);
+      S.audioFor = src.audioId;
+    }
+  } catch {
+    /* Aufnahme nicht auf diesem Gerät */
   }
 }
 
@@ -442,8 +591,12 @@ function renderAnalysis() {
       .map((p) => `<option value="${p.index}" ${p.index === s.melodyPart ? 'selected' : ''}>${p.name} (${p.noteCount} Noten)</option>`)
       .join('')}</select></label>`;
   }
+  const extra = [];
+  if (s.source === 'audio') extra.push(`Aufnahme ${fmtTime(s.duration || 0)}`);
+  if (s.drumNotes && s.drumNotes.length) extra.push(s.source === 'audio' ? 'Schlagzeug erkannt' : 'mit Schlagzeug');
+  if (s.tracks && s.tracks.length > 1) extra.push(`${s.tracks.length} Spuren`);
   box.innerHTML = `<div class="a-title">${s.title}</div>
-    <div class="kv"><span>${keyNameDe(s.key)}${s.keyDetected ? ' (erkannt)' : ''}</span><span>${s.meter.beats}/${s.meter.beatType}</span><span>♩ ${s.tempo || '–'}</span><span>${s.measureCount} Takte${s.pickup ? ' + Auftakt' : ''}</span><span>Form ${form}</span><span>${chordInfo}</span></div>
+    <div class="kv"><span>${keyNameDe(s.key)}${s.keyDetected ? ' (erkannt)' : ''}</span><span>${s.meter.beats}/${s.meter.beatType}</span><span>♩ ${s.tempo || '–'}</span><span>${s.measureCount} Takte${s.pickup ? ' + Auftakt' : ''}</span><span>Form ${form}</span><span>${chordInfo}</span>${extra.map((x) => `<span>${x}</span>`).join('')}</div>
     ${partsHtml}
     ${(s.warnings || []).map((w) => `<div class="warn">⚠ ${w}</div>`).join('')}`;
   const mp = $('#melody-part');
@@ -451,11 +604,47 @@ function renderAnalysis() {
 }
 
 async function handleFile(file) {
-  const buf = new Uint8Array(await file.arrayBuffer());
-  const format = detectFormat(file.name, buf);
-  const data = format === 'abc' ? new TextDecoder().decode(buf) : buf;
-  await setSource({ name: file.name, format, data });
-  toast(`„${S.song?.title || file.name}“ geladen`, 'ok');
+  const pg = progress(`„${file.name}“ wird geladen`);
+  try {
+    const buf = await readFileWithProgress(file, (f) => pg.set(`Datei wird gelesen (${(file.size / 1048576).toFixed(1)} MB)`, f * 0.1));
+    const format = detectFormat(file.name, buf);
+    let ok;
+    if (format === 'audio') {
+      pg.title('Song wird analysiert').set('Audio wird dekodiert', null);
+      await nextFrame();
+      const decoded = await decodeAudio(buf);
+      const title = file.name.replace(/\.[^.]+$/, '');
+      const song = await analyzeAudio(decoded, { title, onProgress: (t, f) => pg.set(t, 0.12 + 0.86 * f) });
+      pg.set('Aufnahme wird gespeichert', 0.99);
+      const audioId = uuid();
+      const blob = new Blob([buf], { type: file.type || 'audio/mpeg' });
+      try {
+        await S.local.setKV(`audio:${audioId}`, blob);
+      } catch {
+        /* ohne IndexedDB: Aufnahme nur für diese Sitzung */
+      }
+      if (S.audioUrl) URL.revokeObjectURL(S.audioUrl);
+      S.audioUrl = URL.createObjectURL(blob);
+      S.audioFor = audioId;
+      ok = await setSource({ name: file.name, format: 'audio', audioId, song });
+    } else {
+      pg.set('Noten werden gelesen', 0.5);
+      await nextFrame();
+      const data = format === 'abc' ? new TextDecoder().decode(buf) : buf;
+      ok = await setSource({ name: file.name, format, data });
+    }
+    pg.set('Fertig', 1);
+    if (ok) toast(`„${S.song?.title || file.name}“ geladen`, 'ok');
+  } catch (e) {
+    console.error(e);
+    toast('Datei konnte nicht geladen werden: ' + e.message, 'error');
+  } finally {
+    setTimeout(() => pg.done(), 300);
+  }
+}
+
+function uuid() {
+  return crypto.randomUUID ? crypto.randomUUID() : 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
 // ---------------------------------------------------------------- Erzeugen
@@ -465,47 +654,62 @@ async function generate({ silent = false } = {}) {
     return;
   }
   const btn = $('#generate');
+  const label = btn.querySelector('span').textContent;
   btn.disabled = true;
-  btn.querySelector('span').textContent = 'Arrangiere …';
-  await new Promise((r) => setTimeout(r, 30));
+  btn.querySelector('span').textContent = 'Wird erstellt …';
+  const opts = readOpts();
+  const pb = opts.ensemble === 'solo' && opts.playback;
+  const pg = progress(pb ? 'Playback-Noten werden erstellt' : 'Arrangement wird erstellt');
+  pg.set(pb ? 'Stimmen werden 1:1 übernommen' : 'Form, Stimmen & Gegenstimmen werden geschrieben', 0.05);
+  await nextFrame();
   try {
-    const opts = readOpts();
     S.opts = { ...S.opts, ...opts };
     const t0 = performance.now();
     S.arr = arrange(S.song, opts);
     console.info(`Arrangement in ${Math.round(performance.now() - t0)} ms`);
+    pg.set('Notenbild wird vorbereitet', 0.3);
+    await nextFrame();
     S.printed = printedMeasures(S.arr);
     S.t2p = timelineToPrinted(S.arr, S.printed);
-    showResult();
+    await showResult((t, f) => pg.set(t, 0.3 + 0.7 * f));
+    pg.set('Fertig', 1);
     if (S.settings.autoSave && !silent) await saveCurrent(true);
   } catch (e) {
     console.error(e);
     toast('Fehler beim Arrangieren: ' + e.message, 'error');
   } finally {
     btn.disabled = false;
-    btn.querySelector('span').textContent = 'Arrangement erstellen';
+    btn.querySelector('span').textContent = label;
+    setTimeout(() => pg.done(), 250);
   }
 }
 
-function showResult() {
+async function showResult(onProgress = null) {
   const a = S.arr;
   $('#empty-state').classList.add('hidden');
   $('#result').classList.remove('hidden');
   $('#res-title').textContent = a.meta.title;
   const chips = [
-    [a.style.name, 'accent'],
+    [a.playAlong ? 'Playback 1:1' : a.style.name, 'accent'],
     [keyNameDe(a.key) + (a.transposeShift ? ` (${a.transposeShift > 0 ? '+' : ''}${a.transposeShift})` : ''), ''],
     [`♩ = ${a.tempo}`, ''],
     [`${S.printed.length} Takte gedruckt`, ''],
-    [a.soloMode ? `Solo · ${a.voices[0]?.inst.name || 'Schlagzeug'}` : a.voices.map((v) => v.inst.short).join(' · ') + (a.drums ? ' · Schlz.' : ''), ''],
+    [
+      a.playAlong
+        ? [...a.voices.map((v) => v.inst.short), ...(a.drums ? ['Schlagzeug'] : [])].join(' · ')
+        : a.soloMode
+          ? `Solo · ${a.voices[0]?.inst.name || 'Schlagzeug'}`
+          : a.voices.map((v) => v.inst.short).join(' · ') + (a.drums ? ' · Schlagzeug' : ''),
+      '',
+    ],
   ];
   $('#res-meta').innerHTML = chips.map(([t, c]) => `<span class="${c}">${t}</span>`).join('');
   // Ansichten
   const vt = $('#view-tabs');
   vt.innerHTML = '';
-  let views = [['score', 'Partitur'], ...a.voices.map((v, i) => [String(i), `${i + 1} · ${v.inst.short}`])];
-  if (a.drums) views.push(['drums', 'Schlz.']);
-  if (a.soloMode) views = a.voices.length ? [['0', `Solo · ${a.voices[0].inst.name}`]] : [['drums', 'Solo · Schlagzeug']];
+  let views = [['score', 'Partitur'], ...a.voices.map((v, i) => [String(i), a.playAlong ? `${v.inst.short} · ${v.label}` : `${i + 1} · ${v.inst.short}`])];
+  if (a.drums) views.push(['drums', 'Schlagzeug']);
+  if (a.soloMode && a.voices.length + (a.drums ? 1 : 0) === 1) views = a.voices.length ? [['0', `Solo · ${a.voices[0].inst.name}`]] : [['drums', 'Solo · Schlagzeug']];
   if (!views.some(([k]) => k === S.view)) S.view = views[0][0];
   for (const [k, t] of views) {
     const b = document.createElement('button');
@@ -518,29 +722,32 @@ function showResult() {
     });
     vt.appendChild(b);
   }
-  renderNotes();
   renderPlan();
   setupPlayer();
+  await renderNotes(onProgress);
 }
 
 function xmlFor(view) {
   const st = S.settings;
-  const chords = S.arr.soloMode && st.chords !== 'none' ? 'all' : st.chords;
+  const chords = S.arr.soloMode && !S.arr.playAlong && st.chords !== 'none' ? 'all' : st.chords;
   const tenorClef = st.tenorClef;
   if (view === 'score') return exportMusicXML(S.arr, { mode: 'score', concert: st.concertScore, paper: st.paper, chords, tenorClef });
   if (view === 'drums') return exportMusicXML(S.arr, { mode: 'part', partIndex: 'drums', paper: st.paper });
   return exportMusicXML(S.arr, { mode: 'part', partIndex: Number(view), paper: st.paper, chords, tenorClef });
 }
 
-async function renderNotes() {
+async function renderNotes(onProgress = null) {
   const token = ++S.renderToken;
   const box = $('#pages');
   box.querySelectorAll('.page').forEach((p) => p.remove());
   const loader = $('#loader');
   loader.classList.add('on');
+  // eigener Fortschritt, wenn nicht Teil eines größeren Vorgangs
+  const own = onProgress ? null : progress('Noten werden gesetzt');
+  const report = onProgress || ((t, f) => own.set(t, f));
   try {
     const xml = xmlFor(S.view);
-    const pages = await renderPages(xml, { paper: S.settings.paper, part: S.view !== 'score', zoom: S.zoom * S.settings.notesZoom, scale: 100 });
+    const pages = await renderPages(xml, { paper: S.settings.paper, part: S.view !== 'score', zoom: S.zoom * S.settings.notesZoom, scale: 100, onProgress: (t, f) => token === S.renderToken && report(t, f) });
     if (token !== S.renderToken) return;
     loader.classList.remove('on');
     box.style.setProperty('--zoom', S.view === 'score' ? 1.15 : 1);
@@ -551,7 +758,9 @@ async function renderNotes() {
       box.appendChild(div);
     }
     S.measureEls = $$('g.measure', box);
+    own?.done();
   } catch (e) {
+    own?.done();
     loader.classList.remove('on');
     console.error(e);
     const div = document.createElement('div');
@@ -585,14 +794,17 @@ function renderPlan() {
 function setupPlayer() {
   const prevMix = S.player ? S.player.parts.map((p) => ({ key: String(p.key), volume: p.volume, mute: p.mute, solo: p.solo, pan: p.pan })) : null;
   if (S.player) S.player.dispose();
+  const wantsAudio = S.arr.backing?.kind === 'audio';
   S.player = new Player(S.arr, {
     onPosition: (sec, bar) => updatePosition(sec, bar),
     onEnd: () => setPlayIcon(false),
+    audioUrl: wantsAudio ? S.audioUrl : null,
   });
+  if (wantsAudio && !S.audioUrl) toast('Die Original-Aufnahme liegt nur auf dem Gerät, auf dem sie geladen wurde – zum Mitspielen die Datei hier erneut laden.', 'error');
   if (prevMix)
     for (const m of prevMix) {
       const p = S.player.part(m.key);
-      if (p && p.inst?.id === S.player.part(m.key)?.inst?.id) Object.assign(p, { volume: m.volume, mute: m.mute, solo: m.solo, pan: m.pan });
+      if (p) Object.assign(p, { volume: m.volume, mute: m.mute, solo: m.solo, pan: m.pan });
     }
   $('#player').classList.remove('hidden');
   $('#p-total').textContent = fmtTime(S.player.duration);
@@ -633,7 +845,8 @@ function renderMixer() {
   S.player.parts.forEach((p, i) => {
     const el = document.createElement('div');
     el.className = 'strip';
-    el.innerHTML = `<div class="s-name" style="color:${VOICE_COLORS[i]}">${p.key === 'drums' ? 'Schlagzeug' : `Stimme ${i + 1}`}<div class="s-sub">${p.inst ? p.inst.name : 'Drums'}</div></div>
+    const color = p.orig ? 'var(--brass)' : VOICE_COLORS[i % VOICE_COLORS.length];
+    el.innerHTML = `<div class="s-name" style="color:${color}" title="${p.name}">${p.title}<div class="s-sub">${p.sub}</div></div>
       <input class="vol" type="range" min="0" max="100" value="${Math.round(p.volume * 100)}" aria-label="Lautstärke">
       <div class="ms"><button class="m ${p.mute ? 'on' : ''}" title="Stumm">M</button><button class="s ${p.solo ? 'on' : ''}" title="Solo">S</button></div>
       <input class="pan" type="range" min="-100" max="100" value="${Math.round(p.pan * 100)}" title="Panorama" aria-label="Panorama">`;
@@ -669,12 +882,17 @@ async function doExport(kind) {
   if (!a) return;
   const base = safeName(a.meta.title);
   const st = S.settings;
-  const partName = (i) => `Stimme_${i + 1}_${safeName(a.voices[i].inst.name)}`;
+  const single = a.soloMode && a.voices.length + (a.drums ? 1 : 0) === 1;
+  const partName = (i) => (a.playAlong ? `${safeName(a.voices[i].label)}_${safeName(a.voices[i].inst.name)}` : single ? `Solo_${safeName(a.voices[i].inst.name)}` : `Stimme_${i + 1}_${safeName(a.voices[i].inst.name)}`);
+  const pg = progress('Export wird erstellt');
+  const onProgress = (t, f) => pg.set(t, f);
   try {
-    toast('Export wird erstellt …');
+    await nextFrame();
     if (kind === 'mscz-zip') {
-      const files = a.soloMode ? [] : [{ name: `${base}_Partitur.musicxml`, data: xmlFor('score') }];
-      a.voices.forEach((_, i) => files.push({ name: `${base}_${a.soloMode ? 'Solo_' + safeName(a.voices[i].inst.name) : partName(i)}.musicxml`, data: xmlFor(String(i)) }));
+      pg.set('MusicXML-Dateien werden geschrieben', 0.2);
+      await nextFrame();
+      const files = single ? [] : [{ name: `${base}_Partitur.musicxml`, data: xmlFor('score') }];
+      a.voices.forEach((_, i) => files.push({ name: `${base}_${partName(i)}.musicxml`, data: xmlFor(String(i)) }));
       if (a.drums) files.push({ name: `${base}_Schlagzeug.musicxml`, data: exportMusicXML(a, { mode: 'part', partIndex: 'drums', paper: st.paper }) });
       files.push({ name: `${base}.mid`, data: exportMidi(a) });
       files.push({ name: `${base}_Regieplan.md`, data: planMarkdown(a) });
@@ -682,15 +900,15 @@ async function doExport(kind) {
     } else if (kind === 'xml-current') {
       download(`${base}_${viewLabel()}.musicxml`, xmlFor(S.view), 'application/vnd.recordare.musicxml+xml');
     } else if (kind === 'pdf-current') {
-      const pdf = await xmlsToPdf([{ xml: xmlFor(S.view), part: S.view !== 'score' }], { paper: st.paper, zoom: st.notesZoom, title: a.meta.title });
+      const pdf = await xmlsToPdf([{ xml: xmlFor(S.view), part: S.view !== 'score' }], { paper: st.paper, zoom: st.notesZoom, title: a.meta.title, onProgress });
       download(`${base}_${viewLabel()}.pdf`, pdf, 'application/pdf');
     } else if (kind === 'pdf-all') {
-      const list = [...(a.soloMode ? [] : [{ xml: xmlFor('score'), part: false }]), ...a.voices.map((_, i) => ({ xml: xmlFor(String(i)), part: true }))];
-      if (a.drums) list.push({ xml: xmlFor('drums'), part: true });
-      const pdf = await xmlsToPdf(list, { paper: st.paper, zoom: st.notesZoom, title: a.meta.title });
+      const list = [...(single ? [] : [{ xml: xmlFor('score'), part: false, name: 'Partitur' }]), ...a.voices.map((v, i) => ({ xml: xmlFor(String(i)), part: true, name: v.inst.name }))];
+      if (a.drums) list.push({ xml: xmlFor('drums'), part: true, name: 'Schlagzeug' });
+      const pdf = await xmlsToPdf(list, { paper: st.paper, zoom: st.notesZoom, title: a.meta.title, onProgress });
       download(`${base}_komplett.pdf`, pdf, 'application/pdf');
     } else if (kind === 'png-current') {
-      const pngs = await pagesToPngs(xmlFor(S.view), { paper: st.paper, part: S.view !== 'score', zoom: st.notesZoom });
+      const pngs = await pagesToPngs(xmlFor(S.view), { paper: st.paper, part: S.view !== 'score', zoom: st.notesZoom, onProgress });
       if (pngs.length === 1) download(`${base}_${viewLabel()}.png`, pngs[0], 'image/png');
       else download(`${base}_${viewLabel()}_Bilder.zip`, zip(pngs.map((d, i) => ({ name: `${base}_${viewLabel()}_Seite_${i + 1}.png`, data: d }))), 'application/zip');
     } else if (kind === 'midi') {
@@ -698,9 +916,12 @@ async function doExport(kind) {
     } else if (kind === 'plan') {
       download(`${base}_Regieplan.md`, planMarkdown(a), 'text/markdown');
     }
+    pg.set('Fertig', 1);
   } catch (e) {
     console.error(e);
     toast('Export fehlgeschlagen: ' + e.message, 'error');
+  } finally {
+    setTimeout(() => pg.done(), 400);
   }
 }
 
@@ -708,8 +929,10 @@ function viewLabel() {
   if (S.view === 'score') return 'Partitur';
   if (S.view === 'drums') return 'Schlagzeug';
   const i = Number(S.view);
-  if (S.arr.soloMode) return `Solo_${safeName(S.arr.voices[i].inst.name)}`;
-  return `Stimme_${i + 1}_${safeName(S.arr.voices[i].inst.name)}`;
+  const v = S.arr.voices[i];
+  if (S.arr.playAlong) return `${safeName(v.label)}_${safeName(v.inst.name)}`;
+  if (S.arr.soloMode) return `Solo_${safeName(v.inst.name)}`;
+  return `Stimme_${i + 1}_${safeName(v.inst.name)}`;
 }
 
 // ---------------------------------------------------------------- Bibliothek
@@ -721,7 +944,15 @@ async function saveCurrent(auto = false) {
     title: a.meta.title,
     source: serializeSource(S.source),
     options: S.opts,
-    summary: { style: a.style.name, styleId: a.style.id, voices: a.soloMode ? [`Solo: ${a.voices[0]?.inst.name || 'Schlagzeug'}`] : a.voices.map((v) => v.inst.name), drums: !!a.drums && !a.soloMode, key: keyNameDe(a.key), bars: S.printed.length, tempo: a.tempo },
+    summary: {
+      style: a.playAlong ? 'Playback 1:1' : a.style.name,
+      styleId: a.style.id,
+      voices: a.playAlong ? [...a.voices.map((v) => `${v.label} → ${v.inst.name}`), ...(a.drums ? ['Schlagzeug'] : [])] : a.soloMode ? [`Solo: ${a.voices[0]?.inst.name || 'Schlagzeug'}`] : a.voices.map((v) => v.inst.name),
+      drums: !!a.drums && !a.soloMode,
+      key: keyNameDe(a.key),
+      bars: S.printed.length,
+      tempo: a.tempo,
+    },
   };
   const saved = await S.library.save(item);
   S.currentId = saved.id;
@@ -776,7 +1007,6 @@ function renderSettings() {
   ss.innerHTML = STYLE_LIST.map((s) => `<option value="${s.id}">${s.name}</option>`).join('');
   ss.value = st.defaultStyle;
   fillSoloSelect($('#set-solo'), st.defaultVoices, st.defaultSolo);
-  $('#set-length').value = st.defaultLength;
   difficultyOptions($('#set-difficulty'), st.defaultDifficulty ?? 'auto');
   $('#set-form').value = st.form;
   $('#set-drums').checked = st.defaultDrums;
@@ -804,7 +1034,6 @@ function bindSettings() {
   const on = (id, fn, ev = 'change') => $(id).addEventListener(ev, fn);
   on('#set-style', (e) => update({ defaultStyle: e.target.value }));
   on('#set-solo', (e) => update({ defaultSolo: /\d/.test(e.target.value) ? Number(e.target.value) : e.target.value }));
-  on('#set-length', (e) => update({ defaultLength: e.target.value }));
   on('#set-difficulty', (e) => update({ defaultDifficulty: e.target.value === 'auto' ? 'auto' : Number(e.target.value) }));
   on('#set-form', (e) => update({ form: e.target.value }));
   on('#set-drums', (e) => update({ defaultDrums: e.target.checked }));
@@ -1000,8 +1229,10 @@ async function main() {
     difficulty: S.settings.defaultDifficulty ?? 'auto',
     voiceDifficulty: [null, null, null, null],
     ranges: [null, null, null, null],
+    playback: false,
+    playParts: null,
+    drumFills: true,
   };
-  renderDemos();
   renderPresets();
   applyOptsToUi(S.opts);
   bindSettings();
@@ -1033,10 +1264,27 @@ async function main() {
   ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => (e.preventDefault(), dz.classList.add('over'))));
   ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => (e.preventDefault(), dz.classList.remove('over'))));
   dz.addEventListener('drop', (e) => e.dataTransfer.files[0] && handleFile(e.dataTransfer.files[0]));
-  $('#abc-input').value = DEMOS[1].abc;
-  $('#abc-load').addEventListener('click', () => setSource({ name: 'eingabe.abc', format: 'abc', data: $('#abc-input').value }));
-  // Demo vorauswählen
-  setSource({ name: `${DEMOS[0].id}.abc`, format: 'abc', data: DEMOS[0].abc }, $('.demo'));
+  $('#abc-load').addEventListener('click', async () => {
+    const text = $('#abc-input').value.trim();
+    if (!text) return toast('Bitte zuerst ABC-Noten eingeben.', 'error');
+    if (await setSource({ name: 'eingabe.abc', format: 'abc', data: text })) toast(`„${S.song.title}“ übernommen`, 'ok');
+  });
+  // Solo: Playback
+  $('#opt-playback').addEventListener('change', (e) => setPlayback(e.target.checked));
+  $('#pb-all').addEventListener('click', () => {
+    if (!S.song) return;
+    const src = playAlongSources(S.song);
+    S.opts.playParts = src.map((x) => ({ source: x.id, inst: x.kind === 'drums' ? 'drums' : x.suggest || (S.opts.soloInstrument !== 'drums' ? S.opts.soloInstrument : 'trumpet') }));
+    S.opts.voiceDifficulty = [];
+    S.opts.ranges = [];
+    renderPlaybackList();
+  });
+  $('#pb-melody').addEventListener('click', () => {
+    S.opts.playParts = [{ source: 'melody', inst: S.opts.soloInstrument !== 'drums' ? S.opts.soloInstrument : 'trumpet' }];
+    S.opts.voiceDifficulty = [];
+    S.opts.ranges = [];
+    renderPlaybackList();
+  });
 
   // Erzeugen
   $('#generate').addEventListener('click', () => {

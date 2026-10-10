@@ -162,7 +162,7 @@ export function arrangePlayAlong(song, opts) {
     let line = cleanLine(mel.map((n) => ev(n.start + off, n.dur, n.midi + octave, n.lof ?? null)));
     articulate(ctx, line, inst);
     line = line.map((e) => ({ ...e, role: 'melody' }));
-    voices.push({ inst, events: line, dirs: [], label: srcName(p.source), source: p.source });
+    voices.push({ inst, events: line, dirs: [], label: srcName(p.source).replace(/\s*\((erkannt|Melodie)\)$/, ''), source: p.source });
     if (octave) notes.push(`${srcName(p.source)} → ${inst.name}: um ${Math.abs(octave / 12)} Oktave${Math.abs(octave) > 12 ? 'n' : ''} ${octave > 0 ? 'höher' : 'tiefer'} gesetzt (gleiche Töne wie die Vorlage).`);
   });
 

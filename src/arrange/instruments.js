@@ -29,64 +29,64 @@ const I = (o) => ({
   breath: 10,
   fx: [],
   bassCapable: false,
-  midiProgram: 57,
+  midiProgram: 56,
   ...o,
 });
 
 export const INSTRUMENTS = {
   trumpet: I({
     id: 'trumpet', name: 'Trompete in B', short: 'Trp.', family: 'brass',
-    range: [54, 82], comfort: [57, 77], transpose: { semis: 2, lof: 2 }, breath: 9, midiProgram: 57,
+    range: [54, 82], comfort: [57, 77], transpose: { semis: 2, lof: 2 }, breath: 9, midiProgram: 56,
     fx: ['falloff', 'doit', 'scoop', 'shake', 'plop', 'mute:Cup Mute', 'mute:Harmon Mute', 'mute:Straight Mute'],
   }),
   cornet: I({
     id: 'cornet', name: 'Kornett in B', short: 'Kor.', family: 'brass',
-    range: [54, 80], comfort: [57, 76], transpose: { semis: 2, lof: 2 }, breath: 9, midiProgram: 57,
+    range: [54, 80], comfort: [57, 76], transpose: { semis: 2, lof: 2 }, breath: 9, midiProgram: 56,
     fx: ['falloff', 'doit', 'scoop', 'shake', 'mute:Cup Mute'],
   }),
   flugelhorn: I({
     id: 'flugelhorn', name: 'Flügelhorn in B', short: 'Flhn.', family: 'brass',
-    range: [52, 77], comfort: [55, 74], transpose: { semis: 2, lof: 2 }, breath: 9, midiProgram: 57,
+    range: [52, 77], comfort: [55, 74], transpose: { semis: 2, lof: 2 }, breath: 9, midiProgram: 56,
     fx: ['falloff', 'scoop', 'doit'],
   }),
   horn: I({
     id: 'horn', name: 'Horn in F', short: 'Hn.', family: 'brass',
-    range: [41, 77], comfort: [48, 72], transpose: { semis: 7, lof: 1 }, breath: 9, midiProgram: 61,
+    range: [41, 77], comfort: [48, 72], transpose: { semis: 7, lof: 1 }, breath: 9, midiProgram: 60,
     fx: ['rip', 'stopped', 'scoop', 'falloff'],
   }),
   tenorhorn: I({
     id: 'tenorhorn', name: 'Tenorhorn in B', short: 'Thn.', family: 'brass',
-    range: [40, 70], comfort: [45, 66], transpose: { semis: 14, lof: 2 }, breath: 9, midiProgram: 58, bassCapable: true,
+    range: [40, 70], comfort: [45, 66], transpose: { semis: 14, lof: 2 }, breath: 9, midiProgram: 57, bassCapable: true,
     fx: ['falloff', 'scoop'],
   }),
   baritoneTC: I({
     id: 'baritoneTC', name: 'Bariton in B (Violinschl.)', short: 'Bar.', family: 'brass',
-    range: [40, 70], comfort: [43, 66], transpose: { semis: 14, lof: 2 }, breath: 9, midiProgram: 58, bassCapable: true,
+    range: [40, 70], comfort: [43, 66], transpose: { semis: 14, lof: 2 }, breath: 9, midiProgram: 57, bassCapable: true,
     fx: ['falloff', 'scoop'],
   }),
   euphonium: I({
     id: 'euphonium', name: 'Euphonium', short: 'Euph.', family: 'brass', clef: 'F4', highClef: 'C4',
-    range: [40, 72], comfort: [43, 67], breath: 9, midiProgram: 58, bassCapable: true,
+    range: [40, 72], comfort: [43, 67], breath: 9, midiProgram: 57, bassCapable: true,
     fx: ['falloff', 'scoop'],
   }),
   trombone: I({
     id: 'trombone', name: 'Posaune', short: 'Pos.', family: 'brass', clef: 'F4', highClef: 'C4',
-    range: [40, 72], comfort: [43, 67], breath: 8, midiProgram: 58, bassCapable: true,
+    range: [40, 72], comfort: [43, 67], breath: 8, midiProgram: 57, bassCapable: true,
     fx: ['gliss', 'falloff', 'doit', 'scoop', 'mute:Plunger', 'mute:Cup Mute', 'pedal'],
   }),
   bassTrombone: I({
     id: 'bassTrombone', name: 'Bassposaune', short: 'B.-Pos.', family: 'brass', clef: 'F4',
-    range: [31, 67], comfort: [36, 62], breath: 7, midiProgram: 58, bassCapable: true,
+    range: [31, 67], comfort: [36, 62], breath: 7, midiProgram: 57, bassCapable: true,
     fx: ['gliss', 'falloff', 'pedal'],
   }),
   tuba: I({
     id: 'tuba', name: 'Tuba', short: 'Tb.', family: 'brass', clef: 'F4',
-    range: [28, 60], comfort: [31, 55], breath: 6, midiProgram: 59, bassCapable: true,
+    range: [28, 60], comfort: [31, 55], breath: 6, midiProgram: 58, bassCapable: true,
     fx: ['falloff'],
   }),
   sousaphone: I({
     id: 'sousaphone', name: 'Sousaphon', short: 'Sous.', family: 'brass', clef: 'F4',
-    range: [28, 60], comfort: [33, 55], breath: 6, midiProgram: 59, bassCapable: true,
+    range: [28, 60], comfort: [33, 55], breath: 6, midiProgram: 58, bassCapable: true,
     fx: ['falloff', 'scoop'],
   }),
   sopranoSax: I({

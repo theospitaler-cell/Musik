@@ -20,7 +20,27 @@ function profileFor(inst) {
   return 'brass';
 }
 
+// Original-Spuren (Play-along): Klang nach General-MIDI-Programm
+function profileForProgram(p) {
+  if (p <= 7) return 'piano';
+  if (p >= 16 && p <= 23) return 'organ';
+  if (p >= 24 && p <= 31) return 'guitar';
+  if (p >= 32 && p <= 39) return 'bass';
+  if (p >= 40 && p <= 55) return 'strings';
+  if (p >= 56 && p <= 63) return 'brass';
+  if (p >= 64 && p <= 71) return 'sax';
+  if (p >= 72 && p <= 79) return 'flute';
+  return 'pad';
+}
+
+// GM-Percussion -> Klangmodell
+const DRUM_SYNTH = { 35: 36, 40: 38, 39: 38, 43: 41, 47: 45, 50: 48, 52: 49, 55: 49, 57: 49, 53: 51, 59: 51 };
+
 const PROFILES = {
+  piano: { types: ['triangle', 'square'], cutoff: [900, 3800], q: 0.6, attack: 0.004, release: 0.25, vibrato: 0, level: 0.14, pluck: true },
+  guitar: { types: ['sawtooth'], cutoff: [700, 2600], q: 1.4, attack: 0.004, release: 0.15, vibrato: 0, level: 0.12, pluck: true },
+  organ: { types: ['square', 'sine'], cutoff: [1200, 2400], q: 0.5, attack: 0.02, release: 0.06, vibrato: 0, level: 0.1 },
+  pad: { types: ['sawtooth', 'triangle'], cutoff: [600, 1600], q: 0.5, attack: 0.12, release: 0.3, vibrato: 0, level: 0.1, detune: 9 },
   brass: { types: ['sawtooth'], cutoff: [700, 4200], q: 1.2, attack: 0.03, release: 0.07, vibrato: 0, level: 0.22 },
   lowbrass: { types: ['sawtooth'], cutoff: [300, 1500], q: 0.9, attack: 0.035, release: 0.08, vibrato: 0, level: 0.3 },
   horn: { types: ['triangle', 'sawtooth'], cutoff: [500, 1800], q: 0.7, attack: 0.05, release: 0.12, vibrato: 0, level: 0.26 },
@@ -33,7 +53,8 @@ const PROFILES = {
 };
 
 export class Player {
-  constructor(arr, { onPosition = null, onEnd = null } = {}) {
+  // audioUrl: Original-Aufnahme (Play-along mit MP3 usw.)
+  constructor(arr, { onPosition = null, onEnd = null, audioUrl = null } = {}) {
     this.arr = arr;
     this.perf = performArrangement(arr);
     this.onPosition = onPosition;
@@ -43,8 +64,31 @@ export class Player {
     this.speed = 1;
     this.offset = 0; // Position in Sekunden (Partiturzeit)
     this.cursor = 0;
-    this.parts = arr.voices.map((v, i) => ({ key: i, name: `${v.label} – ${v.inst.name}`, short: v.inst.short, inst: v.inst, volume: 0.8, mute: false, solo: false, pan: [-0.45, -0.15, 0.15, 0.45][i] }));
-    if (arr.drums) this.parts.push({ key: 'drums', name: 'Schlagzeug', short: 'Schlz.', inst: null, volume: 0.7, mute: false, solo: false, pan: 0 });
+    const n = arr.voices.length;
+    const pan = (i) => (n <= 1 ? 0 : n === 4 ? [-0.45, -0.15, 0.15, 0.45][i] : -0.5 + i / (n - 1));
+    this.parts = arr.voices.map((v, i) => ({
+      key: i,
+      title: arr.playAlong ? v.label : arr.soloMode ? 'Solo' : `Stimme ${i + 1}`,
+      sub: v.inst.name,
+      name: `${v.label} – ${v.inst.name}`,
+      short: v.inst.short,
+      inst: v.inst,
+      volume: 0.8,
+      mute: false,
+      solo: false,
+      pan: pan(i),
+    }));
+    if (arr.drums) this.parts.push({ key: 'drums', title: 'Schlagzeug', sub: arr.playAlong ? 'Noten' : 'Drums', name: 'Schlagzeug', short: 'Schlz.', inst: null, drum: true, volume: 0.7, mute: false, solo: false, pan: 0 });
+    // Original zum Mitspielen
+    this.audioUrl = audioUrl;
+    const bk = arr.backing;
+    if (bk) {
+      for (const ch of bk.channels || []) {
+        const isAudio = bk.kind === 'audio';
+        if (isAudio && !audioUrl) continue;
+        this.parts.push({ key: ch.key, title: ch.name.replace(/^Original: /, ''), sub: isAudio ? 'Aufnahme' : 'Original', name: ch.name, inst: null, orig: true, audio: isAudio, drum: !!ch.drum, volume: isAudio ? 0.85 : 0.6, mute: false, solo: false, pan: 0 });
+      }
+    }
     this.master = 0.9;
   }
 
@@ -72,7 +116,45 @@ export class Player {
       } else p.gain.connect(this.out);
     }
     this.noise = this.makeNoise();
+    // Aufnahme über ein Media-Element (Tempo-Regler ohne Tonhöhenänderung)
+    const ap = this.parts.find((p) => p.audio);
+    if (ap && this.audioUrl) {
+      const el = new Audio();
+      el.src = this.audioUrl;
+      el.preload = 'auto';
+      el.preservesPitch = true;
+      el.mozPreservesPitch = true;
+      el.webkitPreservesPitch = true;
+      this.audioEl = el;
+      const src = this.ctx.createMediaElementSource(el);
+      src.connect(ap.gain);
+    }
     this.applyMix();
+  }
+
+  // Aufnahme an die Partiturposition koppeln
+  syncAudio(force = false) {
+    const el = this.audioEl;
+    if (!el) return;
+    const want = this.position() - (this.perf.audioStart || 0);
+    clearTimeout(this.audioTimer);
+    if (!this.playing) {
+      el.pause();
+      return;
+    }
+    el.playbackRate = this.speed;
+    if (want < 0) {
+      el.pause();
+      el.currentTime = 0;
+      this.audioTimer = setTimeout(() => this.syncAudio(true), (-want / this.speed) * 1000);
+      return;
+    }
+    if (want >= (el.duration || Infinity)) {
+      el.pause();
+      return;
+    }
+    if (force || el.paused || Math.abs(el.currentTime - want) > 0.08) el.currentTime = want;
+    if (el.paused) el.play().catch(() => {});
   }
 
   makeNoise() {
@@ -147,6 +229,8 @@ export class Player {
     if (this.cursor < 0) this.cursor = this.perf.notes.length;
     this.timer = setInterval(() => this.schedule(), 40);
     this.schedule();
+    this.syncAudio(true);
+    this.audioCheck = setInterval(() => this.syncAudio(), 1000);
     const tick = () => {
       if (!this.playing) return;
       const pos = this.position();
@@ -165,8 +249,10 @@ export class Player {
     this.offset = this.position();
     this.playing = false;
     clearInterval(this.timer);
+    clearInterval(this.audioCheck);
     cancelAnimationFrame(this.raf);
     this.silence();
+    this.syncAudio();
   }
   stop() {
     this.pause();
@@ -222,8 +308,8 @@ export class Player {
   voice(n, when) {
     const part = this.part(n.part);
     if (!part) return;
-    if (n.part === 'drums') return this.drum(n, when, part.gain);
-    const prof = PROFILES[profileFor(part.inst)];
+    if (n.drum) return this.drum(n, when, part.gain);
+    const prof = PROFILES[part.orig ? profileForProgram(n.prog ?? 0) : profileFor(part.inst)];
     const dur = n.d / this.speed;
     const ctx = this.ctx;
     const g = ctx.createGain();
@@ -323,7 +409,7 @@ export class Player {
       o.start(when);
       o.stop(when + decay + 0.05);
     };
-    switch (n.midi) {
+    switch (DRUM_SYNTH[n.midi] || n.midi) {
       case 36:
         tone(140, 45, 0.28, 0.9);
         break;
@@ -366,6 +452,11 @@ export class Player {
 
   dispose() {
     this.stop();
+    if (this.audioEl) {
+      this.audioEl.pause();
+      this.audioEl.removeAttribute('src');
+      this.audioEl = null;
+    }
     if (this.ctx) this.ctx.close();
     this.ctx = null;
   }

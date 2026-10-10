@@ -137,18 +137,23 @@ export function performArrangement(arr, { swing = arr.meta?.swing } = {}) {
     for (const e of arr.drums.events) {
       const t0 = clock.toSec(sw(e.start));
       let vel = e.ghost ? 45 : e.art.includes('accent') ? 112 : 88;
-      notes.push({ part: 'drums', t: t0, d: 0.12, midi: e.pitches[0], vel, fx: {} });
+      notes.push({ part: 'drums', t: t0, d: 0.12, midi: e.pitches[0], vel, fx: {}, drum: true });
     }
   }
   // Original zum Mitspielen (Noten aller Spuren der Vorlage)
   const bk = arr.backing;
   if (bk && bk.kind === 'notes') {
-    for (const n of bk.notes) {
-      const t0 = clock.toSec(n.start);
-      const t1 = clock.toSec(n.start + Math.max(2, n.dur * 0.95));
-      notes.push({ part: n.mel ? 'origMel' : 'orig', t: t0, d: t1 - t0, midi: n.midi, vel: clamp(n.vel ?? 80, 20, 127), fx: {}, prog: n.program ?? 0 });
+    for (const ch of bk.channels) {
+      for (const n of ch.notes) {
+        const t0 = clock.toSec(n.start);
+        if (ch.drum) {
+          notes.push({ part: ch.key, t: t0, d: 0.12, midi: n.midi, vel: clamp(n.vel ?? 90, 20, 127), fx: {}, drum: true });
+          continue;
+        }
+        const t1 = clock.toSec(n.start + Math.max(2, n.dur * 0.95));
+        notes.push({ part: ch.key, t: t0, d: t1 - t0, midi: n.midi, vel: clamp(n.vel ?? 80, 20, 127), fx: {}, prog: n.program ?? ch.program ?? 0 });
+      }
     }
-    for (const n of bk.drums) notes.push({ part: 'origDrums', t: clock.toSec(n.start), d: 0.12, midi: n.midi, vel: clamp(n.vel ?? 90, 20, 127), fx: {} });
   }
   notes.sort((a, b) => a.t - b.t);
   const audioStart = clock.audioStart || 0;
