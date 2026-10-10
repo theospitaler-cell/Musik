@@ -1,4 +1,5 @@
 // MusicXML / MXL (z. B. aus MuseScore exportiert oder heruntergeladen) -> Song.
+import { pickLead } from './lead.js';
 import { DIV, mod } from '../core/constants.js';
 import { parseXML } from '../core/xml.js';
 import { unzip } from '../core/zip.js';
@@ -282,20 +283,21 @@ export function describeParts(scan) {
   });
 }
 
+// Lead-Stimme: Part 1 bevorzugt (Partitur-Konvention), sonst die Stimme mit den
+// deutlichsten Melodie-Merkmalen (einstimmig, Melodielage, Name wie Gesang/Melodie)
 export function guessMelodyPart(scan) {
-  const desc = describeParts(scan).filter((d) => !d.unpitched && d.noteCount > 0);
-  if (!desc.length) return 0;
-  const maxCount = Math.max(...desc.map((d) => d.noteCount));
-  const nameHint = /(melod|lead|voice|vocal|gesang|stimme|sopran|soprano|singstimme|melodie|flute|flöte|trumpet|trompete|violin|violine)/i;
-  let best = null;
-  for (const d of desc) {
-    if (d.noteCount < maxCount * 0.25) continue;
-    let score = d.avgPitch;
-    if (nameHint.test(d.name)) score += 8;
-    if (/(piano|klavier|guitar|gitarre|bass|drum|schlag)/i.test(d.name)) score -= 6;
-    if (!best || score > best.score) best = { ...d, score };
-  }
-  return (best || desc[0]).index;
+  const mt = scan.meter ? (scan.meter.beats * DIV * 4) / scan.meter.beatType : DIV * 4;
+  const cands = scan.parts
+    .map((p, i) => ({
+      index: i,
+      name: p.name,
+      program: p.program,
+      unpitched: p.unpitched,
+      notes: p.measures.flatMap((m, k) => m.notes.filter((n) => n.staff === '1' || n.staff === undefined || n.staff === null).map((n) => ({ start: k * mt + n.start, dur: n.dur, midi: n.midi }))),
+    }))
+    .filter((c) => !c.unpitched && c.notes.length);
+  if (!cands.length) return 0;
+  return pickLead(cands, { mt, totalTicks: Math.max(...scan.parts.map((p) => p.measures.length)) * mt, firstBonus: 1.2 });
 }
 
 export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {

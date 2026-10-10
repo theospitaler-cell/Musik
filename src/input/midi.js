@@ -1,5 +1,6 @@
 // Standard-MIDI-Datei (Typ 0/1) -> Song. Quantisiert auf 16tel bzw. Triolen.
 import { DIV } from '../core/constants.js';
+import { pickLead } from './lead.js';
 import { makeKey } from '../theory/keys.js';
 import { finalizeSong } from '../theory/analysis.js';
 
@@ -37,6 +38,7 @@ export function parseMidi(buffer) {
     const notes = [];
     let name = null;
     let program = null;
+    const programs = {};
     while (ptr.i < end) {
       tick += readVarLen(d, ptr);
       let b = d[ptr.i];
@@ -80,10 +82,11 @@ export function parseMidi(buffer) {
       } else if (type === 0xa0 || type === 0xb0 || type === 0xe0) ptr.i += 2;
       else if (type === 0xc0) {
         program = d[ptr.i++];
+        if (programs[ch] === undefined) programs[ch] = program;
       } else if (type === 0xd0) ptr.i += 1;
       else ptr.i++;
     }
-    tracks.push({ name: name || `Spur ${t + 1}`, notes, program, drum: notes.length > 0 && notes.every((n) => n.ch === 9) });
+    tracks.push({ name: name || `Spur ${t + 1}`, notes, program, programs, drum: notes.length > 0 && notes.every((n) => n.ch === 9) });
     p = end;
   }
   return { division, tracks, meta };
@@ -97,31 +100,37 @@ function quantizeTick(q, beat) {
   return b + (Math.abs(r - s16) <= Math.abs(r - s3) + 1 ? s16 : s3);
 }
 
+// Stimmen = Spur × Kanal (Format-0-Dateien haben alle Instrumente in einer Spur);
+// Kanal 10 (Schlagzeug) ist keine Stimme.
+export function midiParts(parsed) {
+  const parts = [];
+  parsed.tracks.forEach((t, ti) => {
+    const byCh = new Map();
+    for (const n of t.notes) {
+      if (n.ch === 9) continue;
+      if (!byCh.has(n.ch)) byCh.set(n.ch, []);
+      byCh.get(n.ch).push(n);
+    }
+    const multi = byCh.size > 1;
+    for (const [ch, notes] of [...byCh].sort((a, b) => a[0] - b[0])) {
+      parts.push({ index: parts.length, track: ti, ch, name: multi ? `${t.name} (Kanal ${ch + 1})` : t.name, program: t.programs?.[ch] ?? t.program ?? 0, notes });
+    }
+  });
+  return parts;
+}
+
 export function describeMidiTracks(parsed) {
-  return parsed.tracks.map((t, i) => {
-    const avg = t.notes.length ? t.notes.reduce((s, n) => s + n.key, 0) / t.notes.length : 0;
-    return { index: i, name: t.name, noteCount: t.notes.length, avgPitch: avg, unpitched: t.drum };
+  return midiParts(parsed).map((p) => {
+    const avg = p.notes.reduce((s, n) => s + n.key, 0) / p.notes.length;
+    return { index: p.index, name: p.name, noteCount: p.notes.length, avgPitch: avg, unpitched: false };
   });
 }
 
 export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
   const parsed = parseMidi(buffer);
+  const parts = midiParts(parsed);
   const desc = describeMidiTracks(parsed);
-  const usable = desc.filter((t) => t.noteCount > 0 && !t.unpitched);
-  if (!usable.length) throw new Error('Die MIDI-Datei enthält keine Noten');
-  let melIdx = melodyPart;
-  if (melIdx === null || melIdx === undefined) {
-    const maxCount = Math.max(...usable.map((t) => t.noteCount));
-    let best = null;
-    for (const t of usable) {
-      if (t.noteCount < maxCount * 0.2) continue;
-      let score = t.avgPitch;
-      if (/(melod|lead|vocal|voice|sing|gesang|melodie)/i.test(t.name)) score += 10;
-      if (/(bass|drum|piano|klavier|pad|chord)/i.test(t.name)) score -= 6;
-      if (!best || score > best.score) best = { ...t, score };
-    }
-    melIdx = (best || usable[0]).index;
-  }
+  if (!parts.length) throw new Error('Die MIDI-Datei enthält keine Noten');
   const conv = (tk) => (tk * DIV) / parsed.division;
   const toEvents = (notes) =>
     notes
@@ -130,28 +139,32 @@ export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
         const s = quantizeTick(conv(n.start), DIV);
         let e = quantizeTick(conv(n.end), DIV);
         if (e <= s) e = s + DIV / 4;
-        return { start: Math.round(s), dur: Math.round(e - s), midi: n.key };
+        return { start: Math.round(s), dur: Math.round(e - s), midi: n.key, vel: n.vel };
       });
-  const melody = toEvents(parsed.tracks[melIdx].notes);
-  const allNotes = parsed.tracks.filter((t) => !t.drum).flatMap((t) => toEvents(t.notes));
   const meter = parsed.meta.timeSig || { beats: 4, beatType: 4 };
+  const mt = (meter.beats * DIV * 4) / meter.beatType;
+  const partEvents = parts.map((p) => toEvents(p.notes));
+  const totalTicks = Math.max(0, ...partEvents.flat().map((n) => n.start + n.dur));
+  // Lead-Spur: Einstimmigkeit, Lage, Melodiedichte, Präsenz, Name/Instrument
+  let melIdx = melodyPart;
+  if (melIdx === null || melIdx === undefined || !parts[melIdx]) {
+    melIdx = pickLead(parts.map((p, i) => ({ index: i, name: p.name, program: p.program, notes: partEvents[i] })), { mt, totalTicks });
+  }
+  const melody = partEvents[melIdx].map(({ vel, ...n }) => (void vel, n));
+  const allNotes = partEvents.flat();
   const key = parsed.meta.keySig ? makeKey(parsed.meta.keySig.fifths, parsed.meta.keySig.minor ? 'minor' : 'major') : null;
   // Zeitachse bleibt 1:1 wie in der Datei (wichtig zum Mitspielen)
-  const mt = (meter.beats * DIV * 4) / meter.beatType;
-  // Schlagzeug (Kanal 10) und Original-Noten aller Spuren für die Wiedergabe
+  // Schlagzeug (Kanal 10) und Original-Noten aller Stimmen für die Wiedergabe
   const drumNotes = [];
-  const tracks = [];
-  parsed.tracks.forEach((t, ti) => {
-    const notes = [];
+  for (const t of parsed.tracks)
     for (const n of t.notes) {
+      if (n.ch !== 9) continue;
       const s0 = Math.round(quantizeTick(conv(n.start), DIV));
       let e0 = Math.round(quantizeTick(conv(n.end), DIV));
       if (e0 <= s0) e0 = s0 + DIV / 4;
-      if (n.ch === 9) drumNotes.push({ start: s0, dur: Math.min(e0 - s0, DIV / 2), midi: n.key, vel: n.vel });
-      else notes.push({ start: s0, dur: e0 - s0, midi: n.key, vel: n.vel });
+      drumNotes.push({ start: s0, dur: Math.min(e0 - s0, DIV / 2), midi: n.key, vel: n.vel });
     }
-    if (notes.length) tracks.push({ id: `t${ti}`, name: t.name, program: t.program ?? 0, mel: ti === melIdx, notes });
-  });
+  const tracks = parts.map((p, i) => ({ id: `t${i}`, name: p.name, program: p.program ?? 0, mel: i === melIdx, notes: partEvents[i] }));
   const lastEnd = Math.max(0, ...[...tracks.flatMap((t) => t.notes), ...drumNotes].map((n) => n.start + n.dur));
   const song = {
     title: title || parsed.tracks.find((t) => t.name && !/^Spur/.test(t.name))?.name || 'MIDI-Import',

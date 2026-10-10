@@ -147,7 +147,49 @@ function climaxPhrase(ctx, from, to, cur, top, lo) {
   return out;
 }
 
-export function genSolo(ctx, v, { lyrical = false, from = 0, to = null } = {}) {
+// Melodie-Paraphrase: die Melodie des ersetzten Formteils, ausgeziert – lange Töne werden
+// angespielt und mit Durchgangs-/Annäherungstönen zum nächsten Melodieton verbunden.
+// So beginnt das Solo erkennbar mit dem Song und entwickelt sich erst danach frei.
+function paraphrase(ctx, mel, from, to, lo, hi) {
+  const src = mel.filter((n) => n.start >= from && n.start < to).sort((a, b) => a.start - b.start);
+  if (src.length < 2) return [];
+  // eine Oktavlage im Kernbereich
+  const avg = src.reduce((s, n) => s + n.midi, 0) / src.length;
+  let sh = 0;
+  while (avg + sh < lo + 4) sh += 12;
+  while (avg + sh > hi - 3) sh -= 12;
+  const funky = ctx.style.id === 'funk' || ctx.style.id === 'secondline';
+  const unit = funky && ctx.intensity >= 0.6 ? 6 : 12;
+  const out = [];
+  src.forEach((n, i) => {
+    const next = src[i + 1];
+    const m = Math.max(lo, Math.min(hi, n.midi + sh));
+    const end = Math.min(to, next ? next.start : n.start + n.dur);
+    const span = end - n.start;
+    if (next && span >= 2 * ctx.beat) {
+      // Melodieton anspielen, dann Annäherung an den nächsten Melodieton
+      const hold = ctx.beat;
+      out.push(ev(n.start, hold, m, n.lof ?? null));
+      const target = Math.max(lo, Math.min(hi, next.midi + sh));
+      const nRun = Math.min(6, Math.floor((span - hold) / unit));
+      const dir = target >= m ? 1 : -1;
+      const pitches = [];
+      let p = target;
+      for (let k = 0; k < nRun; k++) {
+        p = scaleStep(p, -dir, ctx.scaleAt(end - (k + 1) * unit));
+        pitches.unshift(p);
+      }
+      pitches.forEach((pp, k) => out.push(ev(end - (nRun - k) * unit, unit, Math.max(lo, Math.min(hi, pp)), null)));
+    } else {
+      out.push(ev(n.start, Math.max(6, Math.min(n.dur, end - n.start)), m, n.lof ?? null));
+    }
+  });
+  const line = cleanLine(out.filter((e) => e.start >= from && e.start < to));
+  if (line.length) addArt(line[0], 'accent');
+  return line;
+}
+
+export function genSolo(ctx, v, { lyrical = false, from = 0, to = null, melody = null } = {}) {
   const inst = ctx.inst[v];
   const [clo, chi] = inst.comfort;
   const top = Math.min(inst.range[1] - 1, chi + (inst.family === 'brass' ? 2 : 4));
@@ -159,6 +201,17 @@ export function genSolo(ctx, v, { lyrical = false, from = 0, to = null } = {}) {
   let t = from + (lyrical ? 0 : ctx.rng.pick([0, 0, 6, 12]));
   const motif = (ctx.songMotif || []).slice(0, 6);
   let phrase = 0;
+  // erste Hälfte: Paraphrase der Melodie des Formteils (Wiedererkennung)
+  if (melody && melody.length && end - from >= 4 * ctx.mt) {
+    const half = from + Math.floor((end - from) / ctx.mt / 2) * ctx.mt;
+    const para = paraphrase(ctx, melody, from, half - ctx.beat / 2, clo, top);
+    if (para.length >= 3) {
+      out.push(...para);
+      cur = para[para.length - 1].pitches[0];
+      t = Math.max(half, Math.ceil((para[para.length - 1].start + para[para.length - 1].dur + ctx.beat) / 12) * 12);
+      phrase = 1;
+    }
+  }
   const total = Math.max(1, end - from);
   while (t < end - ctx.beat) {
     const p = (t - from) / total;

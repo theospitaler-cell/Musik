@@ -215,25 +215,26 @@ function difficultyOptions(sel, value, { auto = 'Automatisch', inherit = null } 
   };
   if (inherit) add('', inherit);
   else add('auto', auto);
-  for (const d of DIFFICULTY_LEVELS) add(String(d.value), `${d.value} · ${d.name}`);
+  for (const d of DIFFICULTY_LEVELS) add(String(d.value), d.name);
   sel.value = value === null || value === undefined ? (inherit ? '' : 'auto') : String(value);
 }
 
 // Feineinstellung pro Stimme: Schwierigkeit, tiefster & höchster Ton (notiert)
-function voiceExtras(slot, i, instId) {
+function voiceExtras(slot, i, instId, { difficulty = true } = {}) {
   const ex = document.createElement('div');
-  ex.className = 'slot-extra';
-  const lvl = document.createElement('select');
-  lvl.title = 'Schwierigkeit dieser Stimme';
-  difficultyOptions(lvl, S.opts.voiceDifficulty?.[i] ?? null, { inherit: 'Stufe: global' });
-  [...lvl.options].forEach((o) => o.value && (o.textContent = `Stufe ${o.value}`));
-  lvl.addEventListener('change', () => {
-    S.opts.voiceDifficulty = S.opts.voiceDifficulty || [null, null, null, null];
-    S.opts.voiceDifficulty[i] = lvl.value ? Number(lvl.value) : null;
+  ex.className = 'slot-extra' + (difficulty ? '' : ' no-diff');
+  if (difficulty) {
+    const lvl = document.createElement('select');
+    lvl.title = 'Schwierigkeit dieser Stimme';
+    difficultyOptions(lvl, S.opts.voiceDifficulty?.[i] ?? null, { inherit: 'Schwierigkeit: wie oben' });
+    lvl.addEventListener('change', () => {
+      S.opts.voiceDifficulty = S.opts.voiceDifficulty || [null, null, null, null];
+      S.opts.voiceDifficulty[i] = lvl.value ? Number(lvl.value) : null;
+      lvl.classList.toggle('set', !!lvl.value);
+    });
     lvl.classList.toggle('set', !!lvl.value);
-  });
-  lvl.classList.toggle('set', !!lvl.value);
-  ex.appendChild(lvl);
+    ex.appendChild(lvl);
+  }
   if (instId !== 'drums') {
     const inst = INSTRUMENTS[instId];
     const ch = writtenRangeChoices(inst);
@@ -312,7 +313,7 @@ function renderSoloGrid() {
     renderSoloGrid();
   });
   slot.appendChild(sel);
-  voiceExtras(slot, 0, S.opts.soloInstrument || 'trumpet');
+  voiceExtras(slot, 0, S.opts.soloInstrument || 'trumpet', { difficulty: false });
   box.appendChild(slot);
 }
 
@@ -498,6 +499,7 @@ function applyOptsToUi(o) {
     { extras: true },
   );
   difficultyOptions($('#opt-difficulty'), S.opts.difficulty ?? 'auto');
+  difficultyOptions($('#opt-solo-difficulty'), S.opts.difficulty ?? 'auto');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
   $('#opt-drums').checked = !!o.drums;
   $('#opt-fills').checked = o.drumFills !== false;
@@ -1288,6 +1290,13 @@ async function main() {
     if (!text) return toast('Bitte zuerst ABC-Noten eingeben.', 'error');
     if (await setSource({ name: 'eingabe.abc', format: 'abc', data: text })) toast(`„${S.song.title}“ übernommen`, 'ok');
   });
+  // Schwierigkeit: Feld bei den Solo-Noten und in Schritt 3 sind dasselbe
+  const syncDiff = (from, to) => from.addEventListener('change', () => {
+    to.value = from.value;
+    S.opts.difficulty = from.value === 'auto' ? 'auto' : Number(from.value);
+  });
+  syncDiff($('#opt-solo-difficulty'), $('#opt-difficulty'));
+  syncDiff($('#opt-difficulty'), $('#opt-solo-difficulty'));
   // Solo: Playback
   $('#opt-playback').addEventListener('change', (e) => setPlayback(e.target.checked));
   $('#pb-all').addEventListener('click', () => {

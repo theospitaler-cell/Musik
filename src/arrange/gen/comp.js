@@ -2,7 +2,8 @@
 // Liegeklänge (Pads) und Solo-Backgrounds (erst Pads, dann Riffs).
 import { mod, clamp } from '../../core/constants.js';
 import { parseRhythm, compPatterns, fitRhythmString } from '../styles.js';
-import { ev, addArt, cleanLine, chordToneNear, soundingAt } from '../context.js';
+import { ev, addArt, cleanLine, chordToneNear, soundingAt, isChordTone, lofForChordPc } from '../context.js';
+import { bassDirection } from '../voicing.js';
 
 const ROLE_PRIORITY = [
   ['third', 'seventh', 'tension', 'fifth', 'root'],
@@ -70,6 +71,7 @@ export function genComp(ctx, v, kind = 'comp', { partners = [], rank = 0, from =
   let last = ctx.lastPitch(v, center);
   if (last < lo || last > hi + 2) last = center;
   const out = [];
+  let prevT = null;
   for (let bar = Math.floor(from / ctx.mt); bar < Math.ceil(end / ctx.mt); bar++) {
     const b0 = bar * ctx.mt;
     const phraseEnd = (bar + 1) % 4 === 0;
@@ -95,7 +97,16 @@ export function genComp(ctx, v, kind = 'comp', { partners = [], rank = 0, from =
             exclude.push(pp, pp - 1, pp + 1);
           }
         }
-        const c = chordToneNear(chord, last, lo, hi, { roles: prio, avoidPcs, withColor, styleId: ctx.style.id, exclude });
+        const opts = { roles: prio, avoidPcs, withColor, styleId: ctx.style.id, exclude };
+        // Gegenbewegung zum Bass: Ziel leicht entgegen der Bassrichtung, sonst liegen bleiben
+        const bDir = prevT !== null ? bassDirection(ctx.bassLine, prevT, t) : 0;
+        let c = chordToneNear(chord, bDir ? last - bDir * 3 : last, lo, hi, opts);
+        if (bDir && Math.sign(c.midi - last) === bDir) {
+          const alt = chordToneNear(chord, last - bDir * 5, lo, hi, opts);
+          if (Math.sign(alt.midi - last) !== bDir) c = alt;
+          else if (isChordTone(chord, last) && last >= lo && last <= hi && !exclude.includes(last)) c = { midi: last, lof: lofForChordPc(chord, ((last % 12) + 12) % 12, ctx.key) };
+        }
+        prevT = t;
         const e = ev(t, d, c.midi, c.lof);
         const rhythmic = ['funk', 'secondline', 'swing', 'polka'].includes(ctx.style.id);
         if (hit.accent && rhythmic && kind !== 'pad') addArt(e, 'accent');
@@ -112,11 +123,55 @@ export function genComp(ctx, v, kind = 'comp', { partners = [], rank = 0, from =
   return line;
 }
 
-// Solo-Background: erste Hälfte Liegeklänge, zweite Hälfte Riffs
+// Hook-Riff: Rhythmus und Kontur des ersten Melodietakts des Songs (Wiedererkennung),
+// auf Leittöne der Akkorde gelegt. Mehrere Background-Stimmen spielen denselben Rhythmus
+// mit verschiedenen Akkordtönen (Satz-Riff); jeder zweite Takt bleibt frei (Call & Response).
+function hookRiff(ctx, v, { partners = [], from = 0, to = null } = {}) {
+  const end = to ?? ctx.len;
+  const motif = (ctx.songMotif || []).filter((n) => n.start >= 0 && n.start < ctx.mt);
+  if (motif.length < 2) return null;
+  const { lo, hi, center } = compRegister(ctx, v);
+  let last = clamp(ctx.lastPitch(v, center), lo, hi);
+  const out = [];
+  for (let bar = Math.floor(from / ctx.mt); bar < Math.ceil(end / ctx.mt); bar++) {
+    if ((bar - Math.floor(from / ctx.mt)) % 2 === 1) continue;
+    const b0 = bar * ctx.mt;
+    let prev = null;
+    motif.forEach((n, k) => {
+      const t = b0 + n.start;
+      if (t < from || t >= end) return;
+      const d = Math.max(6, Math.min(n.dur, ctx.beat, end - t));
+      const chord = ctx.chordAt(t);
+      const dir = prev === null ? 0 : Math.sign(n.midi - prev);
+      prev = n.midi;
+      const avoidPcs = [];
+      const exclude = [];
+      for (const p of partners) {
+        const pp = soundingAt(p, t);
+        if (pp !== null) {
+          avoidPcs.push(mod(pp, 12));
+          exclude.push(pp, pp - 1, pp + 1);
+        }
+      }
+      const melP = ctx.melodyLine ? soundingAt(ctx.melodyLine, t) : null;
+      if (melP !== null) exclude.push(melP, melP - 1, melP + 1);
+      const c = chordToneNear(chord, last + dir * 3, lo, hi, { roles: ['third', 'seventh', 'fifth', 'root'], avoidPcs, exclude, withColor: ctx.style.id !== 'classical' && ctx.style.id !== 'polka', styleId: ctx.style.id });
+      const e = ev(t, d, c.midi, c.lof);
+      if (k === 0 && ['funk', 'secondline', 'swing'].includes(ctx.style.id)) addArt(e, 'accent');
+      if (d <= 12) addArt(e, 'staccato');
+      e.hookRiff = true;
+      out.push(e);
+      last = c.midi;
+    });
+  }
+  return out.length ? cleanLine(out) : null;
+}
+
+// Solo-Background: erste Hälfte Liegeklänge, zweite Hälfte Riffs aus dem Hook des Songs
 export function genBackground(ctx, v, opts = {}) {
   const half = Math.max(ctx.mt, Math.floor(ctx.measures / 2) * ctx.mt);
   const pads = genComp(ctx, v, 'pad', { ...opts, from: 0, to: half });
-  const riffs = genComp(ctx, v, 'riffs', { ...opts, from: half, to: ctx.len });
+  const riffs = hookRiff(ctx, v, { ...opts, from: half, to: ctx.len }) || genComp(ctx, v, 'riffs', { ...opts, from: half, to: ctx.len });
   for (const e of pads) e.background = 'pad';
   for (const e of riffs) e.background = 'riff';
   return cleanLine([...pads, ...riffs]);

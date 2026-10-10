@@ -17,6 +17,7 @@ import {
   isChordTone,
   lofForChordPc,
 } from '../context.js';
+import { bassDirection } from '../voicing.js';
 
 function avgPitch(line, def) {
   if (!line || !line.length) return def;
@@ -212,10 +213,19 @@ export function genCounter(ctx, v, melLine, { mode = 'counter', above = null } =
       const chord = seg.chord;
       const melP = soundingAt(melLine, seg.start);
       const g = guideTones(chord);
+      // Gegenbewegung zum Bass: fällt der Bass, steigt die Gegenstimme
+      const bDir = ci > 0 ? bassDirection(ctx.bassLine, seg.start - 1, seg.start) : 0;
       let best = null;
+      const cands = [];
       for (const tone of g) {
-        let m = placePc(tone.pc, last, lo, hi);
+        const m0 = placePc(tone.pc, last, lo, hi);
+        cands.push({ m: m0, tone });
+        if (m0 + 12 <= hi) cands.push({ m: m0 + 12, tone });
+        if (m0 - 12 >= lo) cands.push({ m: m0 - 12, tone });
+      }
+      for (const { m, tone } of cands) {
         let cost = Math.abs(m - last) + Math.abs(m - center) * 0.25;
+        if (bDir && m !== last) cost += Math.sign(m - last) === bDir ? 6 : -1.5;
         if (melP !== null && clashes(m, melP)) cost += 8;
         if (melP !== null && mod(m - melP, 12) === 0) cost += 4;
         if (!best || cost < best.cost) best = { m, lof: tone.lof, cost };
@@ -262,8 +272,11 @@ export function genCounter(ctx, v, melLine, { mode = 'counter', above = null } =
     const startRef = soundingAt(backbone, a) ?? last;
     const target = chordToneNear(chordB, startRef + (isAbove ? 2 : -2), lo, hi, { roles: ['third', 'seventh', 'fifth', 'root'] });
     const nextMelDir = melodyDirection(melLine, g.b, g.b + ctx.mt);
-    const dir = nextMelDir !== 0 ? -nextMelDir : target.midi >= startRef ? 1 : -1; // Gegenbewegung
-    const kinds = funky ? [['riff', 3], ['run', 3], ['arp', 1]] : st === 'classical' ? [['motif', 4], ['run', 3], ['arp', 2]] : st === 'swing' ? [['run', 3], ['arp', 2], ['motif', 2]] : [['run', 3], ['motif', 2], ['arp', 2]];
+    // Gegenbewegung: zuerst zum Bass, sonst zur Melodie
+    const bDir = bassDirection(ctx.bassLine, a, Math.min(ctx.len - 1, b));
+    const dir = bDir !== 0 ? -bDir : nextMelDir !== 0 ? -nextMelDir : target.midi >= startRef ? 1 : -1;
+    // Motiv-Imitation (Echo der Melodie) bevorzugt – das bindet die Begleitung an den Song
+    const kinds = funky ? [['motif', 3], ['riff', 2], ['run', 2], ['arp', 1]] : st === 'classical' ? [['motif', 5], ['run', 2], ['arp', 2]] : st === 'swing' ? [['motif', 3], ['run', 3], ['arp', 1]] : [['motif', 3], ['run', 2], ['arp', 2]];
     const kind = ctx.rng.weighted(kinds);
     let fig = null;
     if (kind === 'motif') fig = motifEcho(ctx, melLine, a, b, startRef, lo, hi);

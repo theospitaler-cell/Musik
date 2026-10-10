@@ -15,6 +15,7 @@ import { genDrumsSegment } from './gen/drums.js';
 import { fitOctave } from './instruments.js';
 import { levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
 import { arrangeSoloFree } from './solo-free.js';
+import { enforceContraryMotion, motionStats } from './voicing.js';
 import { arrangePlayAlong } from './playalong.js';
 import {
   enforceRange,
@@ -116,7 +117,7 @@ export function arrange(songIn, options = {}) {
         prevState,
       });
       const lvS = levelFor(opts, soloVs[0]);
-      b.preSolo = { v: soloVs[0], line: genSolo(sctx, soloVs[0], { lyrical: style.id === 'ballad' || style.id === 'classical' || (lvS !== null && lvS <= 2) }) };
+      b.preSolo = { v: soloVs[0], line: genSolo(sctx, soloVs[0], { lyrical: style.id === 'ballad' || style.id === 'classical' || (lvS !== null && lvS <= 2), melody: b.paraphrase || null }) };
     }
     b.segments.forEach((seg, si) => {
       const s0 = seg.startBar * mt;
@@ -207,9 +208,10 @@ export function arrange(songIn, options = {}) {
       const finalVs = groupOf('final');
       if (finalVs.length) Object.assign(lines, genFinal(ctx, finalVs));
 
-      // 3) Bass
+      // 3) Bass – die Mittelstimmen richten sich danach (Gegenbewegung)
       for (const v of groupOf('bass')) {
         lines[v] = genBass(ctx, v);
+        if (!ctx.bassLine) ctx.bassLine = lines[v];
       }
 
       // 4) Gegenstimme & Fill-Ins
@@ -320,6 +322,7 @@ export function arrange(songIn, options = {}) {
     drumEvents.push(...simple);
   }
   ensureMovement(arr, report);
+  enforceContraryMotion(arr, report);
   fixParallels(arr, report);
   voices.forEach((v, i) => insertBreaths(v, v.inst, tempo, report, arr.levels[i] && arr.levels[i] <= 2 ? 0.75 : 1));
   decorate(arr, report);
@@ -428,6 +431,7 @@ export function arrange(songIn, options = {}) {
     transposeShift: plan.shift,
     form,
     report,
+    motion: motionStats(arr),
     options: opts,
     levels: arr.levels,
     roleNames: ROLE_NAMES,

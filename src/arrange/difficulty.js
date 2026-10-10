@@ -1,4 +1,5 @@
-// Schwierigkeitsgrade 1–5 (global oder pro Stimme). "auto" = Standard der Engine.
+// Schwierigkeitsgrade (intern 1–5, in der Oberfläche nur mit Namen: Sehr leicht … Profi),
+// global oder pro Stimme. "auto" = Standard der Engine.
 //  1 Sehr leicht (Anfänger)  – bequeme Lage, nur Viertel/Achtel, keine Synkopen-Bögen,
 //                               kleine Sprünge, keine Effekte, viele Atempausen
 //  2 Leicht                  – Achtel-Synkopen erlaubt, keine 16tel, wenige Effekte

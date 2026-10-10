@@ -29,8 +29,16 @@ das Solo ersetzt einen Mittelteil, kurzer Schluss).
 
 ## Solo-Noten: frei oder Playback
 
-- **Frei** (Playback aus): eigenes Solo-Arrangement – Intro, Thema mit Fill-Ins, Variation,
-  ausgeschriebenes Solo über die Akkorde, Höhepunkt, Schluss.
+„Solo“ heißt hier: ein vollwertiges Notenblatt für **genau ein Instrument**, das durchgehend die
+**Hauptmelodie** des Songs spielt (Gesangs-/Lead-Linie) – keine Improvisation, keine Begleitfiguren.
+
+- **Ohne Playback**: Intro aus der Schlussphrase des Songs, dann alle Formteile mit Melodie in
+  Originalreihenfolge (taktgenau), der letzte Teil als Höhepunkt (wenn bequem spielbar eine Oktave
+  höher), Schlusston mit Fermate. Die Melodie liegt in einer Oktavlage im Kernbereich des
+  Instruments; lange Töne werden nicht mit Akkorden gefüllt, sondern phrasiert (Atemzeichen).
+  Effekte idiomatisch: Posaune Glissando nur an geeigneten Sprüngen in lange Zieltöne (gleicher
+  Naturton), Trompete Akzente auf Phrasen-Höhepunkten & Synkopen, Fall-offs und Shake im Jazz,
+  Sax Scoops, Horn Rip. Wiederholte Formteile: gleiche Töne, andere Phrasierung.
 - **Playback** (Schalter an): zum Mitspielen zur Aufnahme bzw. Datei. Die Noten sind **1:1 wie
   die Vorlage** – gleiche Taktzahl, gleicher Ablauf, gleiche Töne (nur eine Oktavlage für das
   Instrument), gleiches Tempo/Timing, kein zusätzliches Intro.
@@ -42,6 +50,15 @@ das Solo ersetzt einen Mittelteil, kurzer Schluss).
   - Im Mischpult läuft das **Original** synchron mit: bei MP3 die Aufnahme selbst (Tempo-Regler
     ohne Tonhöhenänderung), bei MIDI/MusicXML jede übernommene Spur einzeln plus „Band“ und
     „Schlagzeug“ – so lässt sich die eigene Stimme im Original stummschalten.
+
+### Hauptmelodie erkennen (lokal, ohne Cloud)
+
+- **MIDI**: jede Spur und jeder Kanal ist eine eigene Stimme; die Lead-Spur wird nach
+  Einstimmigkeit, Melodielage, Melodiedichte, Präsenz im Song sowie Name/Instrument (Gesang,
+  Lead-Synth, Bläser) bewertet – Akkord-, Arpeggio-, Pad- und Bassspuren fallen heraus.
+- **MusicXML**: Part 1 wird bevorzugt (Partitur-Konvention), sonst die Stimme mit den
+  deutlichsten Melodie-Merkmalen. In der Oberfläche lässt sich die Melodie-Stimme umstellen.
+- **Audio**: die erkannte Haupt-Frequenzlinie wird als durchgehende Notenspur gesetzt.
 
 ### MP3 & andere Aufnahmen
 
@@ -65,6 +82,12 @@ dann Backgrounds) · *D.S. al Coda* · Coda mit Shout Chorus, Tag (2×) und Schl
   (Klassik: in allen Stimmpaaren).
 - Homophonie nur an Höhepunkten (Shout Chorus, Hits, Schluss).
 - Rollentausch: Melodie in Tenor- oder Bassstimme, der Solist bekommt einen Formteil.
+- **Gegenbewegung zum Bass**: Gegenstimmen, Liegeklänge und Comping richten sich nach der
+  Basslinie – fällt der Bass, steigen die Mittelstimmen (oder bleiben auf dem gemeinsamen Ton
+  liegen); ein Korrekturdurchgang beseitigt verbleibende Parallelbewegungen.
+- **Wiedererkennung**: Füllfiguren imitieren bevorzugt Motive der Melodie, das Solo beginnt mit
+  einer ausgezierten Paraphrase der Melodie des ersetzten Formteils, Solo-Backgrounds spielen
+  Riffs im Rhythmus des Song-Hooks; schon im ersten Thema ist der Satz vierstimmig.
 
 **Instrumente & Spieltechnik**
 - Tonumfang und bequeme Lage je Instrument, Atempausen für Bläser.
@@ -76,10 +99,11 @@ dann Backgrounds) · *D.S. al Coda* · Coda mit Shout Chorus, Tag (2×) und Schl
   Kontrabass/E-Bass Oktave. (Hinweis: Das Tenorsax wird – anders als in der ursprünglichen
   Vorgabe – korrekt eine große None höher notiert.)
 
-**Schwierigkeit (1–5)** – global oder pro Stimme, Standard „Automatisch“:
-1 Sehr leicht · 2 Leicht · 3 Mittel · 4 Fortgeschritten · 5 Profi. Beeinflusst Lage,
-Rhythmik (Stufe 1–2 nur Viertel/Achtel, keine Synkopen-Bögen), Sprünge, Effekte und Atmung.
-Zusätzlich lässt sich pro Stimme der **tiefste und höchste Ton** (notiert) einstellen.
+**Schwierigkeit** – *Sehr leicht · Leicht · Mittel · Fortgeschritten · Profi* (schwierigste Stufe),
+global, pro Stimme oder bei den Solo-Noten direkt unter der Besetzung; Standard „Automatisch“.
+Beeinflusst Lage, Rhythmik („Sehr leicht“/„Leicht“: nur Viertel/Achtel, keine Synkopen-Bögen),
+Sprünge, Effekte und Atmung. Zusätzlich lässt sich pro Stimme der **tiefste und höchste Ton**
+(notiert) einstellen.
 
 
 ## Notenbild

@@ -295,10 +295,11 @@ export function planArrangement(songIn, opts) {
       if (mode === 'theme' && !firstOfLabel.has(sec.label)) firstOfLabel.set(sec.label, mv);
       if (type === 'shout') roles = ['tutti', 'tutti', 'tutti', 'bass'];
       else roles = themeRoles(mv, insts, i + pass);
-      // Steigerung: im allerersten Themenabschnitt setzt eine Nebenstimme aus
+      // Steigerung: im allerersten Themenabschnitt spielt die Gegenstimme zunächst nur
+      // Liegeklänge (voller Satz, aber Raum für die Melodie) – erst danach Gegenmelodien
       if (mode === 'theme' && i === 0 && sections.length >= 2) {
         const idle = roles.findIndex((r, k) => k !== mv && (r === 'counter' || r === 'fill'));
-        if (idle >= 0) roles = roles.map((r, k) => (k === idle ? 'rest' : r));
+        if (idle >= 0) roles = roles.map((r, k) => (k === idle ? 'pad' : r));
       }
       if (type === 'shout') mv = 0;
       prevVoice = mv;
@@ -392,7 +393,7 @@ export function planArrangement(songIn, opts) {
       }
       segs.push({ bars: bars - open, roles: soloRoles(sv, insts), soloVoice: sv, note: `Solo geht weiter; Backgrounds: erst Liegeklänge, dann Riffs` });
     }
-    return { type: 'solo', name: overSection ? `Solo (${overSection.source.label})` : 'Solo', measures: bars, chords, segments: segs, intensity: 0.6, dyn: style.dyn.solo, key, showChords: true, source: overSection?.source };
+    return { type: 'solo', name: overSection ? `Solo (${overSection.source.label})` : 'Solo', measures: bars, chords, segments: segs, intensity: 0.6, dyn: style.dyn.solo, key, showChords: true, source: overSection?.source, paraphrase: overSection?.melody || null };
   };
 
   // --- Coda ----------------------------------------------------------------

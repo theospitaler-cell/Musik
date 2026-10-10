@@ -49,3 +49,50 @@ test('Alle Demos lassen sich lesen', () => {
     assert.ok(s.measureCount >= 8, d.id);
   }
 });
+
+// ---- Lead-Erkennung (Hauptmelodie) ----
+import { makeMidi } from './helpers.js';
+import { songFromMidi } from '../src/input/midi.js';
+
+function saintsEvents(ch) {
+  const s = demoSong('saints');
+  return s.melody.map((n) => ({ t: ((n.start + 72) * 96) / 24, d: (n.dur * 96) / 24 - 4, key: n.midi, ch }));
+}
+const bars = 16;
+const chordsTrack = (ch, top = false) => {
+  const ev = [];
+  for (let b = 0; b < bars; b++) for (let q = 0; q < 4; q++) for (const k of top ? [72, 76, 79] : [60, 64, 67]) ev.push({ t: (b * 4 + q) * 96, d: 90, key: k, ch, vel: 70 });
+  return ev;
+};
+const bassTrack = (ch) => Array.from({ length: bars * 2 }, (_, i) => ({ t: i * 192, d: 180, key: i % 2 ? 41 : 36, ch }));
+const arpTrack = (ch) => Array.from({ length: bars * 16 }, (_, i) => ({ t: i * 24, d: 22, key: [72, 76, 79, 84][i % 4], ch, vel: 60 }));
+const melodyOf = (song) => song.melody.map((n) => n.midi).join(',');
+const saintsKeys = saintsEvents(0).map((n) => n.key).join(',');
+
+test('Lead-Erkennung MIDI: Gesangsspur neben Klavier-Akkorden und Bass', () => {
+  const mid = makeMidi([
+    { name: 'Spur 1', programs: { 0: 0 }, events: chordsTrack(0, true) },
+    { name: 'Bass', programs: { 1: 33 }, events: bassTrack(1) },
+    { name: 'Track 3', programs: { 2: 52 }, events: saintsEvents(2) },
+  ]);
+  const s = songFromMidi(mid);
+  assert.equal(melodyOf(s), saintsKeys);
+});
+
+test('Lead-Erkennung MIDI Typ 0: Melodie-Kanal statt hoher Arpeggio-Begleitung', () => {
+  const ev = [...arpTrack(0), ...saintsEvents(1), ...bassTrack(2)];
+  const mid = makeMidi([{ name: 'Song', programs: { 0: 0, 1: 65, 2: 33 }, events: ev }]);
+  const s = songFromMidi(mid);
+  assert.equal(s.parts.length, 3, 'Kanäle werden als eigene Stimmen erkannt');
+  assert.equal(melodyOf(s), saintsKeys);
+});
+
+test('Lead-Erkennung MIDI: Melodie in Mittellage unter einem hohen Pad', () => {
+  const pad = [];
+  for (let b = 0; b < bars; b++) for (const k of [76, 79, 83]) pad.push({ t: b * 384, d: 380, key: k, ch: 0, vel: 50 });
+  const mid = makeMidi([
+    { name: 'Spur 1', programs: { 0: 89 }, events: pad },
+    { name: 'Spur 2', programs: { 1: 56 }, events: saintsEvents(1) },
+  ]);
+  assert.equal(melodyOf(songFromMidi(mid)), saintsKeys);
+});

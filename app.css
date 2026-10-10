@@ -1786,3 +1786,16 @@ dialog::backdrop {
     transform-origin: bottom center;
   }
 }
+
+/* Solo: Schwierigkeit direkt bei der Besetzung */
+.solo-diff {
+  margin-bottom: 12px;
+}
+.slot-extra.no-diff {
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 720px) {
+  .slot-extra.no-diff select:first-child {
+    grid-column: auto;
+  }
+}

@@ -163,15 +163,62 @@ test('Schlagzeug-Play-along: Drum-Spur 1:1, Fills nur im Groove ergänzt', () =>
   assert.equal(sig(filled, 3), sig(plain, 3));
 });
 
-test('Solo-Noten frei (ohne Playback): eigenes Arrangement mit Intro, Solo & Schluss', () => {
-  const grace = demoSong('grace');
-  const t = arrange(grace, { ensemble: 'solo', soloInstrument: 'altoSax', seed: 1 });
-  assert.equal(t.voices.length, 1);
-  assert.ok(t.blocks.some((b) => b.type === 'intro'));
-  assert.ok(t.blocks.some((b) => b.type === 'solo'));
-  assert.ok(t.totalBars <= grace.measureCount + 6);
-  const d = arrange(grace, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
-  assert.ok(d.blocks.some((b) => b.name === 'Drum-Solo'));
+test('Solo-Noten Posaune: spielt taktgenau die Hauptmelodie von „When the Saints“', () => {
+  const s = demoSong('saints');
+  const a = arrange(s, { ensemble: 'solo', soloInstrument: 'trombone', style: 'funk', seed: 1 });
+  assert.equal(a.voices.length, 1);
+  const v = a.voices[0];
+  const tb = v.inst;
+  const mt = a.mt;
+  // keine Improvisation, keine Begleitfiguren
+  assert.ok(!a.blocks.some((b) => b.type === 'solo'));
+  assert.ok(v.events.every((e) => e.role === 'melody'));
+  const shifts = new Set();
+  const themeBlocks = a.blocks.filter((b) => b.source);
+  assert.equal(themeBlocks.length, s.sections.length, 'jeder Formteil des Songs kommt vor');
+  for (const b of themeBlocks) {
+    const sec = b.source;
+    assert.equal(b.measures, sec.length, 'gleiche Taktzahl je Formteil');
+    const a0 = sec.start * mt;
+    const a1 = a0 + sec.length * mt;
+    const mel = s.melody.filter((n) => n.start >= a0 && n.start < a1);
+    // jede Melodienote steht im entsprechenden Takt auf derselben Zählzeit
+    for (const n of mel) {
+      const t = b.startBar * mt + (n.start - a0);
+      const e = v.events.find((x) => x.start === t);
+      assert.ok(e, `Takt ${Math.floor(n.start / mt) + 1}: Melodienote fehlt`);
+      const d = e.pitches[0] - (n.midi + a.transposeShift);
+      assert.equal(((d % 12) + 12) % 12, 0, 'gleiche Tonhöhe (oktaviert)');
+      shifts.add(d);
+    }
+    // keine fremden Töne im Formteil
+    const inBlock = v.events.filter((x) => x.start >= b.startBar * mt && x.start < (b.startBar + b.measures) * mt);
+    const melStarts = new Set(mel.map((n) => b.startBar * mt + (n.start - a0)));
+    for (const x of inBlock) assert.ok(melStarts.has(x.start), `fremder Ton bei ${x.start}`);
+  }
+  assert.ok(shifts.size <= 2, 'eine Oktavlage (höchstens Höhepunkt eine Oktave höher)');
+  // spielbar: alles im Tonumfang, Kern im bequemen Bereich
+  const ps = v.events.map((e) => e.pitches[0]);
+  assert.ok(ps.every((m) => m >= tb.range[0] && m <= tb.range[1]));
+  assert.ok(ps.filter((m) => m >= tb.comfort[0] && m <= tb.comfort[1]).length / ps.length >= 0.9);
+  // Posaunen-Glissandi nur, wo der Zug es erlaubt
+  const evs = v.events;
+  for (let i = 0; i < evs.length - 1; i++) if (evs[i].fx.includes('glissStart')) assert.ok(slideGlissPossible(evs[i].pitches[0], evs[i + 1].pitches[0], tb));
+  // Schlagzeug-Solo: Drum-Chart ohne Drum-Solo-Block
+  const d = arrange(s, { ensemble: 'solo', soloInstrument: 'drums', seed: 1 });
+  assert.ok(d.drums.events.length > 50);
+  assert.ok(!d.blocks.some((b) => /Drum-Solo/.test(b.name)));
+});
+
+test('Solo mit Playback: Posaune spielt die Hauptmelodie 1:1', () => {
+  const s = demoSong('saints');
+  const a = arrange(s, { ensemble: 'solo', playback: true, soloInstrument: 'trombone', seed: 1 });
+  const off = a.sourceOffset;
+  for (const n of s.melody) {
+    const e = a.voices[0].events.find((x) => x.start === n.start + off);
+    assert.ok(e);
+    assert.equal((((e.pitches[0] - n.midi) % 12) + 12) % 12, 0);
+  }
 });
 
 test('Playback mit mehreren Originalstimmen: jede Spur 1:1 auf dem gewählten Instrument', () => {
@@ -193,4 +240,37 @@ test('Playback mit mehreren Originalstimmen: jede Spur 1:1 auf dem gewählten In
   // MusicXML: alle Stimmen + Schlagzeug, gültige Takte
   const xml = exportMusicXML(a, { mode: 'score' });
   assert.equal((xml.match(/<score-part /g) || []).length, 4);
+});
+
+test('Quartett: Mittelstimmen in Gegenbewegung zum Bass (fällt der Bass, steigen sie)', () => {
+  const tot = { contrary: 0, oblique: 0, similar: 0 };
+  for (const id of ['saints', 'ode', 'grace'])
+    for (const style of ['funk', 'swing', 'ballad', 'classical', 'polka'])
+      for (const seed of [1, 2]) {
+        const a = arrange(demoSong(id), { style, seed });
+        for (const k in tot) tot[k] += a.motion[k];
+      }
+  const n = tot.contrary + tot.oblique + tot.similar;
+  assert.ok(n > 100, 'genug Bassbewegungen geprüft');
+  assert.ok(tot.similar / n <= 0.05, `Parallelbewegung mit dem Bass: ${tot.similar}/${n}`);
+  assert.ok(tot.contrary > 5 * tot.similar, `Gegenbewegung ${tot.contrary} vs. parallel ${tot.similar}`);
+});
+
+test('Quartett: Wiedererkennung – Solo beginnt mit der Melodie, Backgrounds zitieren den Hook', () => {
+  const s = demoSong('grace');
+  const a = arrange(s, { style: 'funk', solo: 0, seed: 1, form: 'full' });
+  const sb = a.blocks.find((b) => b.type === 'solo');
+  assert.ok(sb && sb.paraphrase, 'Solo ersetzt einen Formteil mit Melodie');
+  const sv = sb.segments[0].roles.indexOf('solo');
+  const t0 = sb.startBar * a.mt;
+  const half = Math.floor(sb.measures / 2) * a.mt;
+  const mel = sb.paraphrase.filter((n) => n.start < half - a.beat);
+  const solo = a.voices[sv].events;
+  const hit = mel.filter((n) => solo.some((e) => e.start === t0 + n.start && (((e.pitches[0] - n.midi) % 12) + 12) % 12 === 0)).length;
+  assert.ok(hit / mel.length >= 0.7, `Melodie im Solo angespielt: ${hit}/${mel.length}`);
+  // Background-Riffs im Rhythmus des ersten Melodietakts
+  const motif = s.melody.filter((n) => n.start >= 0 && n.start < a.mt).map((n) => n.start);
+  const riffs = a.voices.flatMap((v) => v.events.filter((e) => e.hookRiff));
+  assert.ok(riffs.length > 0, 'Hook-Riffs vorhanden');
+  assert.ok(riffs.every((e) => motif.includes(e.start % a.mt)), 'Riff-Rhythmus = Hook-Rhythmus');
 });
