@@ -104,7 +104,7 @@ export function enforceContraryMotion(arr, report) {
       const inst = v.inst;
       const lo = Math.max(inst.range[0], bassNow ? bassNow.pitches[0] + 3 : inst.range[0]);
       let hi = inst.range[1];
-      if (melNow && p.pitches[0] < melNow.pitches[0]) hi = Math.min(hi, melNow.pitches[0] - 1); // nicht über die Melodie
+      if (melNow) hi = Math.min(hi, melNow.pitches[0] - 1); // nie über die Melodie (Lead immer oben)
       const others = arr.voices.filter((_, k) => k !== vi && k !== bi).map((o) => sounding(o.events, e.start)).filter(Boolean).map((o) => o.pitches[0]);
       const cands = [];
       for (let m = p.pitches[0] - 7; m <= p.pitches[0] + 7; m++) {

@@ -78,6 +78,66 @@ function monoLine(notes, low) {
   return out.filter((n) => n.dur > 0);
 }
 
+// Stimmen aus der Harmonik der Vorlage (wenn es keine passende Original-Spur gibt, z. B. MP3):
+//  bass  – Grundton im Rhythmus der Bass Drum (Groove 1:1), sonst je Akkord
+//  third – Terz, guide – Septime bzw. Quinte, root – Grundton als Liegeton (glatte Stimmführung)
+export function chordLine(song, kind, inst) {
+  const chords = song.chords || [];
+  const kicks = (song.drumNotes || []).filter((d) => d.midi === 36 || d.midi === 35).map((d) => d.start);
+  const out = [];
+  const center = Math.round((inst.comfort[0] + inst.comfort[1]) / 2);
+  let prev = kind === 'bass' ? inst.comfort[0] + 5 : center;
+  const near = (pc, ref) => {
+    let m = ref - 6;
+    while (((m % 12) + 12) % 12 !== pc) m++;
+    return m;
+  };
+  for (const c of chords) {
+    const ch = c.chord;
+    const tone = kind === 'bass' || kind === 'root' ? ch.tones.find((t) => t.role === 'root') : kind === 'third' ? ch.tones.find((t) => t.role === 'third') : ch.tones.find((t) => t.role === 'seventh') || ch.tones.find((t) => t.role === 'fifth');
+    if (!tone) continue;
+    const pc = kind === 'bass' ? ch.bassPc ?? tone.pc : tone.pc;
+    const m = near(pc, prev);
+    prev = m;
+    if (kind === 'bass') {
+      const ks = kicks.filter((k) => k >= c.start && k < c.start + c.dur);
+      const starts = ks.length ? [...new Set([c.start, ...ks])].sort((a, b) => a - b) : [c.start];
+      starts.forEach((st, k) => {
+        const end = k + 1 < starts.length ? starts[k + 1] : c.start + c.dur;
+        if (end > st) out.push({ start: st, dur: end - st, midi: m, lof: ch.bassLof ?? tone.lof });
+      });
+    } else out.push({ start: c.start, dur: c.dur, midi: m, lof: tone.lof });
+  }
+  return out;
+}
+
+// „Original übernehmen“ für mehrere Instrumente: Melodie in Stimme 1, Bass-Spur (oder Grundtöne im
+// Groove) in der tiefsten Stimme, weitere Original-Spuren nach Lage, fehlende Stimmen aus der Harmonik
+export function originalEnsembleParts(song, voices, slots) {
+  const tracks = (song.tracks || []).filter((t) => !t.mel && t.notes.length >= 4);
+  const med = (t) => {
+    const ps = t.notes.map((n) => n.midi).sort((a, b) => a - b);
+    return ps[Math.floor(ps.length / 2)];
+  };
+  const parts = new Array(voices.length).fill(null);
+  parts[slots.lead] = { source: 'melody', inst: voices[slots.lead] };
+  const pool = [...tracks].sort((a, b) => med(b) - med(a));
+  if (slots.bass !== null) {
+    const bassTrack = pool.length ? pool.reduce((a, b) => (med(b) < med(a) ? b : a)) : null;
+    if (bassTrack && med(bassTrack) < 55) {
+      parts[slots.bass] = { source: bassTrack.id, inst: voices[slots.bass] };
+      pool.splice(pool.indexOf(bassTrack), 1);
+    } else parts[slots.bass] = { source: 'chords:bass', inst: voices[slots.bass] };
+  }
+  const middles = slots.order.filter((v) => v !== slots.lead && v !== slots.bass);
+  const fill = ['chords:third', 'chords:guide', 'chords:root'];
+  middles.forEach((v, k) => {
+    const t = pool.shift();
+    parts[v] = t ? { source: t.id, inst: voices[v] } : { source: fill[k % fill.length], inst: voices[v] };
+  });
+  return parts;
+}
+
 export function defaultPlayParts(opts) {
   if (opts.soloInstrument === 'drums') return [{ source: 'drums', inst: 'drums' }];
   return [{ source: 'melody', inst: opts.soloInstrument || 'trumpet' }];
@@ -131,7 +191,8 @@ export function arrangePlayAlong(song, opts) {
   const endTick = bt(totalBars);
   const sections = song.sections.length ? song.sections : [{ label: 'A', start: 0, length: M }];
   const sources = playAlongSources(song);
-  const srcName = (id) => sources.find((s) => s.id === id)?.name || id;
+  const CHORD_NAMES = { 'chords:bass': 'Bass (Grundtöne im Groove)', 'chords:third': 'Harmonie (Terz)', 'chords:guide': 'Harmonie (Septime/Quinte)', 'chords:root': 'Harmonie (Grundton)' };
+  const srcName = (id) => CHORD_NAMES[id] || sources.find((s) => s.id === id)?.name || id;
   let parts = (opts.playParts && opts.playParts.length ? opts.playParts : defaultPlayParts(opts)).filter((p) => p && p.source && p.inst);
   // Schlagzeug höchstens einmal, nur aus der Schlagzeug-Quelle
   parts = parts.filter((p, i) => (p.inst === 'drums') === (p.source === 'drums') && parts.findIndex((q) => q.source === p.source && q.inst === p.inst) === i);
@@ -185,6 +246,7 @@ export function arrangePlayAlong(song, opts) {
     const inst = withRange(difficultyRange(getInstrument(p.inst), lv), opts.ranges ? opts.ranges[i] : null);
     let src;
     if (p.source === 'melody') src = song.melody;
+    else if (p.source.startsWith('chords:')) src = chordLine(song, p.source.slice(7), inst);
     else {
       const t = (song.tracks || []).find((x) => x.id === p.source);
       const low = inst.family === 'bass' || ['tuba', 'sousaphone', 'ebass', 'contrabass', 'bassTrombone', 'bassClarinet', 'bassoon', 'bariSax'].includes(inst.id);
