@@ -506,7 +506,7 @@ function showResult() {
   let views = [['score', 'Partitur'], ...a.voices.map((v, i) => [String(i), `${i + 1} · ${v.inst.short}`])];
   if (a.drums) views.push(['drums', 'Schlz.']);
   if (a.soloMode) views = a.voices.length ? [['0', `Solo · ${a.voices[0].inst.name}`]] : [['drums', 'Solo · Schlagzeug']];
-  if (!views.some(([k]) => k === S.view)) S.view = 'score';
+  if (!views.some(([k]) => k === S.view)) S.view = views[0][0];
   for (const [k, t] of views) {
     const b = document.createElement('button');
     b.className = 'seg' + (k === S.view ? ' active' : '');

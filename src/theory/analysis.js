@@ -188,7 +188,8 @@ export function autoSections(song) {
     }
     if (found) labels.push(found.label);
     else {
-      const label = String.fromCharCode(65 + nextLetter++);
+      const n = nextLetter++;
+      const label = n < 26 ? String.fromCharCode(65 + n) : String.fromCharCode(65 + (n % 26)) + (Math.floor(n / 26) + 1);
       reps.push({ idx: i, label });
       labels.push(label);
     }
@@ -215,7 +216,7 @@ export function sanitizeSections(sections, M) {
   const out = [];
   for (let i = 0; i < s.length; i++) {
     const end = i + 1 < s.length ? s[i + 1].start : M;
-    if (end > s[i].start) out.push({ label: s[i].label || String.fromCharCode(65 + i), start: s[i].start, length: end - s[i].start });
+    if (end > s[i].start) out.push({ label: s[i].label || (i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(65 + (i % 26)) + (Math.floor(i / 26) + 1)), start: s[i].start, length: end - s[i].start });
   }
   if (!out.length || out[0].start > 0) out.unshift({ label: 'A', start: 0, length: out.length ? out[0].start : M });
   return out;

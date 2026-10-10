@@ -446,10 +446,12 @@ export function planArrangement(songIn, opts) {
   const addDsReturn = (themeIdx) => {
     if (!themeIdx.length) return false;
     const upto = themeIdx.length >= 2 ? themeIdx.length - 1 : themeIdx.length;
-    form.segnoBlock = themeIdx[0];
+    // lange Songs: Rücksprung nur zu den letzten Formteilen (sonst wird es sehr lang)
+    const from = M > 48 ? Math.max(0, upto - 2) : 0;
+    form.segnoBlock = themeIdx[from];
     form.toCodaBlock = themeIdx[upto - 1];
     form.dsAfterBlock = blocks.length - 1;
-    for (let k = 0; k < upto; k++) {
+    for (let k = from; k < upto; k++) {
       const src = blocks[themeIdx[k]];
       add({ ...src, copyOf: themeIdx[k], name: `${src.name} (D.S.)`, segments: src.segments.map((x) => ({ ...x })) });
     }
@@ -503,7 +505,11 @@ export function planArrangement(songIn, opts) {
   for (const b of blocks) {
     b.startBar = bar;
     if (b.copyOf !== undefined) b.rehearsal = blocks[b.copyOf].rehearsal; // D.S.-Durchgang: gleiche Buchstaben
-    else b.rehearsal = b.type === 'intro' ? null : String.fromCharCode(65 + (letter++ % 26));
+    else if (b.type === 'intro') b.rehearsal = null;
+    else {
+      const n = letter++;
+      b.rehearsal = n < 26 ? String.fromCharCode(65 + n) : String.fromCharCode(65 + (n % 26)) + (Math.floor(n / 26) + 1);
+    }
     bar += b.measures;
     if (!b.key) b.key = key;
     // Segment-Startpositionen

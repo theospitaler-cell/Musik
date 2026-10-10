@@ -139,7 +139,7 @@ export function exportMusicXML(arr, opts = {}) {
   w.close('encoding');
   w.close('identification');
   writeDefaults(w, layout);
-  writeCredits(w, arr, layout, isPart ? partTitle(arr, partSpecs[0]) : null);
+  writeCredits(w, arr, layout, isPart ? partTitle(arr, partSpecs[0]) : null, isPart && partSpecs[0].kind === 'drums');
   // Part-List
   w.open('part-list');
   const nameCount = {};
@@ -188,7 +188,7 @@ export function exportMusicXML(arr, opts = {}) {
 
   partSpecs.forEach((ps, k) => {
     w.open('part', { id: ps.pid });
-    if (ps.kind === 'drums') writeDrumPart(w, arr, ps, { isPart, layout, first: k === 0, useSimile: !!opts.simile });
+    if (ps.kind === 'drums') writeDrumPart(w, arr, ps, { isPart, layout, first: k === 0, drumStyle: opts.drumStyle || 'chart' });
     else writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first: k === 0, useSimile: !!opts.simile, tenorClef: !!opts.tenorClef });
     w.close('part');
   });
@@ -235,7 +235,7 @@ function writeDefaults(w, L) {
   w.close('defaults');
 }
 
-function writeCredits(w, arr, L, partName) {
+function writeCredits(w, arr, L, partName, drumLegend = false) {
   const cx = L.width / 2;
   const top = L.height - L.top * 0.45;
   const credit = (text, x, y, size, justify, type, weight) => {
@@ -249,6 +249,7 @@ function writeCredits(w, arr, L, partName) {
   if (arr.meta.composer) credit(arr.meta.composer, L.width - L.right, top - 70, 10, 'right', 'composer');
   credit(arr.meta.arranger, L.width - L.right, top - 88, 10, 'right', 'arranger');
   if (partName) credit(partName, L.left, top - 70, 13, 'left', 'part name', 'bold');
+  void drumLegend;
 }
 
 function chordForPart(chord, tr, enh) {
@@ -730,7 +731,7 @@ function buildCue(arr, selfIdx, bar, tr) {
   return { items, label: arr.voices[best.i].inst.short };
 }
 
-function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue, isDrum, voice, instRef, drumMap }) {
+function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue, isDrum, voice, instRef, drumMap, hideRests = false }) {
   for (const f of pre || []) f();
   const keyMap = keyAlterMap(keyFifths);
   const state = {};
@@ -751,7 +752,7 @@ function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue,
       if (h.chord) writeHarmony(w, h.chord, Math.max(0, h.t - it.start));
     }
     if (it.kind === 'rest') {
-      w.open('note');
+      w.open('note', hideRests ? { 'print-object': 'no' } : undefined);
       if (it.measureRest) w.el('rest', null, { measure: 'yes' });
       else w.el('rest');
       w.el('duration', it.dur);
@@ -997,8 +998,38 @@ function drumVoices(events, mt, mi) {
   return out;
 }
 
-function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false }) {
+// Schlagzeug-Notation wie in Band-Charts:
+//  - Groove pro Formteil einmal ausschreiben, gleiche Folgetakte als Slash-Takte ("sim.")
+//  - Fills & Hits ausgeschrieben ("Fill"), Fußstimme ohne sichtbare Pausen
+function drumBarKind(items1, items2) {
+  const notes = [...items1, ...items2].filter((it) => it.kind === 'note');
+  const pitches = notes.flatMap((it) => it.pitches);
+  const toms = pitches.some((p) => p === 48 || p === 45 || p === 41);
+  const crash = pitches.includes(49);
+  return { toms, crash, empty: notes.length === 0 };
+}
+
+function writeSlashBar(w, mi) {
+  const n = mi.nBeats;
+  for (let b = 0; b < n; b++) {
+    w.open('note');
+    w.open('unpitched');
+    w.el('display-step', 'B');
+    w.el('display-octave', 4);
+    w.close('unpitched');
+    w.el('duration', mi.beatTicks);
+    w.el('voice', 1);
+    w.el('type', mi.compound ? 'quarter' : mi.beatTicks === 48 ? 'half' : mi.beatTicks === 12 ? 'eighth' : 'quarter');
+    if (mi.compound) w.el('dot');
+    w.el('stem', 'none');
+    w.el('notehead', 'slash');
+    w.close('note');
+  }
+}
+
+function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle = 'chart' }) {
   void first;
+  void useSimile;
   const mt = arr.mt;
   const mi = meterInfo(arr.meter);
   const total = arr.totalBars;
@@ -1026,8 +1057,33 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false }) {
     }
   }
   const breaks = printedBreaks(arr, printed, isPart ? emptyPrinted : null, isPart ? multiRest : null);
-  const simile = useSimile ? simileFlags(printed, combined, () => [], () => 'bass', breaks, blockStarts) : printed.map(() => false);
-  let simileOpen = false;
+  // Slash-Takte bestimmen: gleicher Groove wie der zuletzt ausgeschriebene Takt
+  const slash = printed.map(() => false);
+  const fillBar = printed.map(() => false);
+  if (drumStyle === 'chart') {
+    let lastWrittenSig = null;
+    for (let k = 0; k < printed.length; k++) {
+      const src = printed[k].src;
+      // Vergleich ohne Crash-Becken (Crash steht nur im ausgeschriebenen Takt)
+      // Crash auf "1" ersetzt im Groove die Hi-Hat -> für den Vergleich wie Hi-Hat behandeln
+      const sig = measureSig(combined[src].map((it) => (it.kind === 'note' ? { ...it, ev: null, pitches: [...new Set(it.pitches.map((p) => (p === 49 ? 42 : p)))] } : it)), []);
+      const kind = drumBarKind(m1[src], m2[src]);
+      const isSegStart = blockStarts.has(src) || printed[k].coda || printed[k].segno || printed[k].startRepeat;
+      const soloBlock = arr.blocks.find((b) => b.startBar <= src && src < b.startBar + b.measures);
+      const writeOut = soloBlock && (soloBlock.type === 'solo' || /Drum-Solo/.test(soloBlock.name));
+      if (kind.empty) {
+        lastWrittenSig = null;
+        continue;
+      }
+      if (!isSegStart && !writeOut && !kind.crash && lastWrittenSig === sig) {
+        slash[k] = true;
+        continue;
+      }
+      // Fill-Takt: Toms oder neuer Inhalt am Phrasenende nach einem Groove
+      if (kind.toms && !writeOut) fillBar[k] = true;
+      if (!kind.toms) lastWrittenSig = sig;
+    }
+  }
   for (let k = 0; k < printed.length; k++) {
     const pm = printed[k];
     const m = pm.src;
@@ -1038,10 +1094,8 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false }) {
       w.close('print');
     } else if (breaks.has(k)) w.el('print', null, { 'new-system': 'yes' });
     writeLeftBarline(w, pm);
-    const simStart = simile[k] && !simileOpen;
-    const simStop = !simile[k] && simileOpen;
     const mr = multiRest.get(k);
-    if (k === 0 || simStart || simStop || mr) {
+    if (k === 0 || mr) {
       w.open('attributes');
       if (k === 0) {
         w.el('divisions', DIV);
@@ -1060,18 +1114,6 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false }) {
         w.open('measure-style');
         w.el('multiple-rest', mr);
         w.close('measure-style');
-      }
-      if (simStop) {
-        w.open('measure-style');
-        w.el('measure-repeat', null, { type: 'stop' });
-        w.close('measure-style');
-        simileOpen = false;
-      }
-      if (simStart) {
-        w.open('measure-style');
-        w.el('measure-repeat', '1', { type: 'start' });
-        w.close('measure-style');
-        simileOpen = true;
       }
       w.close('attributes');
     }
@@ -1097,14 +1139,30 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false }) {
         }
       });
     }
+    const textAbove = (txt) =>
+      pre.push(() => {
+        w.open('direction', { placement: 'above' });
+        w.open('direction-type');
+        w.el('words', txt, { 'font-style': 'italic', 'font-weight': 'bold', 'font-size': 10 });
+        w.close('direction-type');
+        w.close('direction');
+      });
+    if (slash[k] && !slash[k - 1]) textAbove('sim.');
+    if (fillBar[k]) textAbove('Fill');
     const ddirs = (arr.drums.dirs || []).filter((d) => d.t >= m * mt && d.t < (m + 1) * mt).map((d) => ({ ...d, t: d.t - m * mt }));
-    writeMeasureItems(w, m1[m], { pre, dirs: ddirs, harmonies: [], mi, keyFifths: 0, cue: false, isDrum: true, voice: 1, instRef: ps.pid, drumMap: DRUM_DISPLAY });
-    const hasFeet = m2[m].some((x) => x.kind === 'note');
-    if (hasFeet) {
-      w.open('backup');
-      w.el('duration', mt);
-      w.close('backup');
-      writeMeasureItems(w, m2[m], { pre: [], dirs: [], harmonies: [], mi, keyFifths: 0, cue: false, isDrum: true, voice: 2, instRef: ps.pid, drumMap: DRUM_DISPLAY });
+    if (slash[k]) {
+      for (const f of pre) f();
+      for (const d of ddirs) writeDirection(w, d, 0);
+      writeSlashBar(w, mi);
+    } else {
+      writeMeasureItems(w, m1[m], { pre, dirs: ddirs, harmonies: [], mi, keyFifths: 0, cue: false, isDrum: true, voice: 1, instRef: ps.pid, drumMap: DRUM_DISPLAY });
+      const hasFeet = m2[m].some((x) => x.kind === 'note');
+      if (hasFeet) {
+        w.open('backup');
+        w.el('duration', mt);
+        w.close('backup');
+        writeMeasureItems(w, m2[m], { pre: [], dirs: [], harmonies: [], mi, keyFifths: 0, cue: false, isDrum: true, voice: 2, instRef: ps.pid, drumMap: DRUM_DISPLAY, hideRests: true });
+      }
     }
     writeFormDirectionsEnd(w, pm, isPart);
     writeBarlines(w, pm, k === printed.length - 1, printed[k + 1], arr);

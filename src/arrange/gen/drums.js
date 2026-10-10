@@ -22,11 +22,12 @@ function hit(t, d, inst, accent = false, ghost = false) {
 }
 
 function grooveBar(ctx, b0, groove, out, { skipCymbalAt0 = false } = {}) {
+  // Im Groove keine Akzentzeichen (Drum-Chart-Konvention) – Ghost-Notes bleiben
   for (const [inst, str] of Object.entries(groove)) {
     for (const h of parseRhythm(str)) {
       const t = b0 + h.step * 6;
       if (skipCymbalAt0 && h.step === 0 && (inst === 'hh' || inst === 'ride')) continue;
-      out.push(hit(t, 6, inst, h.accent, h.short));
+      out.push(hit(t, 6, inst, false, h.short));
     }
   }
 }

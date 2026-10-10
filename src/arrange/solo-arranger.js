@@ -160,7 +160,11 @@ export function arrangeSolo(songIn, opts) {
   let letter = 0;
   for (const b of blocks) {
     b.startBar = bar;
-    b.rehearsal = b.type === 'intro' ? null : String.fromCharCode(65 + (letter++ % 26));
+    if (b.type === 'intro') b.rehearsal = null;
+    else {
+      const n = letter++;
+      b.rehearsal = n < 26 ? String.fromCharCode(65 + n) : String.fromCharCode(65 + (n % 26)) + (Math.floor(n / 26) + 1);
+    }
     b.chords = normalizeChords(b.chords, b.measures * mt);
     // Segmente (für Notensatz/Dynamik): eine Rolle pro Stimme
     const roleName = b.role === 'melodyVar' || b.role === 'melodyClimax' ? 'melody' : b.role;

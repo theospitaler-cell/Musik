@@ -129,3 +129,20 @@ vendor/      Verovio (LGPL-3.0) und jsPDF (MIT), mitgeliefert für Offline-Betri
 ```
 
 Das Arrangement ist pro **Variante** (Seed) reproduzierbar; „Würfeln“ erzeugt eine neue Fassung.
+
+## Schlagzeug-Notation (Drum-Chart)
+
+| Position | Instrument |
+|---|---|
+| ✕ auf der Hilfslinie über dem System | Crash |
+| ✕ über dem System | Hi-Hat (geschlossen), ⊗ = offen |
+| ✕ auf der obersten Linie | Ride |
+| 4. und 3. Linie/Zwischenraum von unten | Tom hoch / Tom mittel |
+| 3. Zwischenraum | Snare (in Klammern = Ghost-Note) |
+| 2. Zwischenraum | Standtom |
+| unterster Zwischenraum | Bass Drum |
+| ✕ unter dem System | Hi-Hat mit dem Fuß |
+
+Hände: Hals nach oben, Füße: Hals nach unten. Pro Formteil wird der Groove einmal
+ausgeschrieben, danach stehen Slash-Takte („sim.“ = Groove weiterspielen). Fills
+und Hits mit der Band sind ausgeschrieben und mit „Fill“ bzw. Akzenten markiert.

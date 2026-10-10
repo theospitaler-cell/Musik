@@ -68,3 +68,13 @@ test('Regieplan enthält Formverlauf und Qualitätsbericht', () => {
   assert.match(md, /## Formverlauf/);
   assert.match(md, /## Qualitätsbericht/);
 });
+
+test('Schlagzeug als Drum-Chart: Groove ausgeschrieben, dann Slash-Takte (sim.), Fills markiert', () => {
+  const a = arrange(demoSong('saints'), { drums: true, seed: 1 });
+  const x = exportMusicXML(a, { mode: 'part', partIndex: 'drums' });
+  assert.match(x, /<notehead>slash<\/notehead>/);
+  assert.match(x, />sim\.</);
+  assert.match(x, />Fill</);
+  assert.match(x, /<part-name print-object="no">/);
+  for (const m of measureDurations(x)) assert.equal(m.dur, m.expected, `T.${m.measure}`);
+});
