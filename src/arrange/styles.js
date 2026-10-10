@@ -49,9 +49,10 @@ export const STYLES = {
       ],
     },
     comp: {
-      4: ['..X-..o...X-..o.', 'X-....o.o.....o.', '...X..o....X.o..', '..o.X-....o.X-..', 'o.....X-..o...X-'],
+      // Achtelraster = gut lesbar; die 16tel-Synkopen übernimmt der Bass
+      4: ['..X-..o...X-..o.', 'X-....o.o.....o.', '..X-....X-..X-..', '..o.X-....o.X-..', 'o.....X-..o...X-'],
       pads: ['X---------------', 'X-------X-------'],
-      riffs: ['x.x...X-.x.x..X-', 'X-.x..x.X-.x..o.', '..x.x.X-..x.x.X-'],
+      riffs: ['x.x...X-..x.x.X-', 'X-..x...X-..x.o.', '..x.x.X-..x.x.X-'],
     },
     drums: {
       4: { hh: 'x.x.x.x.x.x.x.x.', sn: '....X..o.o..X..o', bd: 'X.....x...X..x..' },
