@@ -34,6 +34,8 @@ jobs:
         with:
           node-version: 20
       - run: npm install --no-audit --no-fund
+      - name: Versionsnummer
+        run: node scripts/write-version.mjs
       - name: Windows-Installer bauen
         run: npx electron-builder --win --publish never
         env:
@@ -62,6 +64,7 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - name: Web-App & Android-Projekt
         run: |
+          node scripts/write-version.mjs
           node scripts/build-web.mjs www
           npx cap add android
           cp -r build/android/mipmap-* android/app/src/main/res/
@@ -85,10 +88,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
       - uses: actions/download-artifact@v4
         with:
           path: out
           merge-multiple: true
+      - name: Update-Paket (In-App-Update ohne Neuinstallation)
+        run: |
+          node scripts/write-version.mjs
+          node scripts/build-web.mjs www
+          (cd www && zip -qr ../out/notecode-web.zip .)
+          node -e "const v=require('./version.json'); require('fs').writeFileSync('out/web-version.json', JSON.stringify({...v, zip:'notecode-web.zip'}))"
+          cat out/web-version.json
       - name: Release veröffentlichen
         uses: softprops/action-gh-release@v2
         with:
@@ -104,5 +117,7 @@ jobs:
             |---|---|
             | **Windows** | `NoteCode-Setup-….exe` herunterladen und starten (bei „Der Computer wurde durch Windows geschützt“: *Weitere Informationen → Trotzdem ausführen*) |
             | **Android** | `NoteCode-…-Android.apk` auf dem Handy herunterladen, öffnen und installieren (beim ersten Mal „Installation aus dieser Quelle erlauben“) |
+
+            **Schon installiert?** Ab dieser Version aktualisiert sich NoteCode selbst: Einstellungen → *App & Updates* → *Nach Updates suchen* (wird auch beim Start geprüft). `notecode-web.zip` und `web-version.json` sind dieses Update-Paket.
 
             Stand: ${{ github.sha }}

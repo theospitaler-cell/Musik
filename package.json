@@ -37,7 +37,8 @@
       "src/**/*",
       "vendor/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "version.json"
     ],
     "win": {
       "target": [

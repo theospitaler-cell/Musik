@@ -6,4 +6,6 @@
 window.NOTECODE_CONFIG = {
   supabaseUrl: '',
   supabaseKey: '',
+  // Updates: neueste Version aus den GitHub-Releases dieses Repositorys
+  updateRepo: 'theospitaler-cell/Musik',
 };

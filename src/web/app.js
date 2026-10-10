@@ -6,6 +6,7 @@ import { loadSong, detectFormat } from '../input/index.js';
 import { arrange } from '../arrange/engine.js';
 import { playAlongSources, defaultPlayParts } from '../arrange/playalong.js';
 import { decodeAudio, analyzeAudio } from './audio-import.js';
+import { platform, localVersion, checkUpdate, applyUpdate } from './updater.js';
 import { exportMusicXML } from '../output/musicxml.js';
 import { exportMidi } from '../output/midi.js';
 import { buildPlan, planMarkdown } from '../output/report.js';
@@ -1077,6 +1078,50 @@ function renameItem(card, it) {
   input.addEventListener('blur', () => finish(true));
 }
 
+// ---------------------------------------------------------------- Updates
+async function renderUpdateCard() {
+  const v = await localVersion();
+  const p = platform();
+  const where = p === 'desktop' ? 'Windows-App' : p === 'android' ? 'Android-App' : 'Web-App';
+  $('#upd-version').textContent = `${where} · Version ${v.version}${v.date ? ` vom ${new Date(v.date).toLocaleDateString('de-DE')}` : ''}`;
+  if (p === 'web') {
+    $('#upd-status').textContent = 'Im Browser ist NoteCode automatisch immer aktuell.';
+    $('#upd-check').classList.add('hidden');
+  }
+}
+
+async function runUpdateCheck({ silent = false } = {}) {
+  if (platform() === 'web') return;
+  try {
+    if (!silent) $('#upd-status').textContent = 'Suche nach Updates …';
+    const r = await checkUpdate();
+    if (!r.available) {
+      if (!silent) {
+        $('#upd-status').textContent = `Du hast die neueste Version (${r.current.version}).`;
+        toast('NoteCode ist aktuell', 'ok');
+      }
+      return;
+    }
+    $('#upd-status').textContent = `Neue Version ${r.latest.version} verfügbar.`;
+    toast(`Update ${r.latest.version} verfügbar`, '', { label: 'Jetzt aktualisieren', run: installUpdate });
+  } catch (e) {
+    if (!silent) {
+      $('#upd-status').textContent = 'Update-Prüfung fehlgeschlagen: ' + e.message;
+      toast('Update-Prüfung fehlgeschlagen: ' + e.message, 'error');
+    }
+  }
+}
+
+async function installUpdate() {
+  const pg = progress('NoteCode wird aktualisiert');
+  try {
+    await applyUpdate((t, f) => pg.set(t, f));
+  } catch (e) {
+    pg.done();
+    toast('Update fehlgeschlagen: ' + e.message, 'error');
+  }
+}
+
 // Neues Arrangement: Vorlage & Ergebnis zurücksetzen
 function startNew() {
   S.player?.dispose();
@@ -1304,6 +1349,10 @@ function bindSyncStatus() {
     if ($('#view-library').classList.contains('active')) renderLibrary();
   });
   $('#lib-new').addEventListener('click', startNew);
+  $('#upd-check').addEventListener('click', () => runUpdateCheck());
+  renderUpdateCard();
+  // einmal beim Start still prüfen (nur installierte Apps)
+  setTimeout(() => runUpdateCheck({ silent: true }), 4000);
   $('#sync-now').addEventListener('click', async () => {
     if (!S.library.cloud.user) return openAuth();
     try {
