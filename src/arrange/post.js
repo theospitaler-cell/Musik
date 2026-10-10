@@ -19,10 +19,10 @@ import { ev, addArt, addFx, chordToneNear, lofForChordPc, isChordTone, cleanLine
 const LEAD_ROLES = new Set(['melody', 'solo', 'hook', 'subject']);
 const PRIORITY = { melody: 9, solo: 9, hook: 8, subject: 8, tutti: 7, hits: 6, final: 6, riff: 6, bass: 5, counter: 4, fill: 2, comp: 3, stabs: 3, pad: 2, background: 2 };
 
-export function keyAtFactory(blocks, mt) {
+export function keyAtFactory(blocks, mt, grid = null) {
   return (t) => {
     let k = blocks[0].key;
-    for (const b of blocks) if (b.startBar * mt <= t) k = b.key;
+    for (const b of blocks) if ((grid ? grid.start(b.startBar) : b.startBar * mt) <= t) k = b.key;
     return k;
   };
 }
@@ -350,8 +350,8 @@ export function decorate(arr, report) {
     if (inst.strings) {
       let pizz = false;
       for (const b of blocks) {
-        const a0 = b.startBar * mt;
-        const a1 = a0 + b.measures * mt;
+        const a0 = barTick(arr, b.startBar);
+        const a1 = barTick(arr, b.startBar + b.measures);
         const blockEvs = evs.filter((e) => e.start >= a0 && e.start < a1);
         if (!blockEvs.length) continue;
         const wantPizz = (style.id !== 'classical' && style.id !== 'ballad' && blockEvs.every((e) => e.role === 'bass' || e.role === 'comp' || e.role === 'stabs')) || (blockEvs.every((e) => e.role === 'stabs'));
@@ -397,6 +397,9 @@ export function decorate(arr, report) {
 }
 
 // ---------- Dynamik --------------------------------------------------------
+// Tick eines Taktanfangs (mit Taktartwechseln über das Taktraster)
+const barTick = (arr, bar) => (arr.grid ? arr.grid.start(bar) : bar * arr.mt);
+
 export function applyDynamics(arr) {
   const { voices, blocks, mt } = arr;
   const roleOffset = (r) => (LEAD_ROLES.has(r) || r === 'tutti' || r === 'hits' || r === 'final' || r === 'riff' ? 0 : r === 'bass' ? 0 : -1);
@@ -405,15 +408,15 @@ export function applyDynamics(arr) {
     let current = null;
     for (let bi = 0; bi < blocks.length; bi++) {
       const b = blocks[bi];
-      const a0 = b.startBar * mt;
+      const a0 = barTick(arr, b.startBar);
       if (b.copyOf !== undefined) {
         current = null; // nach einem D.S.-Rücksprung Dynamik neu setzen
         continue;
       }
       for (const seg of b.segments) {
         if (seg.copyOfSeg !== undefined) continue;
-        const s0 = a0 + seg.startBar * mt;
-        const s1 = s0 + seg.bars * mt;
+        const s0 = barTick(arr, b.startBar + seg.startBar);
+        const s1 = barTick(arr, b.startBar + seg.startBar + seg.bars);
         const first = line.events.find((e) => e.start >= s0 && e.start < s1);
         if (!first) continue;
         let dyn = dynShift(b.dyn, roleOffset(seg.roles[v]));
@@ -433,8 +436,8 @@ export function applyDynamics(arr) {
       // Crescendo vor dem Shout Chorus
       const nb = blocks[bi + 1];
       if (nb && (nb.type === 'shout' || nb.type === 'coda') && b.measures >= 2) {
-        const c0 = a0 + (b.measures - 2) * mt;
-        const evIn = line.events.filter((e) => e.start >= c0 && e.start < a0 + b.measures * mt);
+        const c0 = barTick(arr, b.startBar + b.measures - 2);
+        const evIn = line.events.filter((e) => e.start >= c0 && e.start < barTick(arr, b.startBar + b.measures));
         if (evIn.length >= 2) {
           line.dirs.push({ t: evIn[0].start, kind: 'wedge', type: 'crescendo' });
           line.dirs.push({ t: evIn[evIn.length - 1].start, kind: 'wedge', type: 'stop' });
@@ -517,17 +520,20 @@ export { addArt };
 // eine Stakkato-Achtel mit Pause bis zur nächsten Zählzeit als Stakkato-Viertel.
 // Der Stakkato-Punkt bewahrt den kurzen Klang (Wiedergabe spielt kurz).
 export function simplifyForReading(arr, meter) {
-  const mi = meterInfo(meter);
-  const mt = mi.measureTicks;
-  const beat = mi.beatTicks;
+  const mi0 = meterInfo(meter);
+  const g = arr.grid; // Taktartwechsel: Takt & Schlag je Takt
   for (const line of arr.voices) {
     const evs = line.events;
     for (let i = 0; i < evs.length; i++) {
       const e = evs[i];
+      const bar = g ? g.barAt(e.start) : Math.floor(e.start / mi0.measureTicks);
+      const mi = g ? meterInfo(g.meters[Math.min(bar, g.meters.length - 1)] || meter) : mi0;
+      const mt = mi.measureTicks;
+      const beat = mi.beatTicks;
       if (!e.art.includes('staccato') || e.dur > beat / 2 || e.fermata) continue;
       const next = evs[i + 1];
-      const barStart = Math.floor(e.start / mt) * mt;
-      const limit = Math.min(next ? next.start : Infinity, barStart + mt, Math.ceil((e.start + 1) / beat) * beat);
+      const barStart = g ? g.start(bar) : bar * mt;
+      const limit = Math.min(next ? next.start : Infinity, barStart + mt, barStart + Math.ceil((e.start - barStart + 1) / beat) * beat);
       const maxDur = limit - e.start;
       if (maxDur <= e.dur) continue;
       const d = singleValueDur(e.start - barStart, maxDur, mi, e.dur);
@@ -602,8 +608,8 @@ export function addPerformanceMarks(arr, drumsLine = null) {
       for (const seg of b.segments) {
         if (seg.copyOfSeg !== undefined) continue;
         const role = seg.roles[v];
-        const s0 = (b.startBar + seg.startBar) * mt;
-        const s1 = s0 + seg.bars * mt;
+        const s0 = barTick(arr, b.startBar + seg.startBar);
+        const s1 = barTick(arr, b.startBar + seg.startBar + seg.bars);
         const first = line.events.find((e) => e.start >= s0 && e.start < s1);
         if (!first || role === 'rest' || role === 'final' || role === 'solo') {
           if (role !== 'rest') lastRole = role;
@@ -620,7 +626,7 @@ export function addPerformanceMarks(arr, drumsLine = null) {
   // rit. am Schluss (Ballade, Klassik, Swing) + Tempo-Verlauf für die Wiedergabe
   arr.tempoMap = [{ t: 0, bpm: arr.tempo }];
   const coda = blocks[blocks.length - 1];
-  if (coda && (style.id === 'ballad' || style.id === 'classical' || style.id === 'swing')) {
+  if (coda && !arr.tempoFromSource && (style.id === 'ballad' || style.id === 'classical' || style.id === 'swing')) {
     const finSeg = coda.segments[coda.segments.length - 1];
     const ritBars = style.id === 'swing' ? 1 : 2;
     const rStart = (coda.startBar + finSeg.startBar) * mt - (style.id === 'swing' ? 0 : mt * (ritBars - 1));
@@ -636,12 +642,12 @@ export function addPerformanceMarks(arr, drumsLine = null) {
     }
     arr.ritStart = rStart;
   }
-  // Schlagzeug: Groove-Bezeichnungen an Formteilen
-  if (drumsLine) {
+  // Schlagzeug: Groove-Bezeichnungen an Formteilen (nicht bei 1:1 aus der Vorlage – dort ist es der Original-Groove)
+  if (drumsLine && !arr.tempoFromSource) {
     let last = null;
     for (const b of blocks) {
-      const t = b.startBar * mt;
-      const has = drumsLine.events.some((e) => e.start >= t && e.start < t + b.measures * mt);
+      const t = barTick(arr, b.startBar);
+      const has = drumsLine.events.some((e) => e.start >= t && e.start < barTick(arr, b.startBar + b.measures));
       if (!has) continue;
       const txt = b.type === 'coda' ? 'Fills & Hits mit den Bläsern' : DRUM_TEXT[style.id];
       if (txt !== last) drumsLine.dirs.push({ t, kind: 'words', text: txt });

@@ -120,3 +120,41 @@ test('MIDI mit Tempowechseln: neues Tempo und rit. landen in Noten & Wiedergabe'
   assert.ok(/<per-minute>140<\/per-minute>/.test(xml), 'Metronomangabe ♩ = 140');
   assert.ok(/>rit\.</.test(xml), 'rit. in den Noten');
 });
+
+test('Taktartwechsel (4/4 → 3/4 → 4/4) bleiben im Play-along, in den Noten und in der Wiedergabe erhalten', async () => {
+  const { arrange } = await import('../src/arrange/engine.js');
+  const { performArrangement } = await import('../src/output/performance.js');
+  const { exportMusicXML } = await import('../src/output/musicxml.js');
+  // 4 Takte 4/4, 4 Takte 3/4, 4 Takte 4/4 – jede Taktart-"1" mit langem Ton, Rest Viertel
+  const events = [];
+  const drums = [];
+  let t = 0;
+  const bars = [4, 4, 4, 4, 3, 3, 3, 3, 4, 4, 4, 4];
+  for (const beats of bars) {
+    for (let q = 0; q < beats; q++) {
+      events.push({ t: t + q * 96, d: 90, ch: 0, key: q === 0 ? 72 : 76 });
+      drums.push({ t: t + q * 96, d: 20, ch: 9, key: q === 0 ? 36 : 42 });
+    }
+    t += beats * 96;
+  }
+  const bytes = makeMidi([{ name: 'Melodie', events }, { name: 'Drums', events: drums }], {
+    tempo: 120,
+    timeSigs: [{ t: 0, beats: 4, beatType: 4 }, { t: 16 * 96, beats: 3, beatType: 4 }, { t: 28 * 96, beats: 4, beatType: 4 }],
+  });
+  const song = songFromMidi(bytes);
+  assert.deepEqual(song.meterMap.map((x) => `${x.bar}:${x.meter.beats}/${x.meter.beatType}`), ['0:4/4', '4:3/4', '8:4/4']);
+  assert.equal(song.measureCount, 12);
+  for (const opts of [{ ensemble: 'solo', soloInstrument: 'trumpet', playback: true }, { ensemble: 'drums' }]) {
+    const a = arrange(song, opts);
+    assert.ok(a.grid, 'Taktraster mit Wechseln');
+    const xml = exportMusicXML(a);
+    const times = [...xml.matchAll(/<time>\s*<beats>(\d+)<\/beats>\s*<beat-type>(\d+)<\/beat-type>\s*<\/time>/g)].map((m) => `${m[1]}/${m[2]}`);
+    // jede Stimme: Anfang + zwei Wechsel
+    assert.ok(times.join(',').startsWith('4/4,3/4,4/4'), times.join(','));
+    // jeder Takt beginnt mit der "1" (langer Ton bzw. Bass Drum) – Taktstriche sitzen richtig
+    const perf = performArrangement(a);
+    const off = (a.sourceOffset || 0) / a.mt;
+    assert.ok(Math.abs(perf.barToSec(off + 5) - perf.barToSec(off + 4) - 1.5) < 0.01, '3/4-Takt dauert 1,5 s bei 120');
+    assert.ok(Math.abs(perf.barToSec(off + 9) - perf.barToSec(off + 8) - 2.0) < 0.01, '4/4-Takt dauert 2 s');
+  }
+});

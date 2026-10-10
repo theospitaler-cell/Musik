@@ -7,7 +7,7 @@
 import { DIV } from '../core/constants.js';
 import { Rng } from '../core/rng.js';
 import { keyName, keyNameDe } from '../theory/keys.js';
-import { normalizeChords, songMeasureTicks } from '../model/song.js';
+import { normalizeChords, songMeasureTicks, makeBarGrid, hasMeterChanges } from '../model/song.js';
 import { getStyle } from './styles.js';
 import { getInstrument, withRange, fitOctave } from './instruments.js';
 import { ROLE_NAMES } from './planner.js';
@@ -84,12 +84,13 @@ export function defaultPlayParts(opts) {
 }
 
 // Tempo je Takt aus den Schlagzeiten der Aufnahme (in Vierteln; 12/8: punktierte Viertel × 1,5)
-function tempoMapFromTiming(song, { leadBars, mt, tempo, compound }) {
+function tempoMapFromTiming(song, { leadBars, mt, tempo, compound, bt: barT = null }) {
+  const BT = (bar) => (barT ? barT(bar) : bar * mt);
   const tg = song.timing;
   // Datei mit ausdrücklichen Tempowechseln (MIDI/MusicXML): genau diese übernehmen
   if ((!tg || !tg.beatSec) && song.tempoEvents && song.tempoEvents.length > 1) {
     const scale = tempo / song.tempoEvents[0].bpm; // vom Benutzer geändertes Grundtempo
-    return song.tempoEvents.map((e, i) => ({ t: i ? e.t + leadBars * mt : 0, bpm: Math.round(e.bpm * scale) }));
+    return song.tempoEvents.map((e, i) => ({ t: i ? e.t + BT(leadBars) : 0, bpm: Math.round(e.bpm * scale) }));
   }
   if (!tg || !tg.beatSec || tg.beatSec.length < 2) return [{ t: 0, bpm: tempo }];
   const map = [];
@@ -104,7 +105,7 @@ function tempoMapFromTiming(song, { leadBars, mt, tempo, compound }) {
     if (compound) bpm *= 1.5;
     bpm = Math.round(bpm);
     if (!map.length || Math.abs(bpm - last) >= 1) {
-      map.push({ t: map.length ? (leadBars + bar) * mt : 0, bpm });
+      map.push({ t: map.length ? BT(leadBars + bar) : 0, bpm });
       last = bpm;
     }
   }
@@ -124,6 +125,10 @@ export function arrangePlayAlong(song, opts) {
   const leadBars = song.pickup > 0 ? Math.ceil(song.pickup / mt) : 0;
   const off = leadBars * mt;
   const totalBars = M + leadBars;
+  // Taktartwechsel: Taktraster mit eigener Länge je Takt (Ticks der Vorlage bleiben 1:1)
+  const grid = hasMeterChanges(song) ? makeBarGrid(song.meter, song.meterMap, totalBars, leadBars) : null;
+  const bt = (bar) => (grid ? grid.start(bar) : bar * mt);
+  const endTick = bt(totalBars);
   const sections = song.sections.length ? song.sections : [{ label: 'A', start: 0, length: M }];
   const sources = playAlongSources(song);
   const srcName = (id) => sources.find((s) => s.id === id)?.name || id;
@@ -154,20 +159,20 @@ export function arrangePlayAlong(song, opts) {
       source: sec,
     });
   });
-  const songChords = normalizeChords(song.chords, M * mt);
+  const songChords = normalizeChords(song.chords, endTick - off);
   for (const b of blocks) {
-    const a = (b.startBar - leadBars) * mt;
-    const e = a + b.measures * mt;
+    const a = bt(b.startBar) - off;
+    const e = bt(b.startBar + b.measures) - off;
     b.chords = normalizeChords(
       songChords.filter((c) => c.start < e && c.start + c.dur > a).map((c) => ({ start: Math.max(0, c.start - a), dur: Math.min(e, c.start + c.dur) - Math.max(a, c.start), chord: c.chord })),
-      b.measures * mt,
+      e - a,
     );
-    if (!b.chords.length && songChords.length) b.chords = [{ start: 0, dur: b.measures * mt, chord: songChords[0].chord }];
+    if (!b.chords.length && songChords.length) b.chords = [{ start: 0, dur: e - a, chord: songChords[0].chord }];
     b.segments = [{ bars: b.measures, roles: nVoices ? melodicParts.map(() => 'melody') : ['rest'], startBar: 0 }];
   }
   const chordTrack = normalizeChords(
     songChords.map((c) => ({ ...c, start: c.start + off })).concat(leadBars && songChords.length ? [{ start: 0, dur: off, chord: songChords[0].chord }] : []),
-    totalBars * mt,
+    endTick,
   );
 
   // ---- Melodische Stimmen ----
@@ -185,7 +190,7 @@ export function arrangePlayAlong(song, opts) {
       const low = inst.family === 'bass' || ['tuba', 'sousaphone', 'ebass', 'contrabass', 'bassTrombone', 'bassClarinet', 'bassoon', 'bariSax'].includes(inst.id);
       src = t ? monoLine(t.notes, low) : [];
     }
-    const mel = src.filter((n) => n.start + off >= 0 && n.start < M * mt);
+    const mel = src.filter((n) => n.start + off >= 0 && n.start < endTick - off);
     const octave = fitOctave(mel, inst).shift; // eine Oktavlage für die ganze Stimme
     const ctx = new BlockCtx({ style, rng: rng.fork(`v${i}`), key, meter: song.meter, measures: totalBars, chords: chordTrack, tempo, inst: [inst], block: blocks[0], prevState: [{}] });
     let line = cleanLine(mel.map((n) => ev(n.start + off, n.dur, n.midi + octave, n.lof ?? null)));
@@ -199,7 +204,7 @@ export function arrangePlayAlong(song, opts) {
   let drumEvents = [];
   const dLv = drumPart ? levelFor({ difficulty: opts.difficulty, voiceDifficulty: opts.voiceDifficulty }, melodicParts.length) : null;
   if (drumPart) {
-    const total = totalBars * mt;
+    const total = endTick;
     const fromFile = song.drumNotes && song.drumNotes.length;
     if (fromFile) drumEvents = drumsFromNotes(song.drumNotes, { offset: off, totalTicks: total, beat });
     if (fromFile && song.source === 'audio') notes.push('Schlagzeug aus der Aufnahme erkannt (Bass Drum, Snare, Hi-Hat je Formteil) – bitte mit dem Original anhören.');
@@ -209,19 +214,21 @@ export function arrangePlayAlong(song, opts) {
       sections.forEach((sec, i) => {
         const ctx = new BlockCtx({ style, rng: rng.fork(`d${i}`), key, meter: song.meter, measures: sec.length, chords: [], tempo, inst: [null], block: blocks[0], prevState: [{}] });
         const evs = genDrumsSegment(ctx, { mode: 'groove', bars: sec.length, isBlockStart: true, isBlockEnd: i < sections.length - 1, intensity: 0.6 });
-        drumEvents.push(...evs.map((e) => ({ ...e, start: e.start + (leadBars + sec.start) * mt })));
+        drumEvents.push(...evs.map((e) => ({ ...e, start: e.start + bt(leadBars + sec.start) })));
       });
       // Letzter Takt: Schlussschlag (Crash + Bass Drum auf "1"), kein Fill ins Leere
-      const lastBar = (totalBars - 1) * mt;
+      const lastBar = bt(totalBars - 1);
       drumEvents = drumEvents.filter((e) => e.start < lastBar);
       const fin = genDrumsSegment(new BlockCtx({ style, rng: rng.fork('fin'), key, meter: song.meter, measures: 1, chords: [], tempo, inst: [null], block: blocks[0], prevState: [{}] }), { mode: 'final', bars: 1, isBlockStart: false, isBlockEnd: true, hitsLine: [{ start: 0, dur: mt, finalHit: true }], intensity: 1 });
       drumEvents.push(...fin.map((e) => ({ ...e, start: e.start + lastBar })));
     }
-    if (opts.drumMode === 'own') {
+    if (opts.drumMode === 'own' && grid) {
+      notes.push('Taktartwechsel im Stück: Schlagzeug wird 1:1 wie im Original notiert (eigener Rhythmus nur ohne Taktartwechsel).');
+    } else if (opts.drumMode === 'own') {
       // Eigener Rhythmus: Original-Groove als Grundlage, je Schwierigkeit einfacher oder reicher
       drumEvents = varyDrums(drumEvents, dLv || 3, { mt, beat, sections, leadBars, rng: rng.fork('vary') });
       notes.push(`Eigener Rhythmus auf Basis des Original-Grooves (${['', 'Sehr leicht', 'Leicht', 'Mittel', 'Fortgeschritten', 'Profi'][dLv || 3]}).`);
-    } else if (drumEvents.length && song.drumNotes && song.drumNotes.length && opts.drumFills === true && dLv !== 1) {
+    } else if (!grid && drumEvents.length && song.drumNotes && song.drumNotes.length && opts.drumFills === true && dLv !== 1) {
       // Fills im Groove: am Ende jedes Formteils (2 Schläge) und nach 8-Takt-Phrasen (1 Schlag)
       const fillBars = [];
       sections.forEach((sec, i) => {
@@ -235,7 +242,7 @@ export function arrangePlayAlong(song, opts) {
 
   // ---- Nachbearbeitung (ohne Verzierungen – Töne & Rhythmus bleiben wie in der Vorlage) ----
   const report = newReport();
-  const arr = { voices, blocks, mt, beat, style, rng: rng.fork('post'), chordTrack, keyAt: keyAtFactory(blocks, mt), tempo, levels };
+  const arr = { voices, blocks, mt, beat, style, rng: rng.fork('post'), chordTrack, keyAt: keyAtFactory(blocks, mt, grid), tempo, levels, grid, tempoFromSource: true };
   voices.forEach((v, i) => {
     const lv = levels[i];
     v.events = embellishLine(v.events, lv, { chordTrack, keyAt: arr.keyAt, inst: v.inst, style, mt, beat, rng: rng.fork(`emb${i}`) });
@@ -255,10 +262,10 @@ export function arrangePlayAlong(song, opts) {
   if (drums) addPerformanceMarks({ ...arr, voices: [] }, drums);
   // Tempo wie in der Aufnahme: sichtbare Wechsel (♩ = …, rit., accel., a tempo) und eine
   // Tempo-Map je Takt für MIDI/MusicXML-Wiedergabe in anderen Programmen
-  arr.tempoMap = tempoMapFromTiming(song, { leadBars, mt, tempo, compound });
+  arr.tempoMap = tempoMapFromTiming(song, { leadBars, mt, tempo, compound, bt });
   for (const tm of song.tempoMarks || []) {
     if (tm.kind === 'tempo' && tm.bar === 0) continue;
-    const t = (leadBars + tm.bar) * mt;
+    const t = bt(leadBars + tm.bar);
     const scale = song.tempoEvents && !song.timing ? tempo / song.tempoEvents[0].bpm : 1;
     const dir = tm.kind === 'tempo' ? { t, kind: 'metro', bpm: Math.round(tm.bpm * scale), meter: song.meter } : { t, kind: 'words', text: { rit: 'rit.', accel: 'accel.', atempo: 'a tempo' }[tm.kind] };
     for (const v of voices) v.dirs.push({ ...dir });
@@ -287,6 +294,7 @@ export function arrangePlayAlong(song, opts) {
     key,
     meter: song.meter,
     mt,
+    grid,
     beat,
     tempo,
     tempoMap: arr.tempoMap,

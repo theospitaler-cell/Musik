@@ -89,9 +89,9 @@ function isTripletBeat(boundaries, beatStart, mi) {
 
 // Gibt pro Takt eine Liste von Items zurück
 // item: {kind, start, dur, type, dots, tuplet, ev, first, last, tieStart, tieStop, pitches, lofs}
-export function layoutVoice(events, meter, totalBars) {
-  const mi = meterInfo(meter);
-  const mt = mi.measureTicks;
+// geom (optional, bei Taktartwechseln): {start(m), mi(m)} – Taktanfang & Taktart je Takt
+export function layoutVoice(events, meter, totalBars, geom = null) {
+  const mi0 = meterInfo(meter);
   const measures = [];
   const evs = [...events].sort((a, b) => a.start - b.start);
   // Haltebögen über Ereignisgrenzen (tieFromPrev)
@@ -105,7 +105,9 @@ export function layoutVoice(events, meter, totalBars) {
   }
   let idx = 0;
   for (let m = 0; m < totalBars; m++) {
-    const m0 = m * mt;
+    const mi = geom ? geom.mi(m) : mi0;
+    const mt = mi.measureTicks;
+    const m0 = geom ? geom.start(m) : m * mt;
     const m1 = m0 + mt;
     const segs = [];
     while (idx < evs.length && evs[idx].start + evs[idx].dur <= m0) idx++;

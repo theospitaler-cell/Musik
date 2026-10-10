@@ -315,8 +315,6 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
   const order = expandOrder(scan.measureMeta);
   const melIdx = melodyPart ?? guessMelodyPart(scan);
   const warnings = [];
-  if (scan.measureMeta.some((m, i) => i > 0 && m.meter && (m.meter.beats !== meter.beats || m.meter.beatType !== meter.beatType)))
-    warnings.push('Taktwechsel im Stück erkannt: es wird durchgehend mit der ersten Taktart gearbeitet.');
 
   // Startzeiten der ausgeschriebenen Takte
   let pickup = 0;
@@ -330,6 +328,25 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
     t += len;
   }
   const total = t;
+  // Taktartwechsel: gültige Taktart je Takt (Dokumentreihenfolge, weitergetragen), dann in der
+  // ausgeschriebenen Reihenfolge als [{bar, meter}]
+  const effMeter = [];
+  let carry = meter;
+  scan.measureMeta.forEach((mm, i) => {
+    if (mm.meter) carry = mm.meter;
+    effMeter[i] = carry;
+  });
+  const lead = pickup ? 1 : 0;
+  const meterMap = [];
+  let prevMeter = null;
+  order.forEach((mIdx, k) => {
+    const mtr = effMeter[mIdx] || meter;
+    const bar = k - lead;
+    if (bar >= 0 && (!prevMeter || prevMeter.beats !== mtr.beats || prevMeter.beatType !== mtr.beatType)) meterMap.push({ bar, meter: mtr });
+    prevMeter = mtr;
+  });
+  const meterChanges = meterMap.length > 1;
+  if (meterChanges) warnings.push(`Taktartwechsel: ${meterMap.slice(1).map((x) => `Takt ${x.bar + 1} ${x.meter.beats}/${x.meter.beatType}`).join(', ')} – wird so übernommen.`);
 
   const allNotes = [];
   let melodyRaw = [];
@@ -410,7 +427,7 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
   const sections = [];
   order.forEach((mIdx, k) => {
     const lab = scan.measureMeta[mIdx].label;
-    if (lab && starts[k] >= 0) sections.push({ label: lab, start: Math.round(starts[k] / mt) });
+    if (lab && starts[k] >= 0) sections.push({ label: lab, start: meterChanges ? k - lead : Math.round(starts[k] / mt) });
   });
 
   // Tempowechsel aus der Partitur (ausgeschriebene Reihenfolge)
@@ -433,7 +450,8 @@ export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
     tempo: scan.tempo,
     swing: scan.swing,
     pickup,
-    measureCount: Math.max(1, Math.ceil(total / mt - 0.01)),
+    measureCount: meterChanges ? Math.max(1, order.length - lead) : Math.max(1, Math.ceil(total / mt - 0.01)),
+    meterMap: meterChanges ? meterMap : undefined,
     melody,
     chords,
     sections,

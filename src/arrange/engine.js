@@ -19,6 +19,7 @@ import { arrangeSoloFree } from './solo-free.js';
 import { enforceContraryMotion, motionStats } from './voicing.js';
 import { embellishLine } from './embellish.js';
 import { arrangePlayAlong } from './playalong.js';
+import { hasMeterChanges } from '../model/song.js';
 import {
   enforceRange,
   ensureMovement,
@@ -79,6 +80,12 @@ export function arrange(songIn, options = {}) {
   }
   // Schlagzeug: immer mit Playback (1:1 wie im Original oder eigener Rhythmus im Charakter des Songs)
   if (opts.ensemble === 'drums') return arrangePlayAlong(songIn, { ...opts, playback: true, soloInstrument: 'drums', playParts: [{ source: 'drums', inst: 'drums' }] });
+  // Taktartwechsel: Solo folgt dem Original 1:1 (Form & Takte wie in der Vorlage, Verzierungen je Schwierigkeit)
+  if (opts.ensemble === 'solo' && !opts.playback && hasMeterChanges(songIn)) {
+    const a = arrangePlayAlong(songIn, { ...opts, playParts: [{ source: 'melody', inst: opts.soloInstrument || 'trumpet' }] });
+    a.report.notes = [...(a.report.notes || []), 'Taktartwechsel im Stück: das Solo folgt dem Originalablauf Takt für Takt.'];
+    return a;
+  }
   if (opts.ensemble === 'solo') return opts.playback ? arrangePlayAlong(songIn, opts) : arrangeSoloFree(songIn, opts);
   if (!Array.isArray(opts.voices) || opts.voices.length !== 4) throw new Error('Es müssen genau 4 Instrumente gewählt werden');
   const plan = planArrangement(songIn, opts);

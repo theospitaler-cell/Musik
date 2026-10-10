@@ -193,6 +193,28 @@ export function songFromMidi(buffer, { melodyPart = null, title = null } = {}) {
     parts: desc,
     melodyPart: melIdx,
   };
+  // Taktartwechsel der Datei -> [{bar, meter}]
+  const sigs = parsed.meta.timeSigs.map((x) => ({ t: Math.round(conv(x.tick)), meter: { beats: x.beats, beatType: x.beatType } })).sort((a, b) => a.t - b.t);
+  if (sigs.some((x) => x.meter.beats !== meter.beats || x.meter.beatType !== meter.beatType)) {
+    const meterMap = [{ bar: 0, meter }];
+    let bar = 0;
+    let t0 = 0;
+    let cur = meter;
+    for (const x of sigs) {
+      if (x.t <= 0 || (x.meter.beats === cur.beats && x.meter.beatType === cur.beatType)) continue;
+      const len = (cur.beats * DIV * 4) / cur.beatType;
+      bar += Math.round((x.t - t0) / len);
+      meterMap.push({ bar, meter: x.meter });
+      t0 = x.t;
+      cur = x.meter;
+    }
+    if (meterMap.length > 1) {
+      const len = (cur.beats * DIV * 4) / cur.beatType;
+      song.meterMap = meterMap;
+      song.measureCount = Math.max(1, bar + Math.ceil((lastEnd - t0) / len - 0.01));
+      song.warnings.push(`Taktartwechsel: ${meterMap.slice(1).map((x) => `Takt ${x.bar + 1} ${x.meter.beats}/${x.meter.beatType}`).join(', ')} – wird so übernommen.`);
+    }
+  }
   // Tempowechsel der Datei (rit./accel. als viele kleine Schritte)
   if (parsed.meta.tempos.length > 1) {
     const { marks, map } = marksFromEvents(parsed.meta.tempos.map((e) => ({ t: Math.round(conv(e.tick)), bpm: e.bpm })), [], mt);

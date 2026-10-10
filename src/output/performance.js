@@ -157,7 +157,9 @@ export function performArrangement(arr, { swing = arr.meta?.swing } = {}) {
   }
   notes.sort((a, b) => a.t - b.t);
   const audioStart = clock.audioStart || 0;
-  let total = clock.toSec(arr.totalBars * arr.mt) + 1.5;
+  const g = arr.grid;
+  const barTick = (bar) => (g ? g.start(bar) : bar * arr.mt);
+  let total = clock.toSec(barTick(arr.totalBars)) + 1.5;
   if (bk && bk.kind === 'audio' && arr.song?.duration) total = Math.max(total, audioStart + arr.song.duration);
-  return { notes, total, clock, audioStart, barToSec: (bar) => clock.toSec(bar * arr.mt), secToBar: (s) => Math.floor(clock.toTick(s) / arr.mt) };
+  return { notes, total, clock, audioStart, barToSec: (bar) => clock.toSec(barTick(bar)), secToBar: (s) => (g ? g.barAt(clock.toTick(s)) : Math.floor(clock.toTick(s) / arr.mt)) };
 }

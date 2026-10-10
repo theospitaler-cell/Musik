@@ -22,6 +22,46 @@ export function measureTicks(meter) {
   return (meter.beats * DIV * 4) / meter.beatType;
 }
 
+// Taktraster mit Taktartwechseln: jeder Takt hat eigene Taktart & Länge.
+// meterMap: [{bar, meter}] (Takt-Index der Vorlage, ab dem die Taktart gilt); leadBars: vorangestellte
+// Takte (Auftakt-Takt im Arrangement) in der Anfangstaktart.
+export function makeBarGrid(meter, meterMap, totalBars, leadBars = 0) {
+  const meters = [];
+  const starts = [0];
+  const map = [...(meterMap || [])].sort((a, b) => a.bar - b.bar);
+  for (let k = 0; k < totalBars; k++) {
+    const b = k - leadBars;
+    let mtr = meter;
+    for (const x of map) if (x.bar <= b) mtr = x.meter;
+    meters.push(mtr);
+    starts.push(starts[k] + measureTicks(mtr));
+  }
+  const grid = {
+    meters,
+    starts,
+    len: (k) => (k < totalBars ? starts[k + 1] - starts[k] : measureTicks(meters[meters.length - 1] || meter)),
+    start: (k) => (k <= totalBars ? starts[k] : starts[totalBars] + (k - totalBars) * grid.len(totalBars)),
+    barAt(t) {
+      if (t < 0) return Math.floor(t / measureTicks(meter));
+      let lo = 0;
+      let hi = totalBars;
+      if (t >= starts[totalBars]) return totalBars + Math.floor((t - starts[totalBars]) / grid.len(totalBars));
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (starts[mid] <= t) lo = mid;
+        else hi = mid;
+      }
+      return lo;
+    },
+    changes: meters.map((m, k) => k === 0 || m.beats !== meters[k - 1].beats || m.beatType !== meters[k - 1].beatType),
+  };
+  return grid;
+}
+
+export function hasMeterChanges(song) {
+  return !!(song.meterMap && song.meterMap.some((x) => x.meter.beats !== song.meter.beats || x.meter.beatType !== song.meter.beatType));
+}
+
 export function songMeasureTicks(song) {
   return measureTicks(song.meter);
 }

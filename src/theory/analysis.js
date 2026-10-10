@@ -4,7 +4,7 @@ import { DIV, mod } from '../core/constants.js';
 import { buildChord, sameChord } from './chords.js';
 import { detectKey, scalePcs, makeKey } from './keys.js';
 import { lofNear, keyCenter } from './pitch.js';
-import { measureTicks, normalizeChords, monophonize, ensureSpelling, sortEvents } from '../model/song.js';
+import { measureTicks, normalizeChords, monophonize, ensureSpelling, sortEvents, makeBarGrid, hasMeterChanges } from '../model/song.js';
 
 const TEMPLATE_KINDS = [
   ['major', 0],
@@ -25,7 +25,7 @@ function beatStrengthWeight(t, mt, beatTicks) {
 }
 
 // Gewichte der Tonhöhenklassen in [a, b)
-function pcWeights(notes, a, b, mt, beatTicks, melodyOnly) {
+function pcWeights(notes, a, b, mt, beatTicks, melodyOnly, barStart = 0) {
   const w = new Array(12).fill(0);
   let bassPc = null;
   let bassMidi = Infinity;
@@ -33,7 +33,7 @@ function pcWeights(notes, a, b, mt, beatTicks, melodyOnly) {
     const s = Math.max(a, n.start);
     const e = Math.min(b, n.start + n.dur);
     if (e <= s) continue;
-    const strength = n.start >= a ? beatStrengthWeight(n.start, mt, beatTicks) : 1.0;
+    const strength = n.start >= a ? beatStrengthWeight(n.start - barStart, mt, beatTicks) : 1.0;
     w[mod(n.midi, 12)] += ((e - s) / DIV) * strength;
     if (!melodyOnly && n.start <= a + beatTicks / 2 && n.midi < bassMidi) {
       bassMidi = n.midi;
@@ -89,22 +89,25 @@ function bestChord(weights, key, prev, bassPc) {
 }
 
 // Harmonisierung: pro Takt, ggf. pro Halbtakt (bei 4/4) oder pro Schlag (3/4 Walzer nicht)
-export function harmonize(notes, { meter, key, measureCount, melodyOnly = false }) {
-  const mt = measureTicks(meter);
-  const beatTicks = (DIV * 4) / meter.beatType * (meter.beatType === 8 && meter.beats % 3 === 0 ? 3 : 1);
+export function harmonize(notes, { meter: meter0, key, measureCount, melodyOnly = false, grid = null }) {
+  const mt0 = measureTicks(meter0);
   const chords = [];
   let prev = null;
   for (let m = 0; m < measureCount; m++) {
-    const a = m * mt;
+    // Taktartwechsel: Länge & Schlag je Takt aus dem Taktraster
+    const meter = grid ? grid.meters[m] : meter0;
+    const mt = grid ? grid.len(m) : mt0;
+    const beatTicks = (DIV * 4) / meter.beatType * (meter.beatType === 8 && meter.beats % 3 === 0 ? 3 : 1);
+    const a = grid ? grid.start(m) : m * mt;
     const b = a + mt;
-    const whole = pcWeights(notes, a, b, mt, beatTicks, melodyOnly);
+    const whole = pcWeights(notes, a, b, mt, beatTicks, melodyOnly, a);
     const full = bestChord(whole.w, key, prev, whole.bassPc);
     let used = [{ start: a, dur: mt, best: full }];
     // Halbtakt-Test
     if (mt >= DIV * 4 && mt % 2 === 0) {
       const h = mt / 2;
-      const w1 = pcWeights(notes, a, a + h, mt, beatTicks, melodyOnly);
-      const w2 = pcWeights(notes, a + h, b, mt, beatTicks, melodyOnly);
+      const w1 = pcWeights(notes, a, a + h, mt, beatTicks, melodyOnly, a);
+      const w2 = pcWeights(notes, a + h, b, mt, beatTicks, melodyOnly, a);
       const b1 = bestChord(w1.w, key, prev, w1.bassPc);
       const b2 = bestChord(w2.w, key, b1?.c, w2.bassPc);
       if (b1 && b2 && Number.isFinite(b1.score) && Number.isFinite(b2.score) && !sameChord(b1.c, b2.c)) {
@@ -128,13 +131,14 @@ export function harmonize(notes, { meter, key, measureCount, melodyOnly = false 
   if (chords.length) {
     const last = chords[chords.length - 1];
     const tonic = buildChord(key.tonicLof, key.mode === 'minor' ? 'minor' : 'major');
-    const lastNotes = pcWeights(notes, last.start, last.start + last.dur, mt, beatTicks, melodyOnly);
+    const lastNotes = pcWeights(notes, last.start, last.start + last.dur, mt0, DIV, melodyOnly, last.start);
     const tPcs = tonic.tones.map((t) => t.pc);
     const ok = lastNotes.w.every((x, pc) => !x || tPcs.includes(pc));
     if (ok) last.chord = tonic;
   }
-  if (!chords.length) chords.push({ start: 0, dur: mt * Math.max(1, measureCount), chord: buildChord(key.tonicLof, key.mode === 'minor' ? 'minor' : 'major') });
-  return normalizeChords(chords, measureCount * mt);
+  const totalTicks = grid ? grid.start(measureCount) : measureCount * mt0;
+  if (!chords.length) chords.push({ start: 0, dur: Math.max(mt0, totalTicks), chord: buildChord(key.tonicLof, key.mode === 'minor' ? 'minor' : 'major') });
+  return normalizeChords(chords, totalTicks);
 }
 
 // --- Formanalyse -------------------------------------------------------
@@ -175,7 +179,8 @@ export function autoSections(song) {
     raw[raw.length - 1].length += r.length;
   }
   const labels = [];
-  const sigs = raw.map((r) => phraseSignature(song.melody, r.start * mt, (r.start + r.length) * mt));
+  const g = hasMeterChanges(song) ? makeBarGrid(song.meter, song.meterMap, M) : null;
+  const sigs = raw.map((r) => (g ? phraseSignature(song.melody, g.start(r.start), g.start(r.start + r.length)) : phraseSignature(song.melody, r.start * mt, (r.start + r.length) * mt)));
   let nextLetter = 0;
   const reps = [];
   for (let i = 0; i < raw.length; i++) {
@@ -230,7 +235,9 @@ export function finalizeSong(song, { allNotes = null } = {}) {
   const lastEnd = Math.max(0, ...song.melody.map((n) => n.start + n.dur));
   if (!song.measureCount) song.measureCount = Math.max(1, Math.ceil(lastEnd / mt));
   song.measureCount = Math.max(1, song.measureCount);
-  const total = song.measureCount * mt;
+  // Taktartwechsel: Gesamtlänge über das Taktraster
+  const grid = hasMeterChanges(song) ? makeBarGrid(song.meter, song.meterMap, song.measureCount) : null;
+  const total = grid ? grid.start(song.measureCount) : song.measureCount * mt;
   // Noten über das Ende hinaus kappen
   song.melody = song.melody.filter((n) => n.start < total).map((n) => ({ ...n, dur: Math.min(n.dur, total - n.start) }));
 
@@ -247,6 +254,7 @@ export function finalizeSong(song, { allNotes = null } = {}) {
       key: song.key,
       measureCount: song.measureCount,
       melodyOnly: !(allNotes && allNotes.length),
+      grid,
     });
     song.chordsDetected = true;
   } else {

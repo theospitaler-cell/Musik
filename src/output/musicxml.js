@@ -78,11 +78,32 @@ function voiceLabel(i) {
 }
 
 // Takte, in denen die Stimme pausiert
-function emptyBars(events, totalBars, mt) {
+// Taktgeometrie: gleichmäßig (Takt × mt) oder mit Taktartwechseln (arr.grid)
+export function barGeom(arr) {
+  const G = arr.grid || null;
+  const mt = arr.mt;
+  const meterAt = (m) => (G ? G.meters[Math.max(0, Math.min(m, G.meters.length - 1))] : arr.meter);
+  const cache = new Map();
+  return {
+    grid: G,
+    start: (m) => (G ? G.start(m) : m * mt),
+    len: (m) => (G ? G.len(m) : mt),
+    meter: meterAt,
+    barAt: (t) => (G ? G.barAt(t) : Math.floor(t / mt)),
+    mi: (m) => {
+      const k = G ? `${meterAt(m).beats}/${meterAt(m).beatType}` : 'u';
+      if (!cache.has(k)) cache.set(k, meterInfo(meterAt(m)));
+      return cache.get(k);
+    },
+    changed: (m) => !!(G && m > 0 && G.changes[m]),
+  };
+}
+
+function emptyBars(events, totalBars, mt, geo = null) {
   const busy = new Array(totalBars).fill(false);
   for (const e of events) {
-    const a = Math.floor(e.start / mt);
-    const b = Math.floor((e.start + e.dur - 1) / mt);
+    const a = geo ? geo.barAt(e.start) : Math.floor(e.start / mt);
+    const b = geo ? geo.barAt(e.start + e.dur - 1) : Math.floor((e.start + e.dur - 1) / mt);
     for (let m = a; m <= b && m < totalBars; m++) busy[m] = true;
   }
   return busy.map((x) => !x);
@@ -515,12 +536,12 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
   const inst = v.inst;
   const tr = transposeInfo(inst, concert);
   const mt = arr.mt;
-  const mi = meterInfo(arr.meter);
+  const geo = barGeom(arr);
   const total = arr.totalBars;
   const printed = printedMeasures(arr);
   const keyAtBar = (m) => blockAtBar(arr, m).key;
   const toWritten = (e) => {
-    const m = Math.floor(e.start / mt);
+    const m = geo.barAt(e.start);
     const pk = partKeyFifths(keyAtBar(m).fifths, tr);
     return {
       ...e,
@@ -530,8 +551,8 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     };
   };
   const events = v.events.map(toWritten);
-  const measures = layoutVoice(events, arr.meter, total);
-  const emptySrc = emptyBars(v.events, total, mt);
+  const measures = layoutVoice(events, arr.meter, total, geo.grid ? geo : null);
+  const emptySrc = emptyBars(v.events, total, mt, geo.grid ? geo : null);
   const emptyPrinted = printed.map((pm) => emptySrc[pm.src] && !pm.startRepeat && !pm.endRepeat && !pm.segno && !pm.coda && !pm.toCoda && !pm.dalSegno);
   const blockStarts = new Set(arr.blocks.map((b) => b.startBar));
   // Stichnoten & Mehrtaktpausen (nur Einzelstimmen), auf gedruckter Folge
@@ -567,7 +588,7 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     }
   }
   const breaks = printedBreaks(arr, printed, isPart ? emptyPrinted : null, isPart ? multiRest : null);
-  const dirsAt = (bar) => v.dirs.filter((d) => d.t >= bar * mt && d.t < (bar + 1) * mt);
+  const dirsAt = (bar) => v.dirs.filter((d) => d.t >= geo.start(bar) && d.t < geo.start(bar + 1));
   const simile = useSimile ? simileFlags(printed, measures, dirsAt, roleAtFactory(arr, ps.idx), breaks, blockStarts) : printed.map(() => false);
   let currentClef = inst.clef;
   let currentKey = null;
@@ -589,14 +610,19 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     const pk = partKeyFifths(block.key.fifths, tr);
     let clef = null;
     if (blockStart) {
-      const c = clefForBlock(v.events, inst, block.startBar * mt, (block.startBar + block.measures) * mt, tenorClef);
+      const c = clefForBlock(v.events, inst, geo.start(block.startBar), geo.start(block.startBar + block.measures), tenorClef);
       if (c && c !== currentClef) clef = c;
     }
     const keyChanged = currentKey === null || currentKey.fifths !== pk.fifths || currentKey.mode !== block.key.mode;
     const mr = multiRest.get(k);
     const simStart = simile[k] && !simileOpen;
     const simStop = !simile[k] && simileOpen;
-    if (k === 0 || keyChanged || clef || mr || simStart || simStop) {
+    // Taktartwechsel: neue Taktangabe (auch nach Sprüngen in der gedruckten Folge)
+    const meterHere = geo.meter(m);
+    const prevMeter = k > 0 ? geo.meter(printed[k - 1].src) : null;
+    const timeChanged = k > 0 && (meterHere.beats !== prevMeter.beats || meterHere.beatType !== prevMeter.beatType);
+    const mi = geo.mi(m);
+    if (k === 0 || keyChanged || clef || mr || simStart || simStop || timeChanged) {
       w.open('attributes');
       if (k === 0) w.el('divisions', DIV);
       if (keyChanged) {
@@ -606,10 +632,10 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
         w.close('key');
         currentKey = { fifths: pk.fifths, mode: block.key.mode };
       }
-      if (k === 0) {
+      if (k === 0 || timeChanged) {
         w.open('time');
-        w.el('beats', arr.meter.beats);
-        w.el('beat-type', arr.meter.beatType);
+        w.el('beats', meterHere.beats);
+        w.el('beat-type', meterHere.beatType);
         w.close('time');
       }
       if (k === 0 || clef) {
@@ -687,17 +713,18 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     const harmonies = [];
     const showChords = chords === 'all' || (chords === 'solo' && block.showChords && (block.segments.some((sg) => sg.roles[ps.idx] === 'solo') || (!isPart && first)));
     if (showChords) {
-      const m0 = m * mt;
+      const m0 = geo.start(m);
       for (const c of arr.chordTrack) {
-        if (c.start >= m0 && c.start < m0 + mt) harmonies.push({ t: c.start - m0, chord: chordForPart(c.chord, tr, pk.enh) });
+        if (c.start >= m0 && c.start < m0 + geo.len(m)) harmonies.push({ t: c.start - m0, chord: chordForPart(c.chord, tr, pk.enh) });
         else if (c.start < m0 && c.start + c.dur > m0 && (m === block.startBar || k === 0 || breaks.has(k))) harmonies.push({ t: 0, chord: chordForPart(c.chord, tr, pk.enh) });
       }
     }
     // Haltebögen über Sprünge hinweg entfernen
     const nextPm = printed[k + 1];
-    const itemsFixed = items.map((it) => (it.tieStart && it.kind === 'note' && (!nextPm || nextPm.src !== m + 1) && it.start + it.dur >= mt ? { ...it, tieStart: false } : it));
-    const dirs = dirsAt(m).map((d) => ({ ...d, t: d.t - m * mt }));
-    if (showGlobal && arr.tempoMap) for (const tm of arr.tempoMap) if (tm.t > 0 && tm.t >= m * mt && tm.t < (m + 1) * mt) dirs.push({ t: tm.t - m * mt, kind: 'tempo', bpm: tm.bpm });
+    const itemsFixed = items.map((it) => (it.tieStart && it.kind === 'note' && (!nextPm || nextPm.src !== m + 1) && it.start + it.dur >= geo.len(m) ? { ...it, tieStart: false } : it));
+    const m0 = geo.start(m);
+    const dirs = dirsAt(m).map((d) => ({ ...d, t: d.t - m0 }));
+    if (showGlobal && arr.tempoMap) for (const tm of arr.tempoMap) if (tm.t > 0 && tm.t >= m0 && tm.t < geo.start(m + 1)) dirs.push({ t: tm.t - m0, kind: 'tempo', bpm: tm.bpm });
     writeMeasureItems(w, itemsFixed, { pre, dirs: inMultiRest > 0 && !dirs.length ? [] : dirs, harmonies, mi, keyFifths: pk.fifths, cue: inCue, isDrum: false, voice: 1, instRef: null });
     if (inMultiRest > 0) inMultiRest--;
     writeFormDirectionsEnd(w, pm, showGlobal);
@@ -732,8 +759,9 @@ function writeMetronome(w, arr, bpm, parentheses = false) {
 }
 
 function buildCue(arr, selfIdx, bar, tr) {
-  const a = bar * arr.mt;
-  const b = a + arr.mt;
+  const geo = barGeom(arr);
+  const a = geo.start(bar);
+  const b = geo.start(bar + 1);
   let best = null;
   arr.voices.forEach((v, i) => {
     if (i === selfIdx) return;
@@ -749,7 +777,7 @@ function buildCue(arr, selfIdx, bar, tr) {
   const fit = fitOctave(src.map((e) => ({ midi: e.pitches[0], dur: e.dur })), self);
   const pk = partKeyFifths(arr.keyAt(a).fifths, tr);
   const written = src.map((e) => ({ ...e, pitches: [e.pitches[0] + fit.shift + tr.semis], lofs: [e.lofs[0] === null || e.lofs[0] === undefined ? null : e.lofs[0] + tr.lof + pk.enh] }));
-  const items = layoutVoice(written, arr.meter, 1)[0].map((it) => ({ ...it, tieStart: false, tieStop: false }));
+  const items = layoutVoice(written, geo.meter(bar), 1)[0].map((it) => ({ ...it, tieStart: false, tieStop: false }));
   return { items, label: arr.voices[best.i].inst.short };
 }
 
@@ -1001,7 +1029,7 @@ function writeDirection(w, d, offset) {
 }
 
 // ---------- Schlagzeug ------------------------------------------------------
-function drumVoices(events, mt, mi) {
+function drumVoices(events, geo) {
   // nach Hände/Füße trennen, Gleichzeitiges zu Akkorden bündeln,
   // Dauer bis zum nächsten Schlag – aber immer als EIN Notenwert (keine Haltebögen)
   const out = { 1: [], 2: [] };
@@ -1020,8 +1048,11 @@ function drumVoices(events, mt, mi) {
     const list = [...groups[v].values()].sort((a, b) => a.start - b.start);
     list.forEach((x, i) => {
       const next = list[i + 1];
-      const barStart = Math.floor(x.start / mt) * mt;
-      const beatEnd = (Math.floor(x.start / mi.beatTicks) + 1) * mi.beatTicks;
+      const bar = geo.barAt(x.start);
+      const barStart = geo.start(bar);
+      const mt = geo.len(bar);
+      const mi = geo.mi(bar);
+      const beatEnd = barStart + (Math.floor((x.start - barStart) / mi.beatTicks) + 1) * mi.beatTicks;
       const limit = Math.min(next ? next.start : Infinity, barStart + mt, Math.max(beatEnd, x.start + 6));
       x.dur = singleValueDur(x.start - barStart, limit - x.start, mi) || Math.min(6, limit - x.start);
       x.pitches.sort((a, b) => a - b);
@@ -1064,13 +1095,12 @@ function writeSlashBar(w, mi) {
 function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle = 'chart' }) {
   void first;
   void useSimile;
-  const mt = arr.mt;
-  const mi = meterInfo(arr.meter);
+  const geo = barGeom(arr);
   const total = arr.totalBars;
   const printed = printedMeasures(arr);
-  const dv = drumVoices(arr.drums.events, mt, mi);
-  const m1 = layoutVoice(dv[1], arr.meter, total);
-  const m2 = layoutVoice(dv[2], arr.meter, total);
+  const dv = drumVoices(arr.drums.events, geo);
+  const m1 = layoutVoice(dv[1], arr.meter, total, geo.grid ? geo : null);
+  const m2 = layoutVoice(dv[2], arr.meter, total, geo.grid ? geo : null);
   const combined = m1.map((x, i) => [...x, ...m2[i]]);
   const emptySrc = combined.map((items) => !items.some((it) => it.kind === 'note'));
   const emptyPrinted = printed.map((pm) => emptySrc[pm.src] && !pm.startRepeat && !pm.endRepeat && !pm.segno && !pm.coda);
@@ -1129,17 +1159,26 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle
     } else if (breaks.has(k)) w.el('print', null, { 'new-system': 'yes' });
     writeLeftBarline(w, pm);
     const mr = multiRest.get(k);
-    if (k === 0 || mr) {
+    const mi = geo.mi(m);
+    const mt = geo.len(m);
+    const meterHere = geo.meter(m);
+    const prevMeter = k > 0 ? geo.meter(printed[k - 1].src) : null;
+    const timeChanged = k > 0 && (meterHere.beats !== prevMeter.beats || meterHere.beatType !== prevMeter.beatType);
+    if (k === 0 || mr || timeChanged) {
       w.open('attributes');
       if (k === 0) {
         w.el('divisions', DIV);
         w.open('key');
         w.el('fifths', 0);
         w.close('key');
+      }
+      if (k === 0 || timeChanged) {
         w.open('time');
-        w.el('beats', arr.meter.beats);
-        w.el('beat-type', arr.meter.beatType);
+        w.el('beats', meterHere.beats);
+        w.el('beat-type', meterHere.beatType);
         w.close('time');
+      }
+      if (k === 0) {
         w.open('clef');
         w.el('sign', 'percussion');
         w.close('clef');
@@ -1184,7 +1223,7 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle
       });
     if (slash[k] && !slash[k - 1]) textAbove('sim.');
     if (fillBar[k]) textAbove('Fill');
-    const ddirs = (arr.drums.dirs || []).filter((d) => d.t >= m * mt && d.t < (m + 1) * mt).map((d) => ({ ...d, t: d.t - m * mt }));
+    const ddirs = (arr.drums.dirs || []).filter((d) => d.t >= geo.start(m) && d.t < geo.start(m + 1)).map((d) => ({ ...d, t: d.t - geo.start(m) }));
     if (slash[k]) {
       for (const f of pre) f();
       for (const d of ddirs) writeDirection(w, d, 0);
