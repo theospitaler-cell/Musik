@@ -4,6 +4,7 @@ import { Rng } from '../core/rng.js';
 import { normalizeChords, sliceMelody } from '../model/song.js';
 import { keyName, keyNameDe } from '../theory/keys.js';
 import { planArrangement, ROLE_NAMES } from './planner.js';
+import { autoStyle } from './styles.js';
 import { BlockCtx, cleanLine, shiftEvents } from './context.js';
 import { placeMelody, adaptMelody, articulate } from './gen/melody.js';
 import { genBass } from './gen/bass.js';
@@ -70,6 +71,11 @@ function sliceChordsRel(chords, a, b) {
 export function arrange(songIn, options = {}) {
   const opts = { ...DEFAULT_OPTIONS };
   for (const [k, v] of Object.entries(options)) if (v !== undefined && v !== null && v !== '') opts[k] = v;
+  // Stil "Automatisch": aus dem Song ableiten
+  if (opts.style === 'auto') {
+    opts.style = autoStyle(songIn);
+    opts.styleAuto = true;
+  }
   if (opts.ensemble === 'solo') return opts.playback ? arrangePlayAlong(songIn, opts) : arrangeSoloFree(songIn, opts);
   if (!Array.isArray(opts.voices) || opts.voices.length !== 4) throw new Error('Es müssen genau 4 Instrumente gewählt werden');
   const plan = planArrangement(songIn, opts);

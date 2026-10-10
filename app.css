@@ -1871,3 +1871,18 @@ dialog::backdrop {
   cursor: pointer;
   padding: 2px 4px;
 }
+
+/* Tempo-Feld mit "Auto"-Knopf */
+.input-btn {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.input-btn input {
+  flex: 1;
+  min-width: 0;
+}
+.chip.small {
+  padding: 4px 10px;
+  font-size: 12px;
+}

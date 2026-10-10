@@ -186,6 +186,25 @@ export function getStyle(id) {
   return STYLES[id] || STYLES.funk;
 }
 
+// Stil automatisch aus dem Song ableiten (Taktart, Tempo, Swing, Besetzung der Vorlage)
+export function autoStyle(song) {
+  const m = song.meter || { beats: 4, beatType: 4 };
+  const tempo = song.tempo || 100;
+  const names = (song.parts || song.tracks || []).map((p) => p.name || '').join(' ');
+  const classicalNames = /(violin|viola|cello|violoncello|kontrabass|soprano|sopran|alto|tenor|bass\b|oboe|fagott|bassoon|horn in f|cembalo|organ|orgel)/i;
+  const classicalCount = (song.parts || []).filter((p) => classicalNames.test(p.name || '')).length;
+  if (classicalCount >= 3) return 'classical';
+  if (/(composer|bach|mozart|beethoven|haydn|händel|handel|schubert|brahms|vivaldi)/i.test(song.composer || '')) return 'classical';
+  if (song.swing) return 'swing';
+  if (m.beatType === 8 && m.beats % 3 === 0) return tempo < 90 ? 'ballad' : 'polka';
+  if (m.beats === 3) return tempo < 110 ? 'ballad' : 'classical';
+  if (m.beats === 2) return 'polka';
+  if (tempo < 82) return 'ballad';
+  if (tempo >= 112 && tempo <= 140 && /(marsch|march|polka)/i.test(song.title || '')) return 'polka';
+  if (/(swing|jazz|blues)/i.test(names + ' ' + (song.title || ''))) return 'swing';
+  return 'funk';
+}
+
 // Muster auf die Taktlänge (in 16teln) zuschneiden/wiederholen
 export function fitRhythmString(str, steps) {
   if (str.length === steps) return str;

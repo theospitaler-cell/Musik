@@ -294,3 +294,13 @@ test('Schwierigkeit verändert die Noten: Profi mit Läufen & Verzierungen, Orig
     assert.ok(pro.voices[0].events.every((e) => e.pitches[0] >= inst.range[0] && e.pitches[0] <= inst.range[1]));
   }
 });
+
+test('Stil „Automatisch“ wählt passend zum Song', () => {
+  const grace = arrange(demoSong('grace'), { style: 'auto', seed: 1 });
+  assert.ok(grace.options.styleAuto);
+  assert.equal(grace.style.id, 'ballad', '3/4, ruhig -> Ballade');
+  const saints = arrange(demoSong('saints'), { style: 'auto', seed: 1 });
+  assert.equal(saints.style.id, 'funk');
+  const solo = arrange(demoSong('grace'), { style: 'auto', ensemble: 'solo', soloInstrument: 'trumpet' });
+  assert.equal(solo.style.id, 'ballad');
+});

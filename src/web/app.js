@@ -20,7 +20,7 @@ import { loadSettings, saveSettings } from './settings.js';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const VOICE_COLORS = ['#1f3a5f', '#4f6d8f', '#8a6a2f', '#5b5f66', '#2f7d4f'];
-const STYLE_TAG = { funk: 'Funk', secondline: 'New Orleans', swing: 'Jazz', ballad: 'Pop', classical: 'Klassik', polka: 'Blasmusik' };
+const STYLE_TAG = { auto: 'Passend zum Song', funk: 'Funk', secondline: 'New Orleans', swing: 'Jazz', ballad: 'Pop', classical: 'Klassik', polka: 'Blasmusik' };
 
 const S = {
   audioUrl: null,
@@ -521,6 +521,7 @@ function applyOptsToUi(o) {
   $('#opt-adapt').value = String(o.adapt ?? 1);
   $('#opt-form').value = o.form || 'compact';
   $('#opt-tempo').value = o.tempo || '';
+  $('#tempo-auto')?.classList.toggle('hidden', !o.tempo);
   $('#opt-seed').value = o.seed || 1;
   fillTransposeSelect();
   if (o.transpose !== undefined) $('#opt-transpose').value = String(o.transpose);
@@ -562,7 +563,7 @@ function markPreset() {
 function renderStyles() {
   const box = $('#style-grid');
   box.innerHTML = '';
-  for (const s of STYLE_LIST) {
+  for (const s of [{ id: 'auto', name: 'Automatisch' }, ...STYLE_LIST]) {
     const b = document.createElement('button');
     b.className = 'style-card' + (S.opts.style === s.id ? ' active' : '');
     b.innerHTML = `<span class="tag">${STYLE_TAG[s.id] || ''}</span><strong>${s.name}</strong>`;
@@ -583,7 +584,7 @@ async function setSource(src) {
     await attachAudio(src);
     renderAnalysis();
     fillTransposeSelect();
-    if (song.tempo) $('#opt-tempo').placeholder = `auto (${song.tempo})`;
+    if (song.tempo) $('#opt-tempo').placeholder = `Automatisch (♩ ${song.tempo})`;
     $('#generate').disabled = false;
     S.opts.playParts = null; // Stimmen gehören zum Song
     S.opts.title = null;
@@ -727,7 +728,7 @@ async function showResult(onProgress = null) {
   $('#result').classList.remove('hidden');
   $('#res-title').textContent = a.meta.title;
   const chips = [
-    [a.playAlong ? 'Playback 1:1' : a.style.name, 'accent'],
+    [a.playAlong ? 'Playback 1:1' : a.options?.styleAuto ? `${a.style.name} (automatisch)` : a.style.name, 'accent'],
     [keyNameDe(a.key) + (a.transposeShift ? ` (${a.transposeShift > 0 ? '+' : ''}${a.transposeShift})` : ''), ''],
     [`♩ = ${a.tempo}`, ''],
     [`${S.printed.length} Takte gedruckt`, ''],
@@ -1111,7 +1112,7 @@ function renderSettings() {
   const st = S.settings;
   renderVoiceGrid($('#set-voices'), [...st.defaultVoices], (v) => update({ defaultVoices: [...v] }));
   const ss = $('#set-style');
-  ss.innerHTML = STYLE_LIST.map((s) => `<option value="${s.id}">${s.name}</option>`).join('');
+  ss.innerHTML = [{ id: 'auto', name: 'Automatisch (passend zum Song)' }, ...STYLE_LIST].map((s) => `<option value="${s.id}">${s.name}</option>`).join('');
   ss.value = st.defaultStyle;
   fillSoloSelect($('#set-solo'), st.defaultVoices, st.defaultSolo);
   difficultyOptions($('#set-difficulty'), st.defaultDifficulty ?? 'auto');
@@ -1384,6 +1385,16 @@ async function main() {
   });
   syncDiff($('#opt-solo-difficulty'), $('#opt-difficulty'));
   syncDiff($('#opt-difficulty'), $('#opt-solo-difficulty'));
+  // Tempo wieder automatisch
+  const tempoBtn = () => $('#tempo-auto').classList.toggle('hidden', !$('#opt-tempo').value);
+  $('#opt-tempo').addEventListener('input', tempoBtn);
+  $('#tempo-auto').addEventListener('click', (e) => {
+    e.preventDefault();
+    $('#opt-tempo').value = '';
+    tempoBtn();
+    toast('Tempo: automatisch (wie die Vorlage bzw. der Stil)');
+  });
+  tempoBtn();
   // Solo: Playback
   $('#opt-playback').addEventListener('change', (e) => setPlayback(e.target.checked));
   $('#pb-all').addEventListener('click', () => {
