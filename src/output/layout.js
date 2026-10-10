@@ -43,5 +43,7 @@ export function verovioOptions(paper = 'A4', { scale = 100, part = true, zoom = 
     spacingSystem: part ? 12 : 16,
     spacingStaff: part ? 8 : 6,
     mnumInterval: 0,
+    multiRestStyle: 'block', // klassischer H-Balken mit Zahl darüber
+    multiRestThickness: 2.4,
   };
 }

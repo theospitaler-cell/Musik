@@ -527,3 +527,114 @@ export function simplifyForReading(arr, meter) {
     }
   }
 }
+
+// ---------- Vortragsangaben -------------------------------------------------
+export function tempoTerm(bpm) {
+  if (bpm < 60) return 'Largo';
+  if (bpm < 72) return 'Adagio';
+  if (bpm < 88) return 'Andante';
+  if (bpm < 100) return 'Moderato';
+  if (bpm < 116) return 'Allegretto';
+  if (bpm < 140) return 'Allegro';
+  if (bpm < 168) return 'Vivace';
+  return 'Presto';
+}
+
+export function tempoHeading(style, bpm) {
+  const term = tempoTerm(bpm);
+  switch (style.id) {
+    case 'swing':
+      return { text: `${bpm < 110 ? 'Slow Swing' : bpm < 170 ? 'Medium Swing' : 'Up-Tempo Swing'} (Achtel triolisch)`, hint: 'Achtel triolisch (♫ = ♩ ♪ in Triole)' };
+    case 'funk':
+      return { text: `${term} – Funky`, hint: 'Straight 16ths, tight & laid back' };
+    case 'secondline':
+      return { text: `${term} – Second Line`, hint: 'New Orleans Groove' };
+    case 'ballad':
+      return { text: `${term} – Ballad`, hint: 'con espressione, rubato ad lib.' };
+    case 'polka':
+      return { text: 'Tempo di Polka', hint: 'zackig, Nachschläge kurz' };
+    default:
+      return { text: term, hint: null };
+  }
+}
+
+const EXPR = {
+  melody: { funk: 'marcato', secondline: 'con brio', swing: 'legato', ballad: 'espressivo', classical: 'cantabile', polka: 'leggiero' },
+  counter: { ballad: 'dolce', classical: 'dolce', swing: 'legato', polka: 'dolce', funk: 'Gegenstimme', secondline: 'Gegenstimme' },
+  fill: { ballad: 'dolce', classical: 'dolce', swing: 'Fills', funk: 'Fills', secondline: 'Fills', polka: 'dolce' },
+  stabs: { all: 'sempre staccato' },
+  comp: { funk: 'leggiero', secondline: 'leggiero', swing: 'Comping', ballad: 'legato', classical: 'sostenuto', polka: 'Nachschlag, leggiero' },
+  pad: { all: 'sostenuto' },
+  bass: { funk: 'Groove', secondline: 'Groove', swing: 'Walking', ballad: 'legato', polka: 'leggiero' },
+  background: { all: 'Background' },
+  tutti: { funk: 'Tutti – marcato', secondline: 'Tutti – marcato', swing: 'Tutti – Shout', ballad: 'Tutti', classical: 'Tutti – maestoso', polka: 'Tutti – maestoso' },
+  hits: { all: 'Tutti' },
+  riff: { all: 'Riff' },
+  subject: { all: 'cantabile' },
+  hook: { funk: 'Hook – marcato', secondline: 'Hook', swing: 'Hook', ballad: 'espressivo', classical: 'cantabile', polka: 'leggiero' },
+};
+
+const DRUM_TEXT = { funk: 'Funk-Groove', secondline: 'Second-Line-Groove', swing: 'Swing (Ride, HH auf 2 & 4)', ballad: 'Ballade (Rim-Click)', classical: 'Konzertant, sparsam', polka: 'Polka' };
+
+export function addPerformanceMarks(arr, drumsLine = null) {
+  const { voices, blocks, mt, style } = arr;
+  for (let v = 0; v < voices.length; v++) {
+    const line = voices[v];
+    let lastText = null;
+    let lastRole = null;
+    for (const b of blocks) {
+      if (b.copyOf !== undefined) {
+        lastText = null;
+        lastRole = null;
+        continue;
+      }
+      for (const seg of b.segments) {
+        if (seg.copyOfSeg !== undefined) continue;
+        const role = seg.roles[v];
+        const s0 = (b.startBar + seg.startBar) * mt;
+        const s1 = s0 + seg.bars * mt;
+        const first = line.events.find((e) => e.start >= s0 && e.start < s1);
+        if (!first || role === 'rest' || role === 'final' || role === 'solo') {
+          if (role !== 'rest') lastRole = role;
+          continue;
+        }
+        const map = EXPR[role];
+        const text = map ? map[style.id] ?? map.all ?? null : null;
+        if (text && (text !== lastText || role !== lastRole)) line.dirs.push({ t: first.start, kind: 'words', text, placement: 'below' });
+        lastText = text;
+        lastRole = role;
+      }
+    }
+  }
+  // rit. am Schluss (Ballade, Klassik, Swing) + Tempo-Verlauf für die Wiedergabe
+  arr.tempoMap = [{ t: 0, bpm: arr.tempo }];
+  const coda = blocks[blocks.length - 1];
+  if (coda && (style.id === 'ballad' || style.id === 'classical' || style.id === 'swing')) {
+    const finSeg = coda.segments[coda.segments.length - 1];
+    const ritBars = style.id === 'swing' ? 1 : 2;
+    const rStart = (coda.startBar + finSeg.startBar) * mt - (style.id === 'swing' ? 0 : mt * (ritBars - 1));
+    const rEnd = (coda.startBar + coda.measures) * mt;
+    for (const line of voices) {
+      const e = line.events.find((x) => x.start >= rStart && x.start < rEnd);
+      if (e) line.dirs.push({ t: e.start, kind: 'words', text: 'rit.' });
+    }
+    const steps = Math.max(1, Math.round((rEnd - rStart) / arr.beat));
+    for (let k = 0; k <= steps; k++) {
+      const bpm = Math.round(arr.tempo * (1 - 0.3 * (k / steps)));
+      arr.tempoMap.push({ t: rStart + k * arr.beat, bpm });
+    }
+    arr.ritStart = rStart;
+  }
+  // Schlagzeug: Groove-Bezeichnungen an Formteilen
+  if (drumsLine) {
+    let last = null;
+    for (const b of blocks) {
+      const t = b.startBar * mt;
+      const has = drumsLine.events.some((e) => e.start >= t && e.start < t + b.measures * mt);
+      if (!has) continue;
+      const txt = b.type === 'coda' ? 'Fills & Hits mit den Bläsern' : DRUM_TEXT[style.id];
+      if (txt !== last) drumsLine.dirs.push({ t, kind: 'words', text: txt });
+      last = txt;
+    }
+  }
+}

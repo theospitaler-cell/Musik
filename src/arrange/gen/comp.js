@@ -97,7 +97,8 @@ export function genComp(ctx, v, kind = 'comp', { partners = [], rank = 0, from =
         }
         const c = chordToneNear(chord, last, lo, hi, { roles: prio, avoidPcs, withColor, styleId: ctx.style.id, exclude });
         const e = ev(t, d, c.midi, c.lof);
-        if (hit.accent) addArt(e, 'accent');
+        const rhythmic = ['funk', 'secondline', 'swing', 'polka'].includes(ctx.style.id);
+        if (hit.accent && rhythmic && kind !== 'pad') addArt(e, 'accent');
         if (hit.short || (kind === 'stabs' && d <= 6)) addArt(e, 'staccato');
         if (ctx.style.id === 'polka' && d <= 12) addArt(e, 'staccato');
         if (kind === 'pad') e.pad = true;

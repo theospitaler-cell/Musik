@@ -22,6 +22,8 @@ import {
   applyDynamics,
   spellAll,
   simplifyForReading,
+  addPerformanceMarks,
+  tempoHeading,
   newReport,
   keyAtFactory,
 } from './post.js';
@@ -61,7 +63,10 @@ export function arrange(songIn, options = {}) {
   const plan = planArrangement(songIn, opts);
   const { blocks, song, style, insts, mt } = plan;
   const rng = new Rng(opts.seed);
-  const tempo = Math.round(opts.tempo || song.tempo || style.defaultTempo);
+  // Tempo: Nutzerangabe > Vorlage (wenn stilgerecht) > Stil-Standard
+  let tempo = opts.tempo || null;
+  if (!tempo && song.tempo && style.tempoRange && song.tempo >= style.tempoRange[0] && song.tempo <= style.tempoRange[1]) tempo = song.tempo;
+  tempo = Math.round(tempo || style.defaultTempo);
   const beat = song.meter.beatType === 8 && song.meter.beats % 3 === 0 && song.meter.beats > 3 ? (DIV * 3) / 2 : (DIV * 4) / song.meter.beatType;
   const prevState = [{}, {}, {}, {}];
   const voices = insts.map((inst, i) => ({ inst, events: [], dirs: [], label: `Stimme ${i + 1}` }));
@@ -295,6 +300,7 @@ export function arrange(songIn, options = {}) {
   decorate(arr, report);
   applyDynamics(arr);
   simplifyForReading(arr, song.meter);
+  addPerformanceMarks(arr);
   spellAll(arr);
   // Kopien (D.S.-Durchgang, wiederholte Tags) einsetzen
   const copyRange = (list, getT, setT, c) => {
@@ -341,6 +347,9 @@ export function arrange(songIn, options = {}) {
     });
   }
 
+  const drumsObj = opts.drums ? { name: 'Schlagzeug', events: cleanDrums(drumEvents), dirs: [] } : null;
+  if (drumsObj) addPerformanceMarks({ ...arr, voices: [] }, drumsObj);
+  const th = tempoHeading(style, tempo);
   const keyChanges = [];
   let lastKey = null;
   for (const b of blocks) {
@@ -357,7 +366,8 @@ export function arrange(songIn, options = {}) {
       keyName: keyName(song.key),
       keyNameDe: keyNameDe(song.key),
       tempo,
-      tempoText: style.tempoText,
+      tempoText: th.text,
+      styleHint: th.hint,
       swing: style.feel === 'swing8',
     },
     song,
@@ -367,9 +377,10 @@ export function arrange(songIn, options = {}) {
     mt,
     beat,
     tempo,
+    tempoMap: arr.tempoMap,
     totalBars: plan.totalBars,
     voices,
-    drums: opts.drums ? { name: 'Schlagzeug', events: cleanDrums(drumEvents), dirs: [] } : null,
+    drums: drumsObj,
     blocks,
     chordTrack: arr.chordTrack,
     keyAt,

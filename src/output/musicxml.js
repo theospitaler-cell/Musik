@@ -148,8 +148,8 @@ export function exportMusicXML(arr, opts = {}) {
     ps.pid = pid;
     if (ps.kind === 'drums') {
       w.open('score-part', { id: pid });
-      w.el('part-name', 'Schlagzeug');
-      w.el('part-abbreviation', 'Schlz.');
+      w.el('part-name', 'Schlagzeug', isPart ? { 'print-object': 'no' } : undefined);
+      w.el('part-abbreviation', 'Schlz.', isPart ? { 'print-object': 'no' } : undefined);
       for (const [num, d] of Object.entries(DRUM_DISPLAY)) {
         w.open('score-instrument', { id: `${pid}-X${num}` });
         w.el('instrument-name', d.name);
@@ -170,8 +170,9 @@ export function exportMusicXML(arr, opts = {}) {
     seen[base] = (seen[base] || 0) + 1;
     const nm = nameCount[base] > 1 ? `${base} ${seen[base]}` : base;
     w.open('score-part', { id: pid });
-    w.el('part-name', isPart ? `${nm} (${voiceLabel(ps.idx)})` : nm);
-    w.el('part-abbreviation', v.inst.short + (nameCount[base] > 1 ? ` ${seen[base]}` : ''));
+    // Einzelstimme: Name nur oben links im Kopf (Credit), nicht vor jedem System
+    w.el('part-name', isPart ? `${nm} (${voiceLabel(ps.idx)})` : nm, isPart ? { 'print-object': 'no' } : undefined);
+    w.el('part-abbreviation', v.inst.short + (nameCount[base] > 1 ? ` ${seen[base]}` : ''), isPart ? { 'print-object': 'no' } : undefined);
     w.open('score-instrument', { id: `${pid}-I1` });
     w.el('instrument-name', base);
     w.close('score-instrument');
@@ -185,8 +186,8 @@ export function exportMusicXML(arr, opts = {}) {
 
   partSpecs.forEach((ps, k) => {
     w.open('part', { id: ps.pid });
-    if (ps.kind === 'drums') writeDrumPart(w, arr, ps, { isPart, layout, first: k === 0 });
-    else writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first: k === 0 });
+    if (ps.kind === 'drums') writeDrumPart(w, arr, ps, { isPart, layout, first: k === 0, useSimile: !!opts.simile });
+    else writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first: k === 0, useSimile: !!opts.simile });
     w.close('part');
   });
   w.close('score-partwise');
@@ -371,21 +372,26 @@ function simileFlags(printed, measures, dirsByBar, roleAtBar, breaks, blockStart
   return flags;
 }
 
-function printedBreaks(arr, printed, emptyPrinted) {
-  // Systemumbruch: Formteil-Anfang, Coda, und alle 4 gedruckten Takte innerhalb eines Formteils
+function printedBreaks(arr, printed, emptyPrinted, multiRest = null) {
+  // Systemumbruch: Formteil-Anfang, Coda, Wiederholungsbeginn und alle 4 sichtbaren
+  // Takte. Eine Mehrtaktpause zählt dabei nur als EIN Takt (platzsparend).
   const breaks = new Set();
-  let sinceBreak = 0;
+  let units = 0;
+  let skipUntil = -1;
   for (let k = 0; k < printed.length; k++) {
     const m = printed[k];
     const isBlockStart = arr.blocks.some((b) => b.startBar === m.src);
-    if (k > 0 && (isBlockStart || m.coda || m.startRepeat)) {
+    if (k > 0 && (isBlockStart || m.coda || m.startRepeat) && k > skipUntil) {
       breaks.add(k);
-      sinceBreak = 0;
-    } else if (k > 0 && sinceBreak >= 4) {
+      units = 0;
+    } else if (k > 0 && units >= 4 && k > skipUntil) {
       breaks.add(k);
-      sinceBreak = 0;
+      units = 0;
     }
-    sinceBreak++;
+    if (k <= skipUntil) continue;
+    const mr = multiRest ? multiRest.get(k) : null;
+    if (mr) skipUntil = k + mr - 1;
+    units++;
   }
   if (emptyPrinted) for (const k of [...breaks]) if (emptyPrinted[k] && emptyPrinted[k - 1]) breaks.delete(k);
   return breaks;
@@ -487,7 +493,7 @@ function roleAtFactory(arr, idx) {
   };
 }
 
-function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first }) {
+function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, useSimile = false }) {
   void layout;
   const v = arr.voices[ps.idx];
   const inst = v.inst;
@@ -544,9 +550,9 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first }) 
       k = e;
     }
   }
-  const breaks = printedBreaks(arr, printed, isPart ? emptyPrinted : null);
+  const breaks = printedBreaks(arr, printed, isPart ? emptyPrinted : null, isPart ? multiRest : null);
   const dirsAt = (bar) => v.dirs.filter((d) => d.t >= bar * mt && d.t < (bar + 1) * mt);
-  const simile = simileFlags(printed, measures, dirsAt, roleAtFactory(arr, ps.idx), breaks, blockStarts);
+  const simile = useSimile ? simileFlags(printed, measures, dirsAt, roleAtFactory(arr, ps.idx), breaks, blockStarts) : printed.map(() => false);
   let currentClef = inst.clef;
   let currentKey = null;
   let inMultiRest = 0;
@@ -674,6 +680,7 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first }) 
     const nextPm = printed[k + 1];
     const itemsFixed = items.map((it) => (it.tieStart && it.kind === 'note' && (!nextPm || nextPm.src !== m + 1) && it.start + it.dur >= mt ? { ...it, tieStart: false } : it));
     const dirs = dirsAt(m).map((d) => ({ ...d, t: d.t - m * mt }));
+    if (showGlobal && arr.tempoMap) for (const tm of arr.tempoMap) if (tm.t > 0 && tm.t >= m * mt && tm.t < (m + 1) * mt) dirs.push({ t: tm.t - m * mt, kind: 'tempo', bpm: tm.bpm });
     writeMeasureItems(w, itemsFixed, { pre, dirs: inMultiRest > 0 && !dirs.length ? [] : dirs, harmonies, mi, keyFifths: pk.fifths, cue: inCue, isDrum: false, voice: 1, instRef: null });
     if (inMultiRest > 0) inMultiRest--;
     writeFormDirectionsEnd(w, pm, showGlobal);
@@ -695,13 +702,6 @@ function writeTempoHeading(w, arr) {
   w.close('direction-type');
   w.el('sound', null, { tempo: arr.tempo });
   w.close('direction');
-  if (arr.meta.styleHint) {
-    w.open('direction', { placement: 'above' });
-    w.open('direction-type');
-    w.el('words', arr.meta.styleHint, { 'font-style': 'italic', 'font-size': 9 });
-    w.close('direction-type');
-    w.close('direction');
-  }
 }
 
 function buildCue(arr, selfIdx, bar, tr) {
@@ -941,8 +941,16 @@ function writeDirection(w, d, offset) {
     w.close('direction-type');
     if (offset) w.el('offset', offset);
     w.close('direction');
-  } else if (d.kind === 'words') {
+  } else if (d.kind === 'tempo') {
     w.open('direction', { placement: 'above' });
+    w.open('direction-type');
+    w.el('words', '');
+    w.close('direction-type');
+    if (offset) w.el('offset', offset);
+    w.el('sound', null, { tempo: d.bpm });
+    w.close('direction');
+  } else if (d.kind === 'words') {
+    w.open('direction', { placement: d.placement || 'above' });
     w.open('direction-type');
     w.el('words', d.text, { 'font-style': 'italic' });
     w.close('direction-type');
@@ -983,7 +991,7 @@ function drumVoices(events, mt, mi) {
   return out;
 }
 
-function writeDrumPart(w, arr, ps, { isPart, first }) {
+function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false }) {
   void first;
   const mt = arr.mt;
   const mi = meterInfo(arr.meter);
@@ -996,8 +1004,6 @@ function writeDrumPart(w, arr, ps, { isPart, first }) {
   const emptySrc = combined.map((items) => !items.some((it) => it.kind === 'note'));
   const emptyPrinted = printed.map((pm) => emptySrc[pm.src] && !pm.startRepeat && !pm.endRepeat && !pm.segno && !pm.coda);
   const blockStarts = new Set(arr.blocks.map((b) => b.startBar));
-  const breaks = printedBreaks(arr, printed, isPart ? emptyPrinted : null);
-  const simile = simileFlags(printed, combined, () => [], () => 'bass', breaks, blockStarts);
   const multiRest = new Map();
   if (isPart) {
     let k = 0;
@@ -1013,6 +1019,8 @@ function writeDrumPart(w, arr, ps, { isPart, first }) {
       k = e;
     }
   }
+  const breaks = printedBreaks(arr, printed, isPart ? emptyPrinted : null, isPart ? multiRest : null);
+  const simile = useSimile ? simileFlags(printed, combined, () => [], () => 'bass', breaks, blockStarts) : printed.map(() => false);
   let simileOpen = false;
   for (let k = 0; k < printed.length; k++) {
     const pm = printed[k];
@@ -1083,7 +1091,8 @@ function writeDrumPart(w, arr, ps, { isPart, first }) {
         }
       });
     }
-    writeMeasureItems(w, m1[m], { pre, dirs: [], harmonies: [], mi, keyFifths: 0, cue: false, isDrum: true, voice: 1, instRef: ps.pid, drumMap: DRUM_DISPLAY });
+    const ddirs = (arr.drums.dirs || []).filter((d) => d.t >= m * mt && d.t < (m + 1) * mt).map((d) => ({ ...d, t: d.t - m * mt }));
+    writeMeasureItems(w, m1[m], { pre, dirs: ddirs, harmonies: [], mi, keyFifths: 0, cue: false, isDrum: true, voice: 1, instRef: ps.pid, drumMap: DRUM_DISPLAY });
     const hasFeet = m2[m].some((x) => x.kind === 'note');
     if (hasFeet) {
       w.open('backup');

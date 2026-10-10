@@ -24,6 +24,7 @@ export function parseRhythm(str) {
 export const STYLES = {
   funk: {
     id: 'funk',
+    tempoRange: [84, 124],
     name: 'Brass Band Funk',
     feel: 'straight16',
     defaultTempo: 104,
@@ -59,6 +60,7 @@ export const STYLES = {
   },
   secondline: {
     id: 'secondline',
+    tempoRange: [96, 132],
     name: 'New Orleans Second Line',
     feel: 'straight16',
     defaultTempo: 112,
@@ -86,6 +88,7 @@ export const STYLES = {
   },
   swing: {
     id: 'swing',
+    tempoRange: [96, 240],
     name: 'Jazz / Swing',
     feel: 'swing8',
     defaultTempo: 132,
@@ -106,6 +109,7 @@ export const STYLES = {
   },
   ballad: {
     id: 'ballad',
+    tempoRange: [54, 84],
     name: 'Pop-Ballade',
     feel: 'straight8',
     defaultTempo: 72,
@@ -127,6 +131,7 @@ export const STYLES = {
   },
   classical: {
     id: 'classical',
+    tempoRange: [56, 152],
     name: 'Klassischer Satz',
     feel: 'straight8',
     defaultTempo: 96,
@@ -148,6 +153,7 @@ export const STYLES = {
   },
   polka: {
     id: 'polka',
+    tempoRange: [96, 144],
     name: 'Polka / Marsch (Blasmusik)',
     feel: 'straight8',
     defaultTempo: 120,
