@@ -332,6 +332,17 @@ function renderSoloGrid() {
   box.appendChild(slot);
 }
 
+// ---------------------------------------------------------------- Schlagzeug
+function setDrumMode(mode) {
+  S.opts.drumMode = mode;
+  $$('#drum-mode .seg').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+  $('#drum-mode-info').textContent =
+    mode === 'own'
+      ? 'Eigener Rhythmus im Charakter des Songs: gleicher Groove & gleiche Form – je nach Schwierigkeit einfacher oder mit mehr Noten, Ghost-Notes und schwierigeren Fills.'
+      : 'Das Schlagzeug der Aufnahme bzw. Datei wird Takt für Takt übernommen – Grooves, Fills, Crashes.';
+  $('#drum-fills-row').classList.toggle('hidden', mode === 'own');
+}
+
 // ---------------------------------------------------------------- Solo: Playback
 function setPlayback(on) {
   S.opts.playback = !!on;
@@ -340,13 +351,15 @@ function setPlayback(on) {
 function updatePlaybackUi() {
   const on = !!S.opts.playback;
   $('#opt-playback').checked = on;
-  const pb = S.opts.ensemble === 'solo' && on;
+  const drums = S.opts.ensemble === 'drums';
+  const solo = S.opts.ensemble === 'solo' && on;
+  const pb = solo || drums;
   $('#solo-free').classList.toggle('hidden', on);
   $('#solo-playback').classList.toggle('hidden', !on);
   $$('.free-only').forEach((el) => el.classList.toggle('hidden', pb));
   $$('.playback-only').forEach((el) => el.classList.toggle('hidden', !pb));
-  $('#generate span').textContent = pb ? 'Playback-Noten erstellen' : 'Arrangement erstellen';
-  if (pb) renderPlaybackList();
+  $('#generate span').textContent = drums ? 'Schlagzeug-Noten erstellen' : solo ? 'Playback-Noten erstellen' : 'Arrangement erstellen';
+  if (solo) renderPlaybackList();
 }
 
 // gewählte Stimmen in der Reihenfolge der Quellen (Melodie, Spuren, Schlagzeug)
@@ -424,7 +437,9 @@ function setEnsemble(ens) {
   $$('#ensemble-tabs .seg').forEach((b) => b.classList.toggle('active', b.dataset.ens === ens));
   $$('.ens-panel').forEach((p) => p.classList.toggle('active', p.dataset.enspanel === ens));
   const solo = ens === 'solo';
-  updatePlaybackUi();
+  const drums = ens === 'drums';
+  updatePlaybackUi(); // Schlagzeug: immer Playback – Stil & Form spielen keine Rolle
+  void drums;
   $('#solo-label').textContent = solo ? 'Solo-Teil' : 'Hauptsolo';
   const sel = $('#opt-solo');
   const prev = sel.value;
@@ -489,6 +504,7 @@ function readOpts() {
     transpose: tr === 'auto' ? 'auto' : Number(tr),
     seed: Number($('#opt-seed').value) || 1,
     ensemble: S.opts.ensemble || 'quartet',
+    drumMode: S.opts.drumMode || 'original',
     soloInstrument: S.opts.soloInstrument || 'trumpet',
     difficulty: $('#opt-difficulty').value === 'auto' ? 'auto' : Number($('#opt-difficulty').value),
     voiceDifficulty: [...(S.opts.voiceDifficulty || [null, null, null, null])],
@@ -496,7 +512,7 @@ function readOpts() {
     playback: !!S.opts.playback,
     title: S.opts.title || null,
     playParts: S.opts.playParts ? S.opts.playParts.map((p) => ({ ...p })) : null,
-    drumFills: $('#opt-fills').checked,
+    drumFills: S.opts.ensemble === 'drums' ? $('#opt-drum-fills').checked : $('#opt-fills').checked,
   };
 }
 
@@ -516,6 +532,8 @@ function applyOptsToUi(o) {
   );
   difficultyOptions($('#opt-difficulty'), S.opts.difficulty ?? 'auto');
   difficultyOptions($('#opt-solo-difficulty'), S.opts.difficulty ?? 'auto');
+  difficultyOptions($('#opt-drum-difficulty'), S.opts.difficulty ?? 'auto');
+  setDrumMode(S.opts.drumMode || 'original');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
   $('#opt-drums').checked = !!o.drums;
   $('#opt-fills').checked = o.drumFills === true;
@@ -729,7 +747,7 @@ async function showResult(onProgress = null) {
   $('#result').classList.remove('hidden');
   $('#res-title').textContent = a.meta.title;
   const chips = [
-    [a.playAlong ? 'Playback 1:1' : a.options?.styleAuto ? `${a.style.name} (automatisch)` : a.style.name, 'accent'],
+    [a.options?.drumMode === 'own' && a.drums ? 'Schlagzeug · eigener Rhythmus' : a.playAlong ? 'Playback 1:1' : a.options?.styleAuto ? `${a.style.name} (automatisch)` : a.style.name, 'accent'],
     [keyNameDe(a.key) + (a.transposeShift ? ` (${a.transposeShift > 0 ? '+' : ''}${a.transposeShift})` : ''), ''],
     [`♩ = ${a.tempo}`, ''],
     [`${S.printed.length} Takte gedruckt`, ''],
@@ -1427,13 +1445,14 @@ async function main() {
     if (!text) return toast('Bitte zuerst ABC-Noten eingeben.', 'error');
     if (await setSource({ name: 'eingabe.abc', format: 'abc', data: text })) toast(`„${S.song.title}“ übernommen`, 'ok');
   });
-  // Schwierigkeit: Feld bei den Solo-Noten und in Schritt 3 sind dasselbe
-  const syncDiff = (from, to) => from.addEventListener('change', () => {
-    to.value = from.value;
-    S.opts.difficulty = from.value === 'auto' ? 'auto' : Number(from.value);
-  });
-  syncDiff($('#opt-solo-difficulty'), $('#opt-difficulty'));
-  syncDiff($('#opt-difficulty'), $('#opt-solo-difficulty'));
+  // Schwierigkeit: die Felder bei Solo, Schlagzeug und in Schritt 3 sind dasselbe
+  const diffSels = ['#opt-solo-difficulty', '#opt-difficulty', '#opt-drum-difficulty'].map((x) => $(x));
+  for (const a of diffSels)
+    a.addEventListener('change', () => {
+      for (const b of diffSels) if (b !== a) b.value = a.value;
+      S.opts.difficulty = a.value === 'auto' ? 'auto' : Number(a.value);
+    });
+  $$('#drum-mode .seg').forEach((b) => b.addEventListener('click', () => setDrumMode(b.dataset.mode)));
   // Tempo wieder automatisch
   const tempoBtn = () => $('#tempo-auto').classList.toggle('hidden', !$('#opt-tempo').value);
   $('#opt-tempo').addEventListener('input', tempoBtn);

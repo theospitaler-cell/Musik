@@ -48,6 +48,7 @@ export const DEFAULT_OPTIONS = {
   playback: false, // bei Solo: true = Play-along 1:1 wie die Vorlage, false = freies Solo-Arrangement
   playParts: null, // Play-along: [{source: 'melody'|'drums'|Spur-ID, inst: Instrument-ID|'drums'}]
   drumFills: false, // Play-along: zusätzliche Fills im Groove (Standard: Original 1:1)
+  drumMode: 'original', // Schlagzeug: 'original' (1:1) | 'own' (eigener Rhythmus im Charakter, je Schwierigkeit)
   difficulty: 'auto', // 'auto' | 1..5
   tempo: null,
   transpose: 'auto', // 'auto' | Zahl (Halbtöne)
@@ -76,6 +77,8 @@ export function arrange(songIn, options = {}) {
     opts.style = autoStyle(songIn);
     opts.styleAuto = true;
   }
+  // Schlagzeug: immer mit Playback (1:1 wie im Original oder eigener Rhythmus im Charakter des Songs)
+  if (opts.ensemble === 'drums') return arrangePlayAlong(songIn, { ...opts, playback: true, soloInstrument: 'drums', playParts: [{ source: 'drums', inst: 'drums' }] });
   if (opts.ensemble === 'solo') return opts.playback ? arrangePlayAlong(songIn, opts) : arrangeSoloFree(songIn, opts);
   if (!Array.isArray(opts.voices) || opts.voices.length !== 4) throw new Error('Es müssen genau 4 Instrumente gewählt werden');
   const plan = planArrangement(songIn, opts);

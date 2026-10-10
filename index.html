@@ -70,8 +70,22 @@
             <div class="card step" id="step-band">
               <div class="step-head"><span class="step-num">2</span><h2>Besetzung</h2></div>
               <div class="segmented" id="ensemble-tabs">
-                <button class="seg active" data-ens="quartet">Quartett</button>
-                <button class="seg" data-ens="solo">Solo-Noten</button>
+                <button class="seg active" data-ens="quartet">Mehrere</button>
+                <button class="seg" data-ens="solo">Solo</button>
+                <button class="seg" data-ens="drums">Schlagzeug</button>
+              </div>
+              <div class="ens-panel" data-enspanel="drums">
+                <label class="field"><span>Schwierigkeit</span><select id="opt-drum-difficulty"></select></label>
+                <div class="segmented small drum-mode" id="drum-mode">
+                  <button class="seg active" data-mode="original">1:1 wie im Original</button>
+                  <button class="seg" data-mode="own">Eigener Rhythmus</button>
+                </div>
+                <p class="muted small" id="drum-mode-info">Das Schlagzeug der Aufnahme bzw. Datei wird Takt für Takt übernommen – Grooves, Fills, Crashes.</p>
+                <label class="toggle-row" id="drum-fills-row">
+                  <span><strong>Zusätzliche Fills</strong><small>eigene Fills im Groove an Formteil-Enden</small></span>
+                  <input type="checkbox" class="switch" id="opt-drum-fills" />
+                </label>
+                <p class="muted small">Schlagzeug-Noten gibt es immer mit Playback: das Original läuft im Mischpult synchron mit.</p>
               </div>
               <div class="ens-panel active" data-enspanel="quartet">
                 <div class="chips" id="preset-chips"></div>

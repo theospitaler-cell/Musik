@@ -15,7 +15,7 @@ import { difficultyRange, levelFor, simplifyRhythm, limitLeaps, simplifyDrums } 
 import { BlockCtx, cleanLine, ev } from './context.js';
 import { articulate } from './gen/melody.js';
 import { embellishLine } from './embellish.js';
-import { genDrumsSegment, drumsFromNotes, addGrooveFills } from './gen/drums.js';
+import { genDrumsSegment, drumsFromNotes, addGrooveFills, varyDrums } from './gen/drums.js';
 import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, newReport, keyAtFactory } from './post.js';
 
 function letterOf(n) {
@@ -188,7 +188,12 @@ export function arrangePlayAlong(song, opts) {
       drumEvents = drumEvents.filter((e) => e.start < lastBar);
       const fin = genDrumsSegment(new BlockCtx({ style, rng: rng.fork('fin'), key, meter: song.meter, measures: 1, chords: [], tempo, inst: [null], block: blocks[0], prevState: [{}] }), { mode: 'final', bars: 1, isBlockStart: false, isBlockEnd: true, hitsLine: [{ start: 0, dur: mt, finalHit: true }], intensity: 1 });
       drumEvents.push(...fin.map((e) => ({ ...e, start: e.start + lastBar })));
-    } else if (opts.drumFills === true && dLv !== 1) {
+    }
+    if (opts.drumMode === 'own') {
+      // Eigener Rhythmus: Original-Groove als Grundlage, je Schwierigkeit einfacher oder reicher
+      drumEvents = varyDrums(drumEvents, dLv || 3, { mt, beat, sections, leadBars, rng: rng.fork('vary') });
+      notes.push(`Eigener Rhythmus auf Basis des Original-Grooves (${['', 'Sehr leicht', 'Leicht', 'Mittel', 'Fortgeschritten', 'Profi'][dLv || 3]}).`);
+    } else if (drumEvents.length && song.drumNotes && song.drumNotes.length && opts.drumFills === true && dLv !== 1) {
       // Fills im Groove: am Ende jedes Formteils (2 Schläge) und nach 8-Takt-Phrasen (1 Schlag)
       const fillBars = [];
       sections.forEach((sec, i) => {

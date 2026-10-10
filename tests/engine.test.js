@@ -304,3 +304,35 @@ test('Stil „Automatisch“ wählt passend zum Song', () => {
   const solo = arrange(demoSong('grace'), { style: 'auto', ensemble: 'solo', soloInstrument: 'trumpet' });
   assert.equal(solo.style.id, 'ballad');
 });
+
+test('Schlagzeug-Kategorie: immer Playback; eigener Rhythmus behält Groove & wird mit der Schwierigkeit reicher', () => {
+  const sg = demoSong('ode');
+  const mt = 96;
+  const drumNotes = [];
+  for (let bar = 0; bar < sg.measureCount; bar++) {
+    for (let k = 0; k < 8; k++) drumNotes.push({ start: bar * mt + k * 12, dur: 6, midi: 42, vel: 80 });
+    drumNotes.push({ start: bar * mt, dur: 6, midi: 36, vel: 100 }, { start: bar * mt + 48, dur: 6, midi: 36, vel: 100 });
+    drumNotes.push({ start: bar * mt + 24, dur: 6, midi: 38, vel: 100 }, { start: bar * mt + 72, dur: 6, midi: 38, vel: 100 });
+  }
+  const song = { ...sg, pickup: 0, melody: sg.melody.filter((n) => n.start >= 0), drumNotes, source: 'midi', tracks: [] };
+  const orig = arrange(song, { ensemble: 'drums' });
+  assert.ok(orig.playAlong, 'Schlagzeug läuft immer als Playback');
+  assert.equal(orig.voices.length, 0);
+  assert.equal(orig.drums.events.length, drumNotes.length, 'Original 1:1');
+  const count = (lv) => arrange(song, { ensemble: 'drums', drumMode: 'own', difficulty: lv }).drums.events;
+  const easy = count(1);
+  const mid = count(3);
+  const pro = count(5);
+  assert.ok(easy.length < mid.length && mid.length < pro.length, `Notenzahl ${easy.length} < ${mid.length} < ${pro.length}`);
+  // Charakter bleibt: Backbeat (Snare auf 2 & 4) und Bass Drum auf 1 in fast allen Takten
+  for (const evs of [easy, mid, pro]) {
+    let ok = 0;
+    for (let bar = 0; bar < song.measureCount; bar++) {
+      const b0 = bar * mt;
+      if (evs.some((e) => e.start === b0 + 24 && e.drum === 'sn') && evs.some((e) => e.start === b0 && (e.drum === 'bd' || e.drum === 'crash'))) ok++;
+    }
+    assert.ok(ok >= song.measureCount - 3, `Groove erkennbar in ${ok}/${song.measureCount} Takten`);
+  }
+  assert.ok(pro.some((e) => e.ghost), 'Profi: Ghost-Notes');
+  assert.ok(pro.some((e) => ['tom1', 'tom2', 'ftom'].includes(e.drum)), 'Profi: Fills über Toms');
+});

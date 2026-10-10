@@ -218,6 +218,93 @@ export function addGrooveFills(events, { mt, beat, fillBars, lv = null }) {
   return evs.sort((a, b) => a.start - b.start);
 }
 
+// ---------- Eigener Rhythmus im Charakter des Songs ----------
+// Grundlage ist der Original-Groove (Bass Drum, Snare, Becken-Raster bleiben erkennbar);
+// je Schwierigkeit wird vereinfacht oder angereichert:
+//   Sehr leicht: Becken in Vierteln/Achteln, Bass Drum & Snare nur auf Zählzeiten, kurze Fills
+//   Leicht:      alles im Achtelraster, einfache Achtel-Fills
+//   Mittel:      Original + Fills an Formteil-Enden
+//   Fortgeschr.: + Ghost-Notes vor dem Backbeat, Bass-Drum-Variationen, 16tel-Fills nach 4 Takten
+//   Profi:       + 16tel-Becken bzw. offene Hi-Hat, Doppelschläge, 2-Schlag-Fills über Toms, Crashes
+export function varyDrums(events, lv, { mt, beat, sections, leadBars = 0, rng }) {
+  const L = lv || 3;
+  let evs = events.map((e) => ({ ...e, art: [...(e.art || [])], fx: [...(e.fx || [])] }));
+  const total = Math.max(0, ...evs.map((e) => e.start + 1));
+  const bars = Math.ceil(total / mt);
+  const has = (t, d) => evs.some((e) => e.start === t && e.drum === d);
+  const add = (t, d, opts = {}) => {
+    if (t < 0 || has(t, d)) return;
+    const h = hit(t, opts.dur || 6, d, !!opts.accent, !!opts.ghost);
+    h.varied = true;
+    evs.push(h);
+  };
+  if (L <= 2) {
+    const grid = L === 1 ? beat : beat / 2;
+    evs = evs.filter((e) => {
+      if (e.ghost) return false;
+      const r = e.start % grid;
+      if (r === 0) return true;
+      // Becken auf Achteln dürfen bei "Leicht" bleiben, Toms/Fills werden ausgedünnt
+      return false;
+    });
+    if (L === 1) evs = evs.filter((e) => !['tom1', 'tom2', 'ftom'].includes(e.drum) || e.start % beat === 0);
+  }
+  // Fills an Formteil-Enden (und ab "Fortgeschritten" nach jeweils 4 Takten)
+  const fillBars = new Set();
+  for (const sec of sections || []) {
+    const end = leadBars + sec.start + sec.length - 1;
+    fillBars.add(end);
+    if (L >= 4) for (let k = 3; k < sec.length - 1; k += 4) fillBars.add(leadBars + sec.start + k);
+  }
+  for (let b = 0; b < bars; b++) {
+    const b0 = b * mt;
+    const inBar = evs.filter((e) => e.start >= b0 && e.start < b0 + mt);
+    if (!inBar.length) continue;
+    const kicks = inBar.filter((e) => e.drum === 'bd');
+    const snares = inBar.filter((e) => e.drum === 'sn' && !e.ghost);
+    const cym = inBar.filter((e) => ['hh', 'ride', 'hhOpen'].includes(e.drum));
+    const cymDrum = cym.length ? cym[0].drum === 'hhOpen' ? 'hh' : cym[0].drum : 'hh';
+    if (L >= 4) {
+      // Ghost-Notes: 16tel vor jedem Backbeat
+      for (const sn of snares) if (rng.chance(0.7)) add(sn.start - 6, 'sn', { ghost: true });
+      // Bass-Drum-Variation: Achtel/16tel-Auftakt vor der 3 bzw. der nächsten 1
+      if (kicks.length && rng.chance(0.5)) add(b0 + mt / 2 - 6, 'bd');
+    }
+    if (L >= 5) {
+      // Becken verdichten (16tel) bzw. offene Hi-Hat auf dem letzten Offbeat
+      const cymTimes = cym.map((e) => e.start);
+      const step = cymTimes.length >= 2 ? Math.min(...cymTimes.slice(1).map((t, i) => t - cymTimes[i])) : beat;
+      if (step >= 12 && cymDrum === 'hh') for (let t = b0; t < b0 + mt; t += 6) add(t, 'hh');
+      else if (cymDrum === 'hh' && rng.chance(0.6)) {
+        const t = b0 + mt - beat / 2;
+        evs = evs.filter((e) => !(e.start === t && e.drum === 'hh'));
+        add(t, 'hhOpen');
+      }
+      if (kicks.length && rng.chance(0.5)) add(b0 + beat + beat / 2 + 6, 'bd'); // Doppelschlag
+    }
+    // Fill
+    if (fillBars.has(b) && L >= 2) {
+      const beats = L >= 5 ? 2 : 1;
+      const unit = L <= 2 ? beat / 2 : L === 3 ? beat / 2 : 6;
+      const from = b0 + mt - beats * beat;
+      if (inBar.some((e) => e.start >= from && ['tom1', 'tom2', 'ftom'].includes(e.drum)) && L <= 3) continue; // Original-Fill bleibt
+      evs = evs.filter((e) => !(e.start >= from && e.start < b0 + mt && ['sn', 'hh', 'hhOpen', 'ride', 'tom1', 'tom2', 'ftom'].includes(e.drum)));
+      const n = Math.round((b0 + mt - from) / unit);
+      const seq = L >= 5 ? ['sn', 'sn', 'tom1', 'tom1', 'tom2', 'tom2', 'ftom', 'ftom'] : L >= 4 ? ['sn', 'sn', 'tom1', 'tom2'] : ['sn', 'sn'];
+      for (let k = 0; k < n; k++) add(from + k * unit, seq[Math.min(seq.length - 1, Math.floor((k * seq.length) / n))], { accent: k === 0 });
+      if (L >= 4) add(b0 + mt - unit, 'bd');
+      // Crash auf die nächste "1"
+      const n0 = b0 + mt;
+      if (n0 < bars * mt && L >= 3) {
+        evs = evs.filter((e) => !(e.start === n0 && ['hh', 'ride'].includes(e.drum)));
+        add(n0, 'crash');
+        add(n0, 'bd');
+      }
+    }
+  }
+  return evs.sort((a, b) => a.start - b.start);
+}
+
 // Hits zur Melodie (Kicks + Crash/Snare auf betonte, lange Melodietöne) über einem leichten Groove
 export function genDrumHits(ctx, melody, bars) {
   const out = [];
