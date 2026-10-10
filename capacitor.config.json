@@ -1,0 +1,7 @@
+{
+  "appId": "app.notecode.mobile",
+  "appName": "NoteCode",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "backgroundColor": "#f6f6f3" }
+}

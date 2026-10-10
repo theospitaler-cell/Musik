@@ -1,5 +1,5 @@
 // NoteCode Service Worker: App-Dateien offline verfügbar (Netzwerk zuerst, Cache als Rückfall)
-const CACHE = 'notecode-v1';
+const CACHE = 'notecode-v2';
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (e) => {

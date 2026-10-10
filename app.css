@@ -1619,3 +1619,170 @@ dialog::backdrop {
   color: var(--muted);
   font-size: 14px;
 }
+
+/* ---------- Handy-Feinschliff ---------- */
+.pb-target select {
+  flex: 1;
+  min-width: 0;
+}
+.pb-target {
+  flex-wrap: nowrap !important;
+}
+.drawer {
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.drawer-head {
+  position: sticky;
+  top: -18px;
+  margin: -18px -18px 12px;
+  padding: 18px 18px 10px;
+  background: var(--surface);
+  z-index: 1;
+}
+@media (max-width: 720px) {
+  /* Ansichten (Partitur/Stimmen) wischbar statt abgeschnitten */
+  #view-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: 100%;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  #view-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  #view-tabs .seg {
+    flex: 0 0 auto;
+    max-width: 70vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .score-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  /* Mischpult als Bottom-Sheet mit kompakten Zeilen */
+  .drawer {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    max-height: 78vh;
+    border-radius: 18px;
+    padding: 14px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+    z-index: 70;
+  }
+  .drawer-head {
+    top: -14px;
+    margin: -14px -14px 10px;
+    padding: 14px 14px 8px;
+  }
+  .strips {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'name ms' 'vol vol';
+    align-items: center;
+    padding: 10px 12px;
+    gap: 6px 10px;
+  }
+  .strip .s-name {
+    grid-area: name;
+    text-align: left;
+    min-height: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .strip .s-sub {
+    display: inline;
+    margin-left: 6px;
+  }
+  .strip .ms {
+    grid-area: ms;
+  }
+  .strip .ms button {
+    width: 38px;
+    height: 34px;
+  }
+  .strip .vol {
+    grid-area: vol;
+    writing-mode: horizontal-tb;
+    direction: ltr;
+    width: 100%;
+    height: 24px;
+  }
+  .strip .pan {
+    display: none;
+  }
+  /* Feineinstellungen pro Stimme: Stufe über die ganze Breite, Tonumfang darunter */
+  .slot-extra {
+    grid-template-columns: 1fr 1fr;
+  }
+  .slot-extra select:first-child {
+    grid-column: 1 / -1;
+  }
+  .slot-extra select {
+    font-size: 13px;
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+  .pb-item {
+    padding: 10px;
+  }
+  .pb-item .pb-name {
+    white-space: normal;
+  }
+  .progress-dock {
+    top: auto;
+    bottom: calc(150px + env(safe-area-inset-bottom));
+  }
+  .nav {
+    bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  .player {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  body {
+    padding-bottom: calc(190px + env(safe-area-inset-bottom));
+  }
+  .toasts {
+    top: auto;
+    bottom: calc(160px + env(safe-area-inset-bottom));
+    left: 12px;
+    right: 12px;
+  }
+  .toast {
+    max-width: none;
+  }
+  /* Tippflächen */
+  select,
+  input[type='number'],
+  .btn {
+    min-height: 40px;
+  }
+}
+@media (max-width: 720px) {
+  /* Export-Menü als Bottom-Sheet */
+  .menu {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    width: auto;
+    min-width: 0;
+    max-height: 75vh;
+    overflow-y: auto;
+    z-index: 80;
+    transform-origin: bottom center;
+  }
+}

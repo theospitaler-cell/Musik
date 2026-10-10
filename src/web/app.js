@@ -98,8 +98,27 @@ function readFileWithProgress(file, onProgress) {
   });
 }
 
+// Handy-App (Android): Datei über "Teilen" speichern – WebViews können keine Downloads
+let capPlugins = null;
+async function nativeSave(name, blob) {
+  const cap = window.Capacitor;
+  capPlugins = capPlugins || { fs: cap.registerPlugin('Filesystem'), share: cap.registerPlugin('Share') };
+  const b64 = await new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1]);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+  const res = await capPlugins.fs.writeFile({ path: name, data: b64, directory: 'CACHE' });
+  await capPlugins.share.share({ title: name, url: res.uri, dialogTitle: 'Speichern oder teilen' });
+}
+
 function download(name, data, mime = 'application/octet-stream') {
   const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
+  if (window.Capacitor?.isNativePlatform?.()) {
+    nativeSave(name, blob).catch((e) => !/cancel/i.test(e.message || '') && toast('Speichern fehlgeschlagen: ' + e.message, 'error'));
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -1352,7 +1371,7 @@ async function main() {
 
   // Notensatz-Bibliothek im Hintergrund vorladen
   loadVerovio().catch(() => {});
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.Capacitor) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
 function setZoom(z) {

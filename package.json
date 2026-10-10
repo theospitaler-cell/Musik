@@ -1,12 +1,63 @@
 {
-  "name": "maestro-arranger",
+  "name": "notecode",
   "version": "1.0.0",
-  "description": "Quartett-Arrangier- & Notations-Engine (Brass/Funk/Swing/Klassik) – läuft im Browser",
+  "description": "NoteCode – Quartett-Arrangements, Solo- und Playback-Noten aus MP3, MIDI und MusicXML",
   "type": "module",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "serve": "python3 -m http.server 8000"
+    "serve": "python3 -m http.server 8000",
+    "desktop": "electron .",
+    "dist": "electron-builder --publish never",
+    "web": "node scripts/build-web.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "productName": "NoteCode",
+  "author": "NoteCode",
+  "main": "electron/main.cjs",
+  "devDependencies": {
+    "electron": "^33.4.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "app.notecode.desktop",
+    "productName": "NoteCode",
+    "copyright": "NoteCode",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "index.html",
+      "app.css",
+      "icon.svg",
+      "manifest.webmanifest",
+      "config.js",
+      "icons/**/*",
+      "src/**/*",
+      "vendor/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NoteCode",
+      "artifactName": "NoteCode-Setup-${version}.${ext}"
+    }
+  }
 }
