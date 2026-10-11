@@ -45,7 +45,9 @@ export function arrangeSoloFree(songIn, opts) {
   const M = song.measureCount;
   const rng = new Rng(opts.seed || 1);
   let tempo = opts.tempo || null;
-  if (!tempo && song.tempo && style.tempoRange && song.tempo >= style.tempoRange[0] && song.tempo <= style.tempoRange[1]) tempo = song.tempo;
+  // Tempo des Liedes bleibt (es soll wiedererkannt werden); nur „frei“ (adapt 2) richtet sich nach dem Stil
+  const inStyle = style.tempoRange && song.tempo >= style.tempoRange[0] && song.tempo <= style.tempoRange[1];
+  if (!tempo && song.tempo && (inStyle || Number(opts.adapt ?? 1) < 2)) tempo = song.tempo;
   tempo = Math.round(tempo || style.defaultTempo);
   const compound = song.meter.beatType === 8 && song.meter.beats % 3 === 0 && song.meter.beats > 3;
   const beat = compound ? (DIV * 3) / 2 : (DIV * 4) / song.meter.beatType;

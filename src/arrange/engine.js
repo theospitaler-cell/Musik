@@ -40,6 +40,7 @@ import {
 } from './post.js';
 import { transposeEvents } from '../model/song.js';
 import { sourceLinesOf, bassOctave } from './original.js';
+import { scoreLines, scoreArrangement } from './quality.js';
 import { sourceBass, sourceComp, enoughSource } from './gen/source.js';
 
 const ENSEMBLE_NAMES = { 2: 'Duett', 3: 'Trio', 4: 'Quartett', 5: 'Quintett', 6: 'Sextett', 7: 'Septett', 8: 'Oktett' };
@@ -141,6 +142,7 @@ export function arrange(songIn, options = {}) {
     return bassShifts.get(v);
   };
 
+  const segmentScores = []; // Wertung je Abschnitt (bei Variantensuche) – für das Nachbessern
   const copies = []; // {src, dst, len} in Ticks – nach der Nachbearbeitung kopiert
   blocks.forEach((b, bi) => {
     const blockStart = b.startBar * mt;
@@ -183,11 +185,12 @@ export function arrange(songIn, options = {}) {
         copies.push({ src: blockStart + srcSeg.startBar * mt, dst: blockStart + s0, len: seg.bars * mt });
         return;
       }
+      const buildSegment = (variant) => {
       const segChords = sliceChordsRel(b.chords, s0, s1);
       const ctx = new BlockCtx({
         bassVoice: slots.bass,
         style,
-        rng: rng.fork(`${bi}:${si}`),
+        rng: rng.fork(variant ? `${bi}:${si}:v${variant}` : `${bi}:${si}`),
         key: b.key,
         meter: song.meter,
         measures: seg.bars,
@@ -277,7 +280,7 @@ export function arrange(songIn, options = {}) {
 
       // 3) Bass – die Mittelstimmen richten sich danach (Gegenbewegung)
       for (const v of groupOf('bass')) {
-        lines[v] = segSrc && enoughSource(segSrc.bass, seg.bars) ? sourceBass(ctx, v, segSrc.bass, { shift: bassShiftFor(v), kicks: segSrc.kicks }) : genBass(ctx, v);
+        lines[v] = segSrc && opts.bassMode !== 'busy' && enoughSource(segSrc.bass, seg.bars) ? sourceBass(ctx, v, segSrc.bass, { shift: bassShiftFor(v), kicks: segSrc.kicks, calm: opts.bassMode === 'calm' }) : genBass(ctx, v);
         if (!ctx.bassLine) ctx.bassLine = lines[v];
       }
 
@@ -329,14 +332,16 @@ export function arrange(songIn, options = {}) {
       if (b.feature && ctx.melodyVoice !== undefined)
         for (let v = 0; v < N; v++) if (lines[v] && v !== ctx.melodyVoice && ['pad', 'comp'].includes(roles[v]) && regPos.get(v) < regPos.get(ctx.melodyVoice)) for (const e of lines[v]) e.above = true;
       // in absolute Zeit übertragen
+      const commit = [];
       for (let v = 0; v < N; v++) {
         const l = lines[v];
         if (!l) continue;
         for (const e of l) e.role = e.role || roles[v];
-        voices[v].events.push(...shiftEvents(l, blockStart + s0).map((e) => ({ ...e, role: roles[v] })));
+        commit.push([v, shiftEvents(l, blockStart + s0).map((e) => ({ ...e, role: roles[v] }))]);
       }
 
       // Schlagzeug
+      let drumsOut = [];
       if (opts.drums) {
         const active = roles.filter((r) => r !== 'rest').length;
         let mode = 'groove';
@@ -354,8 +359,50 @@ export function arrange(songIn, options = {}) {
           hitsLine,
           intensity: ctx.intensity,
         });
-        drumEvents.push(...dEv.map((e) => ({ ...e, start: e.start + blockStart + s0 })));
+        drumsOut = dEv.map((e) => ({ ...e, start: e.start + blockStart + s0 }));
       }
+      return { commit, drumsOut, lines, roles };
+      };
+
+      // Varianten (gründlich): jeder Abschnitt wird mehrfach mit anderem Zufall geschrieben, die
+      // beste Fassung bleibt (Spielbarkeit, Zusammenklang). Ohne search genau eine Fassung.
+      // (Schwerpunkt-Takte aus der Rückmeldung: dort dreimal so viele Varianten, Reibungen zählen doppelt)
+      const absFrom = b.startBar + seg.startBar;
+      const inFocus = (opts.focus || []).some((r) => r.from - 1 <= absFrom + seg.bars - 1 && r.to - 1 >= absFrom);
+      const segKey = `${bi}:${si}`;
+      const deep = (opts.deepSegments || []).includes(segKey);
+      const baseVariants = Math.max(1, Number(opts.search) || 1);
+      const variants = Math.max(1, Math.min(96, baseVariants > 1 ? baseVariants * (inFocus ? 3 : 1) * (deep ? 4 : 1) : baseVariants));
+      const clash = (opts.cleaner ? 1.8 : 1) * (inFocus ? 2 : 1);
+      let best = null;
+      const snap = prevState.map((p) => ({ ...p }));
+      const setState = (st) =>
+        prevState.forEach((p, i) => {
+          for (const key of Object.keys(p)) delete p[key];
+          Object.assign(p, st[i]);
+        });
+      for (let k = 0; k < variants; k++) {
+        if (k) setState(snap);
+        const res = buildSegment(k);
+        let sc = 0;
+        if (variants > 1) {
+          const parts = res.commit.map(([v, evs]) => ({
+            events: evs.map((e) => ({ ...e, start: e.start - blockStart - s0 })),
+            inst: insts[v],
+            role: res.roles[v],
+            rank: regPos.get(v) ?? v,
+            index: v,
+          }));
+          sc = scoreLines(parts, { mt, beat, prevLast: snap.map((p) => p.last), clash }).score;
+        }
+        if (!best || sc > best.sc) best = { ...res, sc, state: prevState.map((p) => ({ ...p })) };
+      }
+      if (variants > 1) {
+        setState(best.state);
+        segmentScores.push({ key: segKey, bar: absFrom, bars: seg.bars, score: best.sc / Math.max(1, seg.bars) });
+      }
+      for (const [v, evs] of best.commit) voices[v].events.push(...evs);
+      drumEvents.push(...best.drumsOut);
     });
   });
 
@@ -545,6 +592,8 @@ export function arrange(songIn, options = {}) {
     chordTrack: arr.chordTrack,
     keyAt,
     keyChanges,
+    slots,
+    segmentScores,
     transposeShift: plan.shift,
     form,
     report,

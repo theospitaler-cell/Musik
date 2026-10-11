@@ -184,6 +184,25 @@ export function transposeSong(song, semis) {
   };
 }
 
+// Harmonie vereinfachen: ein Akkord je Takt (der, der den größten Teil des Takts klingt), zwei nur
+// dort, wo beide Hälften je mindestens drei Viertel lang eigenständig sind. Reibungen zwischen
+// Begleitstimmen entstehen oft aus zu schnell wechselnden, unsicher erkannten Akkorden.
+export function simplifyHarmony(song) {
+  if (hasMeterChanges(song) || !song.chords || !song.chords.length) return song;
+  const mt = songMeasureTicks(song);
+  const total = song.measureCount * mt;
+  const out = [];
+  for (let bar = 0; bar < song.measureCount; bar++) {
+    const a = bar * mt;
+    const b = a + mt;
+    const segs = song.chords.filter((c) => c.start < b && c.start + c.dur > a).map((c) => ({ chord: c.chord, dur: Math.min(b, c.start + c.dur) - Math.max(a, c.start) }));
+    if (!segs.length) continue;
+    const best = segs.reduce((x, y) => (y.dur > x.dur ? y : x));
+    out.push({ start: a, dur: mt, chord: best.chord });
+  }
+  return { ...song, chords: normalizeChords(out, total) };
+}
+
 // Fehlende Schreibweisen (lof) ergänzen
 export function ensureSpelling(notes, key, chords = null) {
   const center = keyCenter(key);

@@ -16,6 +16,10 @@ import { keyNameDe, transposeKey } from '../theory/keys.js';
 import { shiftDownbeat, scaleNoteValues } from '../model/retime.js';
 import { ANALYSIS_VERSION } from '../input/audio.js';
 import { Player } from './player.js';
+import { TaskList, formatEta, learnSpeed } from './tasks.js';
+import { EFFORT, effortOf } from '../core/effort.js';
+import { arrangeBest } from '../arrange/best.js';
+import { interpretFeedback, sanitizeTweaks, mergeTweaks, applyTweaks } from '../arrange/feedback.js';
 import { ScoreFollower } from './follow.js';
 import { bindPractice, syncPractice } from './practice.js';
 import { openAudioExport } from './audio-dialog.js';
@@ -101,75 +105,151 @@ function toast(msg, kind = '', action = null) {
 }
 
 // ---------------------------------------------------------------- Fortschritt
-// Eine Anzeige für alles, was dauert: Datei lesen, Audio analysieren, Arrangieren,
-// Noten setzen, Exportieren. Ein neuer Vorgang übernimmt die Anzeige.
+// Eine Anzeige für alles, was dauert – mit einer Zeile je Aufgabe (eigener Balken, geschätzte
+// Restzeit, Zusatztext). Die Balken laufen stetig weiter und springen nie zurück (siehe tasks.js).
+// Ein neuer Vorgang übernimmt die Anzeige. Kommt zu lange keine Rückmeldung, erscheint eine
+// Fehlermeldung statt eines eingefrorenen Balkens.
 let progressJob = 0;
-// Fortschrittsanzeige: Prozent laufen gleichmäßig weiter, solange gearbeitet wird (zwischen den
-// Meldungen langsam bis knapp vor den nächsten Schritt), drei hüpfende Punkte zeigen Aktivität.
-// Kommt zu lange keine Rückmeldung, erscheint eine Fehlermeldung statt eines eingefrorenen Balkens.
-const PROGRESS_STALL_MS = 60000;
+const PROGRESS_STALL_MS = 90000;
 let progressTick = null;
-function progress(title) {
+
+// gelernte Geschwindigkeiten (ms je Sekunde Audio) – damit die Zeitschätzung mit der Zeit stimmt
+const SPEED_KEY = 'notecode:speed';
+const speedStore = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(SPEED_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+})();
+const speedOf = (key, def) => (Number.isFinite(speedStore[key]) && speedStore[key] > 0 ? speedStore[key] : def);
+function rememberSpeed(key, ms, units) {
+  learnSpeed(speedStore, key, ms, units);
+  try {
+    localStorage.setItem(SPEED_KEY, JSON.stringify(speedStore));
+  } catch {
+    /* kein Speicher */
+  }
+}
+
+// tasks: [{ id, label, expect (ms) }]; ohne Liste eine einzelne Aufgabe mit dem Titel
+function progress(title, { tasks = null } = {}) {
   const id = ++progressJob;
   const box = $('#progress');
+  const list = new TaskList(tasks && tasks.length ? tasks : [{ id: 'main', label: title, expect: 8000 }]);
+  const single = !(tasks && tasks.length);
   $('#pg-title').textContent = title;
   $('#pg-text').textContent = '';
+  $('#pg-total').textContent = '';
   box.classList.remove('hidden', 'stalled');
-  let target = 0; // gemeldeter Stand
-  let shown = 0; // angezeigter Stand
-  let indeterminate = false;
-  let lastReport = Date.now();
-  const render = () => {
-    $('#pg-fill').style.width = indeterminate ? '' : `${(shown * 100).toFixed(1)}%`;
-    $('#pg-pct').textContent = indeterminate ? '' : `${Math.floor(shown * 100)} %`;
+  box.classList.toggle('single', single);
+  const host = $('#pg-tasks');
+  host.innerHTML = '';
+  const rows = new Map();
+  for (const t of list.tasks) {
+    const el = document.createElement('div');
+    el.className = 'pg-task wait';
+    el.innerHTML = '<span class="pg-ico" aria-hidden="true"></span><span class="pg-label"></span><span class="pg-eta"></span><div class="pg-bar"><i></i></div><small class="pg-detail"></small>';
+    el.querySelector('.pg-label').textContent = t.label;
+    host.appendChild(el);
+    rows.set(t.id, {
+      el,
+      bar: el.querySelector('.pg-bar i'),
+      eta: el.querySelector('.pg-eta'),
+      detail: el.querySelector('.pg-detail'),
+      state: 'wait',
+      etaText: '',
+      detailText: '',
+    });
+  }
+  let last = Date.now();
+  const paint = () => {
+    for (const v of list.view()) {
+      const r = rows.get(v.id);
+      if (!r) continue;
+      if (r.state !== v.state) {
+        r.el.className = `pg-task ${v.state}`;
+        r.state = v.state;
+      }
+      r.bar.style.width = `${(v.shown * 100).toFixed(1)}%`;
+      const et = v.state === 'done' ? 'fertig' : v.state === 'wait' ? formatEta(v.etaMs).replace('noch ', '') : formatEta(v.etaMs);
+      if (et !== r.etaText) {
+        r.etaText = et;
+        r.eta.textContent = et;
+      }
+      if (v.detail !== r.detailText) {
+        r.detailText = v.detail;
+        r.detail.textContent = v.detail;
+      }
+    }
+    const rest = list.totalEta();
+    $('#pg-total').textContent = list.tasks.length > 1 ? formatEta(rest).replace('noch ca. ', 'Gesamt noch ca. ') : '';
   };
   clearInterval(progressTick);
   progressTick = setInterval(() => {
     if (id !== progressJob) return;
-    if (Date.now() - lastReport > PROGRESS_STALL_MS) {
+    const now = Date.now();
+    const dt = Math.min(500, now - last);
+    last = now;
+    list.update(dt);
+    if (list.idleMs() > PROGRESS_STALL_MS) {
       if (!box.classList.contains('stalled')) {
         box.classList.add('stalled');
         $('#pg-text').textContent = 'Keine Rückmeldung – der Vorgang hängt. Bitte App neu starten oder eine andere Datei versuchen.';
       }
-      return;
     }
-    if (indeterminate) return;
-    // zügig zum gemeldeten Stand, danach langsam weiter (max. 6 Prozentpunkte über die Meldung)
-    if (shown < target) shown = Math.min(target, shown + Math.max(0.004, (target - shown) * 0.25));
-    else shown = Math.min(0.99, target + 0.06, shown + Math.max(0, target + 0.06 - shown) * 0.015);
-    render();
-  }, 200);
+    paint();
+  }, 100);
+  const first = () => list.tasks[0].id;
   const api = {
-    set(text, frac = null) {
+    // set(id, frac, detail) für Aufgaben; set(text, frac) wie bisher (erste/aktive Aufgabe)
+    set(a, frac = null, detail = null) {
       if (id !== progressJob) return api;
-      lastReport = Date.now();
       box.classList.remove('stalled');
-      if (text !== undefined && text !== null) $('#pg-text').textContent = text;
-      indeterminate = frac === null || frac === undefined;
-      box.classList.toggle('indeterminate', indeterminate);
-      if (!indeterminate) {
-        target = Math.max(0, Math.min(1, frac));
-        if (target < shown - 0.08) shown = target; // neuer Abschnitt mit kleinerem Wert
+      if (list.get(a)) {
+        list.set(a, frac, detail);
+      } else {
+        const t = list.tasks.find((x) => x.state === 'run') || list.get(first());
+        list.set(t.id, frac, single ? null : null);
+        if (a !== undefined && a !== null) {
+          if (single) $('#pg-text').textContent = a;
+          else t.detail = a;
+        }
       }
-      render();
+      return api;
+    },
+    start(taskId, expect = null) {
+      if (id === progressJob) list.start(taskId, expect);
+      return api;
+    },
+    done(taskId = null) {
+      if (id !== progressJob) return api;
+      if (taskId) {
+        list.done(taskId);
+        return api;
+      }
+      list.finish();
+      list.update(1000);
+      paint();
+      clearInterval(progressTick);
+      box.classList.add('hidden');
+      box.classList.remove('stalled');
       return api;
     },
     title(t) {
       if (id === progressJob) $('#pg-title').textContent = t;
       return api;
     },
-    done() {
-      if (id !== progressJob) return;
-      clearInterval(progressTick);
-      box.classList.add('hidden');
-      box.classList.remove('stalled');
+    text(t) {
+      if (id === progressJob) $('#pg-text').textContent = t;
+      return api;
     },
+    list,
   };
-  return api.set('', 0);
+  list.start(first());
+  paint();
+  return api;
 }
-// Nächstes Bild abwarten, damit die Anzeige sichtbar wird. Ist das Fenster verdeckt oder
-// minimiert, liefert der Browser keine Bilder – dann geht es nach kurzer Zeit trotzdem weiter
-// (sonst bliebe der Vorgang hängen und alle Tabs wären gesperrt).
 const nextFrame = () =>
   new Promise((r) => {
     let done = false;
@@ -329,7 +409,9 @@ function makeTab(opts = defaultOpts()) {
 
 // Einstellungen des aktiven Tabs für ein weiteres Lied übernehmen
 function inheritOpts() {
-  return { ...S.opts, ...readOpts(), tempo: null, title: null, playParts: null };
+  const o = { ...S.opts, ...readOpts(), tempo: null, title: null, playParts: null };
+  for (const k of EXTRA_OPT_KEYS) delete o[k]; // Wünsche gehören zu diesem Lied
+  return o;
 }
 
 const tabInUse = (t) => !!(t.song || t.arr || t.pendingId || t.currentId);
@@ -1095,6 +1177,10 @@ function fillTransposeSelect() {
 }
 
 // ---------------------------------------------------------------- Optionen
+// Einstellungen, die nicht in der Oberfläche stehen (Rückmeldung/Überarbeiten) bleiben erhalten
+const EXTRA_OPT_KEYS = ['tweaks', 'melodyFirst', 'cleanHarmony', 'cleaner', 'bassMode', 'focus', 'drumDifficulty', 'feedback'];
+const extraOpts = () => Object.fromEntries(EXTRA_OPT_KEYS.filter((k) => S.opts[k] !== undefined).map((k) => [k, S.opts[k]]));
+
 function readOpts() {
   const solo = $('#opt-solo').value;
   const tempo = Number($('#opt-tempo').value) || null;
@@ -1121,6 +1207,7 @@ function readOpts() {
     title: S.opts.title || null,
     playParts: S.opts.playParts ? S.opts.playParts.map((p) => ({ ...p })) : null,
     drumFills: S.opts.ensemble === 'drums' ? $('#opt-drum-fills').checked : $('#opt-fills').checked,
+    ...extraOpts(),
   };
 }
 
@@ -1319,9 +1406,108 @@ async function retimeSong(action) {
 // Stammt die Analyse einer Aufnahme aus einer älteren Version (oder lief sie ohne KI)?
 const analysisOutdated = (song) => !!song && song.source === 'audio' && ((song.analysisVersion || 1) < ANALYSIS_VERSION || song.aiUsed === false);
 
+// ---- Aufwand-Regler (Schnell … Ultra): gilt für Analyse und Arrangement
+const effortLevel = () => effortOf(S.settings.effort).level;
+
+function mountEffort(el, { compact = false } = {}) {
+  if (!el) return;
+  const lv = effortLevel();
+  const e = effortOf(lv);
+  el.innerHTML = `<div class="effort-head"><strong>Aufwand</strong><span class="effort-name">${e.name}</span><span class="effort-time">${e.time}</span></div>
+    <input type="range" class="effort-range" min="1" max="5" step="1" value="${lv}" aria-label="Aufwand: ${e.name}" />
+    <div class="effort-ticks">${EFFORT.map((x) => `<span class="${x.level === lv ? 'on' : ''}" data-lv="${x.level}">${x.short}</span>`).join('')}</div>
+    <p class="effort-text muted small">${e.text}</p>`;
+  void compact;
+  const set = (v) => {
+    v = effortOf(v).level;
+    if (v === effortLevel()) return;
+    update({ effort: v });
+    mountAllEffort();
+  };
+  el.querySelector('.effort-range').addEventListener('input', (ev) => {
+    const v = Number(ev.target.value);
+    const x = effortOf(v);
+    el.querySelector('.effort-name').textContent = x.name;
+    el.querySelector('.effort-time').textContent = x.time;
+    el.querySelector('.effort-text').textContent = x.text;
+    el.querySelectorAll('.effort-ticks span').forEach((t) => t.classList.toggle('on', Number(t.dataset.lv) === v));
+  });
+  el.querySelector('.effort-range').addEventListener('change', (ev) => set(Number(ev.target.value)));
+  el.querySelectorAll('.effort-ticks span').forEach((t) => t.addEventListener('click', () => set(Number(t.dataset.lv))));
+}
+function mountAllEffort() {
+  mountEffort($('#effort-gen'));
+  mountEffort($('#effort-src'), { compact: true });
+  mountEffort($('#effort-set'));
+  $('#set-assistant').value = st.assistantKey || '';
+}
+
+// ---- Analyse einer Aufnahme: Aufgaben mit eigenem Balken und gelernter Zeitschätzung
+
+// Grobe Länge der Aufnahme aus der Dateigröße (vor dem Dekodieren)
+function estimateDuration(size, name = '') {
+  const lossless = /\.(wav|wave|flac|aif|aiff)$/i.test(name);
+  return Math.max(10, Math.min(1800, size / (lossless ? 150000 : 16000)));
+}
+
+function analysisTasks(dur, level, { read = false } = {}) {
+  const cfg = effortOf(level).analysis;
+  const th = cfg.hpss;
+  const t = [];
+  if (read) t.push({ id: 'read', label: 'Datei lesen', expect: 300 + dur * 6 });
+  t.push({ id: 'decode', label: 'Aufnahme dekodieren', expect: 700 + dur * speedOf('decode', 40) });
+  if (th) t.push({ id: 'prep', label: 'Gesang und Begleitung trennen', expect: 500 + dur * speedOf('prep', 70) });
+  t.push({ id: 'ai', label: cfg.passes > 1 ? `Lokale KI hört die Noten (bis zu ${cfg.passes} Durchgänge)` : 'Lokale KI hört die Noten', expect: 1500 + dur * speedOf(`ai${level}`, 70 * cfg.passes) });
+  t.push({ id: 'spec', label: 'Klang, Tempo & Takt erkennen', expect: 1000 + dur * speedOf('spec', 110) });
+  t.push({ id: 'melody', label: 'Melodie, Bass & Akkorde erkennen', expect: 800 + dur * speedOf('melody', 70) });
+  t.push({ id: 'grid', label: 'Noten ins Raster setzen & Form bestimmen', expect: 500 + dur * speedOf('grid', 25) });
+  t.push({ id: 'drums', label: 'Schlagzeug Takt für Takt', expect: 800 + dur * speedOf('drums', 55) });
+  t.push({ id: 'save', label: 'Ergebnis speichern', expect: 600 });
+  return t;
+}
+
+// Meldungen der Analyse (Stufe, Anteil, Text) -> Aufgaben; abgeschlossene Aufgaben lernen ihre Dauer
+function stageRunner(pg, dur, level) {
+  const order = ['read', 'decode', 'prep', 'ai', 'spec', 'melody', 'grid', 'drums', 'save'].filter((id) => pg.list.get(id));
+  const t0 = {};
+  const finish = (id) => {
+    const t = pg.list.get(id);
+    if (!t || t.state === 'done') return;
+    pg.done(id);
+    if (t0[id] && id !== 'read' && id !== 'save') rememberSpeed(id === 'ai' ? `ai${level}` : id, Date.now() - t0[id], dur);
+  };
+  const begin = (id) => {
+    const t = pg.list.get(id);
+    if (!t || t.state !== 'wait') return;
+    t0[id] = Date.now();
+    pg.start(id);
+  };
+  return {
+    finish,
+    begin,
+    // vor dieser Aufgabe liegende abschließen, diese starten
+    enter(id) {
+      for (const x of order) {
+        if (x === id) break;
+        finish(x);
+      }
+      begin(id);
+    },
+    stage(stage, frac, text) {
+      if (!pg.list.get(stage)) return;
+      // 'prep' kann nach 'ai' gemeldet werden (Prozessor-Rückfall): nichts davor abschließen
+      this.enter(stage);
+      pg.set(stage, frac, text || '');
+    },
+    all() {
+      for (const x of order) finish(x);
+    },
+  };
+}
+
 // Gespeicherte Aufnahme mit der aktuellen Erkennung neu analysieren.
 // auto: beim Öffnen eines älteren Projekts – still überspringen, wenn die Aufnahme hier fehlt
-async function reanalyze({ auto = false } = {}) {
+async function reanalyze({ auto = false, effort = null, regenerate = true } = {}) {
   const src = S.source;
   let blob = null;
   try {
@@ -1336,19 +1522,24 @@ async function reanalyze({ auto = false } = {}) {
   let done = false;
   S.busy++;
   renderTabBar();
-  const pg = progress(auto ? 'Bessere Erkennung: Song wird neu analysiert' : 'Song wird neu analysiert');
+  const level = effort ?? effortLevel();
+  const dur = S.song?.duration || estimateDuration(blob.size, src.name);
+  const pg = progress(auto ? 'Bessere Erkennung: Song wird neu analysiert' : 'Song wird neu analysiert', { tasks: analysisTasks(dur, level) });
+  const run = stageRunner(pg, dur, level);
   try {
-    pg.set('Audio wird dekodiert', null);
+    run.enter('decode');
     await nextFrame();
     const decoded = await decodeAudio(new Uint8Array(await blob.arrayBuffer()));
-    const song = await analyzeAudio(decoded, { title: S.song?.title || src.name.replace(/\.[^.]+$/, ''), onProgress: (t, f) => pg.set(t, 0.05 + 0.93 * f) });
+    run.finish('decode');
+    const song = await analyzeAudio(decoded, { title: S.song?.title || src.name.replace(/\.[^.]+$/, ''), effort: level, onStage: (st, f, t) => run.stage(st, f, t) });
     const had = !!S.arr;
     const id = S.currentId;
-    pg.set('Fertig', 1);
+    run.enter('save');
     if (await setSource({ ...src, song })) {
+      run.all();
       done = true;
       toast(auto ? 'Mit der verbesserten Erkennung neu analysiert' : 'Neu analysiert', 'ok');
-      if (had) {
+      if (had && regenerate) {
         S.currentId = id;
         await generate();
       }
@@ -1364,24 +1555,173 @@ async function reanalyze({ auto = false } = {}) {
   return done;
 }
 
+// ---------------------------------------------------------------- Überarbeiten
+// Optionaler Assistent (eigener Anthropic-Schlüssel in den Einstellungen): übersetzt freien Text
+// in dieselben Änderungen wie die eingebaute Auswertung – das Ergebnis wird geprüft (sanitizeTweaks).
+async function askAssistant(text, info) {
+  const key = (S.settings.assistantKey || '').trim();
+  if (!key || !text) return null;
+  const system =
+    'Du hilfst in einer Noten-App, Rückmeldungen zu einem Quartett-Arrangement in Änderungen zu übersetzen. ' +
+    'Antworte NUR mit einem JSON-Objekt. Erlaubte Felder (alle optional): ' +
+    'general (bool), melodyFirst (bool), adapt (0 nah am Original, 1 Standard, 2 frei), cleanHarmony (bool), cleaner (bool), ' +
+    'difficultyDelta (-1 oder 1), tempoFactor (0.6–1.5), retime (2 oder 0.5), shiftDownbeat (-1 oder 1), solo ("none" oder "short"), ' +
+    'drums ("off" oder "simpler"), bass ("calm" oder "busy"), reanalyze (bool: Aufnahme neu hören), ' +
+    'voiceRanges ([{voice: Index ab 0, dir: "lower"|"higher"}]), focus ([{from, to}] Taktnummern ab 1), notes (Liste kurzer deutscher Sätze, was du ändern wirst).';
+  const user = JSON.stringify({ rueckmeldung: text, stueck: { titel: info.title, tonart: info.key, tempo: info.tempo, takte: info.bars, stimmen: info.voices, aufnahme: info.hasAudio } });
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 40000);
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      signal: ctl.signal,
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 700, system, messages: [{ role: 'user', content: user }] }),
+    });
+    if (!r.ok) throw new Error('Assistent: ' + r.status);
+    const data = await r.json();
+    const out = (data.content || []).map((c) => c.text || '').join('');
+    const json = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1));
+    const notes = Array.isArray(json.notes) ? json.notes.filter((x) => typeof x === 'string').slice(0, 8).map((x) => 'Assistent: ' + x.slice(0, 200)) : [];
+    return { tweaks: sanitizeTweaks(json, { voices: info.voices?.length || 4 }), notes };
+  } catch (e) {
+    console.info('Assistent nicht verfügbar:', e.message);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function renderReviseLog() {
+  const log = S.opts?.feedback || [];
+  const ol = $('#revise-log');
+  if (!ol) return;
+  ol.innerHTML = '';
+  [...log].reverse().forEach((f, i) => {
+    const li = document.createElement('li');
+    const when = new Date(f.at).toLocaleString('de-AT', { dateStyle: 'short', timeStyle: 'short' });
+    const head = document.createElement('div');
+    head.innerHTML = `<b></b> <span></span>`;
+    head.querySelector('b').textContent = f.text ? `„${f.text}“` : 'Alles überarbeitet';
+    head.querySelector('span').textContent = `· ${when}${i === 0 ? '' : ''}`;
+    li.appendChild(head);
+    if (f.notes?.length) {
+      const ul = document.createElement('ul');
+      for (const n of f.notes) {
+        const x = document.createElement('li');
+        x.textContent = n;
+        ul.appendChild(x);
+      }
+      li.appendChild(ul);
+    }
+    ol.appendChild(li);
+  });
+}
+
+async function revise() {
+  if (S.busy) return toast(BUSY_MSG);
+  if (!S.arr || !S.song) return toast('Zuerst ein Arrangement erstellen.', 'error');
+  const text = $('#revise-text').value.trim();
+  const isAudio = S.song.source === 'audio' && !!S.source?.audioId;
+  const info = {
+    title: S.song.title,
+    key: keyNameDe(S.song.key),
+    tempo: S.song.tempo,
+    bars: S.printed.length,
+    voices: S.opts.voices,
+    hasAudio: isAudio,
+  };
+  const res = interpretFeedback(text, info);
+  let tweaks = res.tweaks;
+  const notes = [...res.notes];
+  $('#revise-note').textContent = 'Rückmeldung wird ausgewertet …';
+  const ext = await askAssistant(text, info);
+  if (ext) {
+    const specific = Object.keys(ext.tweaks).some((k) => !['general', 'deep'].includes(k));
+    tweaks = mergeTweaks(tweaks, ext.tweaks);
+    // der Assistent hat etwas Konkretes verstanden: keine pauschale Überarbeitung mehr
+    if (specific && !ext.tweaks.general) delete tweaks.general;
+    notes.push(...ext.notes);
+  }
+  const level = Math.max(4, effortLevel());
+  const tab = S.tab;
+  tab.revBackup = { opts: JSON.parse(JSON.stringify(S.opts)), source: S.source };
+  $('#revise-note').textContent = '';
+  try {
+    // 1) die Aufnahme selbst korrigieren
+    if (isAudio) {
+      let song = S.song;
+      let changed = false;
+      if (tweaks.shiftDownbeat) {
+        song = shiftDownbeat(song, tweaks.shiftDownbeat);
+        changed = true;
+      }
+      if (tweaks.retime) {
+        song = scaleNoteValues(song, tweaks.retime);
+        changed = true;
+      }
+      if (changed) await setSource({ ...S.source, song });
+      if (tweaks.reanalyze || tweaks.general) await reanalyze({ effort: level, regenerate: false });
+    }
+    // 2) Einstellungen anpassen und länger arrangieren
+    const next = applyTweaks(S.opts, tweaks, { tempo: S.song.tempo, instruments: INSTRUMENTS });
+    next.feedback = [...(S.opts.feedback || []), { text, at: Date.now(), notes }];
+    next.seed = (Number(S.opts.seed) || 1) + 101;
+    applyOptsToUi(next);
+    const base = effortOf(level).arrange;
+    await generate({
+      effort: level,
+      cfgPatch: { sweep: true, seeds: Math.max(base.seeds, 32), search: Math.max(base.search, 12), polish: Math.max(base.polish, 8), budgetMs: Math.max(base.budgetMs, 4 * 60000) },
+      label: 'Arrangement wird überarbeitet',
+    });
+    renderReviseLog();
+    $('#revise-text').value = '';
+    $('#revise-note').textContent = notes.join(' ');
+    toast('Überarbeitet', 'ok', {
+      label: 'Rückgängig',
+      run: async () => {
+        const b = tab.revBackup;
+        if (!b || S.tab !== tab) return;
+        if (b.source !== S.source) await setSource(b.source);
+        applyOptsToUi(b.opts);
+        await generate({ effort: 1 });
+        renderReviseLog();
+      },
+    });
+  } catch (e) {
+    console.error(e);
+    toast('Überarbeiten fehlgeschlagen: ' + e.message, 'error');
+  }
+}
+
 // replace: im aktiven Tab ersetzen; sonst öffnet ein weiteres Lied einen neuen Tab
 async function handleFile(file, { replace = false } = {}) {
   if (S.busy) return toast(BUSY_MSG);
   if (!replace && tabInUse(S.tab)) await openTab(makeTab(inheritOpts()));
   S.busy++;
   renderTabBar();
-  const pg = progress(`„${file.name}“ wird geladen`);
+  const looksAudio = detectFormat(file.name) === 'audio';
+  const level = effortLevel();
+  const estDur = estimateDuration(file.size, file.name);
+  const pg = looksAudio
+    ? progress(`„${file.name}“ wird analysiert`, { tasks: analysisTasks(estDur, level, { read: true }) })
+    : progress(`„${file.name}“ wird geladen`);
+  const run = looksAudio ? stageRunner(pg, estDur, level) : null;
   try {
-    const buf = await readFileWithProgress(file, (f) => pg.set(`Datei wird gelesen (${(file.size / 1048576).toFixed(1)} MB)`, f * 0.1));
+    run?.begin('read');
+    const buf = await readFileWithProgress(file, (f) => (run ? pg.set('read', f, `${(file.size / 1048576).toFixed(1)} MB`) : pg.set(`Datei wird gelesen (${(file.size / 1048576).toFixed(1)} MB)`, f)));
     const format = detectFormat(file.name, buf);
     let ok;
     if (format === 'audio') {
-      pg.title('Song wird analysiert').set('Audio wird dekodiert', null);
+      run.finish('read');
+      run.enter('decode');
       await nextFrame();
       const decoded = await decodeAudio(buf);
+      run.finish('decode');
+      const dur = decoded.duration || estDur;
       const title = file.name.replace(/\.[^.]+$/, '');
-      const song = await analyzeAudio(decoded, { title, onProgress: (t, f) => pg.set(t, 0.12 + 0.86 * f) });
-      pg.set('Aufnahme wird gespeichert', 0.99);
+      const song = await analyzeAudio(decoded, { title, effort: level, onStage: (st, f, t) => run.stage(st, f, t) });
+      run.enter('save');
       const audioId = uuid();
       const blob = new Blob([buf], { type: file.type || 'audio/mpeg' });
       try {
@@ -1393,13 +1733,14 @@ async function handleFile(file, { replace = false } = {}) {
       S.audioUrl = URL.createObjectURL(blob);
       S.audioFor = audioId;
       ok = await setSource({ name: file.name, format: 'audio', audioId, song });
+      run.all();
+      void dur;
     } else {
       pg.set('Noten werden gelesen', 0.5);
       await nextFrame();
       const data = format === 'abc' ? new TextDecoder().decode(buf) : buf;
       ok = await setSource({ name: file.name, format, data });
     }
-    pg.set('Fertig', 1);
     if (ok) toast(`„${S.song?.title || file.name}“ geladen`, 'ok');
   } catch (e) {
     console.error(e);
@@ -1417,33 +1758,54 @@ function uuid() {
 }
 
 // ---------------------------------------------------------------- Erzeugen
-async function generate({ silent = false } = {}) {
+// effort: Stufe 1–5 (Standard: Regler); cfgPatch: Überarbeiten verlängert die Suche
+async function generate({ silent = false, effort = null, cfgPatch = null, label = null } = {}) {
   if (!S.song) {
     toast('Bitte zuerst eine Vorlage wählen.', 'error');
     return;
   }
   const btn = $('#generate');
-  const label = btn.querySelector('span').textContent;
+  const btnLabel = btn.querySelector('span').textContent;
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Wird erstellt …';
   S.busy++; // kein Tab-Wechsel, solange arrangiert wird
   renderTabBar();
   const opts = readOpts();
+  const level = effort ?? effortLevel();
+  const cfg = { ...effortOf(level).arrange, ...(cfgPatch || {}) };
   const pb = opts.ensemble === 'solo' && opts.playback;
-  const pg = progress(pb ? 'Playback-Noten werden erstellt' : 'Arrangement wird erstellt');
-  pg.set(pb ? 'Stimmen werden 1:1 übernommen' : 'Form, Stimmen & Gegenstimmen werden geschrieben', 0.05);
+  // Variantensuche nur für frei geschriebene Mehrstimmen-Arrangements
+  const search = opts.ensemble === 'quartet' && !opts.original && cfg.seeds > 1;
+  const bars = S.song.measureCount || 32;
+  const tasks = [
+    {
+      id: 'arr',
+      label: pb ? 'Playback-Noten erstellen' : search ? 'Varianten schreiben und vergleichen' : 'Arrangement schreiben',
+      expect: search ? Math.min(cfg.budgetMs, 4000 + bars * 40 * cfg.seeds) : 600 + bars * 12,
+    },
+    { id: 'notes', label: 'Noten setzen (Seite für Seite)', expect: 1500 + bars * speedOf('notes', 90) },
+  ];
+  const pg = progress(label || (pb ? 'Playback-Noten werden erstellt' : 'Arrangement wird erstellt'), { tasks });
   await nextFrame();
+  let tNotes = 0;
   try {
     S.opts = { ...S.opts, ...opts };
     const t0 = performance.now();
-    S.arr = arrange(S.song, opts);
-    console.info(`Arrangement in ${Math.round(performance.now() - t0)} ms`);
-    pg.set('Notenbild wird vorbereitet', 0.3);
+    if (search) {
+      S.arr = await arrangeBest(S.song, opts, cfg, { onProgress: (f, text) => pg.set('arr', f, text) });
+    } else {
+      S.arr = arrange(S.song, opts);
+    }
+    pg.done('arr');
+    console.info(`Arrangement in ${Math.round(performance.now() - t0)} ms (Aufwand ${level})`);
     await nextFrame();
     S.printed = printedMeasures(S.arr);
     S.t2p = timelineToPrinted(S.arr, S.printed);
-    await showResult((t, f) => pg.set(t, 0.3 + 0.7 * f));
-    pg.set('Fertig', 1);
+    pg.start('notes');
+    tNotes = Date.now();
+    await showResult((t, f) => pg.set('notes', f, t));
+    pg.done('notes');
+    rememberSpeed('notes', Date.now() - tNotes, bars);
     if (S.settings.autoSave && !silent) await saveCurrent(true);
   } catch (e) {
     console.error(e);
@@ -1451,7 +1813,7 @@ async function generate({ silent = false } = {}) {
   } finally {
     S.busy--;
     btn.disabled = false;
-    btn.querySelector('span').textContent = label;
+    btn.querySelector('span').textContent = btnLabel;
     refreshEmptyState();
     renderTabBar();
     persistTabs();
@@ -1462,6 +1824,7 @@ async function generate({ silent = false } = {}) {
 // restore: Tab-Wechsel – Notenseiten und Mischpult des Tabs wiederverwenden
 async function showResult(onProgress = null, { restore = false } = {}) {
   const a = S.arr;
+  renderReviseLog();
   $('#empty-state').classList.add('hidden');
   $('#result').classList.remove('hidden');
   $('#arrange-grid').classList.remove('no-result');
@@ -2293,6 +2656,8 @@ function renderSettings() {
   $('#set-drums').checked = st.defaultDrums;
   $('#set-transpose').checked = st.transposeAuto;
   $('#set-autosave').checked = st.autoSave;
+  mountEffort($('#effort-set'));
+  $('#set-assistant').value = st.assistantKey || '';
   $('#set-paper').value = st.paper;
   $('#set-zoom').value = String(st.notesZoom);
   $('#set-concert').value = String(st.concertScore);
@@ -2320,6 +2685,7 @@ function bindSettings() {
   on('#set-drums', (e) => update({ defaultDrums: e.target.checked }));
   on('#set-transpose', (e) => update({ transposeAuto: e.target.checked }));
   on('#set-autosave', (e) => update({ autoSave: e.target.checked }));
+  on('#set-assistant', (e) => update({ assistantKey: e.target.value.trim() }));
   on('#set-paper', (e) => update({ paper: e.target.value }, { rerender: true }));
   on('#set-zoom', (e) => update({ notesZoom: Number(e.target.value) }, { rerender: true }));
   on('#set-concert', (e) => update({ concertScore: e.target.value === 'true' }, { rerender: true }));
@@ -2513,6 +2879,7 @@ async function main() {
   S.tab = makeTab(defaultOpts());
   S.tabs = [S.tab];
   renderPresets();
+  mountAllEffort();
   applyOptsToUi(S.opts);
   refreshEmptyState();
   bindSettings();
@@ -2574,6 +2941,7 @@ async function main() {
     $('#file-input').click();
   });
   $('#es-generate').addEventListener('click', () => $('#generate').click());
+  $('#revise-go').addEventListener('click', () => revise());
   const es = $('#empty-state');
   ['dragenter', 'dragover'].forEach((ev) => es.addEventListener(ev, (e) => (e.preventDefault(), es.classList.add('over'))));
   ['dragleave', 'drop'].forEach((ev) => es.addEventListener(ev, (e) => (e.preventDefault(), es.classList.remove('over'))));

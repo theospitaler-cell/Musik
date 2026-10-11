@@ -22,7 +22,7 @@ const HOP = 441; // 20 ms
 const FR = SR / HOP; // 50 Frames/s
 
 // ---------- FFT (radix-2, komplex, in-place) ----------
-function makeFFT(n) {
+export function makeFFT(n) {
   const levels = Math.log2(n);
   const cos = new Float32Array(n / 2);
   const sin = new Float32Array(n / 2);
@@ -1374,7 +1374,7 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
 }
 
 // Wird erhöht, wenn die Analyse deutlich bessere Ergebnisse liefert (Hinweis „neu analysieren“)
-export const ANALYSIS_VERSION = 2;
+export const ANALYSIS_VERSION = 3;
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
 export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai = null, debug = null } = {}) {

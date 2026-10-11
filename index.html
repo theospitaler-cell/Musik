@@ -68,6 +68,7 @@
                 <textarea id="abc-input" spellcheck="false" rows="9" placeholder="X:1&#10;T:Mein Song&#10;M:4/4&#10;L:1/8&#10;K:Bb&#10;&quot;Bb7&quot;B2 d2 f2 d2|..."></textarea>
                 <div class="row-end"><button class="btn ghost small" id="abc-load">Übernehmen</button></div>
               </div>
+              <div class="effort compact" id="effort-src"></div>
               <div class="analysis hidden" id="analysis"></div>
             </section>
 
@@ -186,6 +187,7 @@
               </div>
             </details>
 
+            <div class="effort" id="effort-gen"></div>
             <button class="btn primary big" id="generate" disabled><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
           </aside>
 
@@ -238,6 +240,22 @@
                   </div>
                 </div>
               </div>
+
+              <details class="revise" id="revise">
+                <summary><svg><use href="#i-wand" /></svg><span>Nicht zufrieden? Überarbeiten lassen</span></summary>
+                <div class="revise-body">
+                  <label class="field">
+                    <span>Was soll besser werden? <em class="muted">(leer lassen = alles gründlich überarbeiten)</em></span>
+                    <textarea id="revise-text" rows="3" spellcheck="true" placeholder="z. B. „Die Melodie fehlt in der Strophe“ · „Stimme 2 liegt zu hoch“ · „Takt 17–24 klingt schief“ · „zu schwer“ · „Bass zu unruhig“"></textarea>
+                  </label>
+                  <div class="revise-row">
+                    <button class="btn primary" id="revise-go"><svg><use href="#i-wand" /></svg><span>Überarbeiten</span></button>
+                    <span class="muted small">Nimmt sich Zeit: mindestens Aufwand „Sehr gründlich“, mit dem Regler links erhöhbar.</span>
+                  </div>
+                  <div class="revise-note small" id="revise-note"></div>
+                  <ol class="revise-log small" id="revise-log"></ol>
+                </div>
+              </details>
 
               <div class="tabs" role="tablist">
                 <button class="tab active" data-tab="notes">Noten</button>
@@ -313,6 +331,9 @@
             </div>
             <label class="toggle-row"><span><strong>Schlagzeug standardmäßig</strong><small>Drum-Stimme automatisch dazu</small></span><input type="checkbox" class="switch" id="set-drums" /></label>
             <label class="toggle-row"><span><strong>Bläserfreundliche Tonart</strong><small>automatisch transponieren (z. B. E → Es)</small></span><input type="checkbox" class="switch" id="set-transpose" /></label>
+            <div class="effort" id="effort-set"></div>
+            <label class="field"><span>KI-Assistent beim Überarbeiten (optional)</span><input type="password" id="set-assistant" autocomplete="off" placeholder="Anthropic-API-Schlüssel – leer = nur die eingebaute Auswertung" /></label>
+            <p class="muted small">Ohne Schlüssel wertet NoteCode deine Rückmeldung selbst aus (auf dem Gerät, ohne Server). Mit Schlüssel hilft Claude zusätzlich, freien Text in Änderungen zu übersetzen; dafür werden dein Text und eine kurze Beschreibung des Stücks (Titel, Tonart, Tempo, Besetzung) an Anthropic gesendet. Der Schlüssel bleibt auf diesem Gerät.</p>
             <label class="toggle-row"><span><strong>Automatisch speichern</strong><small>jedes erstellte Arrangement in der Bibliothek ablegen</small></span><input type="checkbox" class="switch" id="set-autosave" /></label>
           </div>
           <div class="card">
@@ -416,8 +437,8 @@
     </dialog>
 
     <div class="progress-dock hidden" id="progress" role="status" aria-live="polite">
-      <div class="pg-top"><span class="pg-head"><strong id="pg-title">Bitte warten</strong><span class="pg-dots" aria-hidden="true"><i></i><i></i><i></i></span></span><span id="pg-pct">0 %</span></div>
-      <div class="pg-bar"><i id="pg-fill"></i></div>
+      <div class="pg-top"><span class="pg-head"><strong id="pg-title">Bitte warten</strong><span class="pg-dots" aria-hidden="true"><i></i><i></i><i></i></span></span><span id="pg-total"></span></div>
+      <div class="pg-tasks" id="pg-tasks"></div>
       <div class="pg-text muted small" id="pg-text"></div>
     </div>
     <div class="toasts" id="toasts"></div>

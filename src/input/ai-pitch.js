@@ -207,3 +207,157 @@ export function aiBassAndHarmony(ai, melody) {
   const harmony = ai.filter((n) => n.midi >= 48 && !isMel(n));
   return { bass: bass.filter((n) => n.end - n.start > 0.05), harmony };
 }
+
+// ---------- Gründliche Analyse: mehrere Durchgänge, Ergebnis gemittelt ----------
+// Ein Durchgang = das Modell einmal über das ganze Lied. Jeder weitere Durchgang
+//  - verschiebt das Fensterraster (Fenstergrenzen sind die Schwachstelle des Modells) und
+//  - hört auf einer anderen Ansicht des Signals (Mitte/Original, „harmonischer“ Anteil ohne
+//    Schlagzeug-Transienten).
+// Gemittelt werden die Aktivierungen (Frames, Onsets) – ein Ton, den nur ein Durchgang „sieht“,
+// fällt unter die Schwelle; Töne, die alle hören, werden sicherer (Einsatz & Dauer genauer).
+const SHIFTS = [0, 70 * 256 + 128, 35 * 256 + 64, 105 * 256 + 192, 52 * 256 + 32, 17 * 256 + 160];
+
+// Aktivierungen (Frames, Onsets) für ein Signal; shift: Samples, um die das Raster versetzt ist
+async function inferActivations(audio, shift, onProgress, { tf, model }) {
+  const shiftFrames = Math.floor(shift / FFT_HOP);
+  const sub = shift - shiftFrames * FFT_HOP;
+  const lead = OVERLAP_SAMPLES / 2 + shiftFrames * FFT_HOP + sub;
+  const padded = new Float32Array(lead + audio.length);
+  padded.set(audio, lead);
+  const nWin = Math.max(1, Math.ceil((padded.length - AUDIO_N_SAMPLES) / HOP) + 1);
+  const nOut = Math.floor(audio.length * (FPS / SR));
+  const total = nOut + shiftFrames;
+  const frames = new Float32Array(nOut * 88);
+  const onsets = new Float32Array(nOut * 88);
+  let fi = 0; // geschriebene Frames dieses Durchgangs (inkl. Vorlauf)
+  const win = new Float32Array(AUDIO_N_SAMPLES);
+  for (let w = 0; w < nWin && fi < total; w++) {
+    win.fill(0);
+    win.set(padded.subarray(w * HOP, Math.min(padded.length, w * HOP + AUDIO_N_SAMPLES)));
+    const res = tf.tidy(() => {
+      const x = tf.tensor3d(win, [1, AUDIO_N_SAMPLES, 1]);
+      const [fr, on] = model.execute(x, ['Identity_1', 'Identity_2']);
+      const cut = (t) => t.slice([0, OVERLAP_HALF, 0], [-1, t.shape[1] - 2 * OVERLAP_HALF, -1]).squeeze([0]);
+      return [cut(fr), cut(on)];
+    });
+    const [fa, oa] = await Promise.all(res.map((t) => t.data()));
+    res.forEach((t) => t.dispose());
+    const rows = fa.length / 88;
+    for (let r = 0; r < rows && fi < total; r++, fi++) {
+      const o = fi - shiftFrames; // Ausgabe-Frame (Vorlauf verwerfen)
+      if (o < 0) continue;
+      frames.set(fa.subarray(r * 88, r * 88 + 88), o * 88);
+      onsets.set(oa.subarray(r * 88, r * 88 + 88), o * 88);
+    }
+    if (onProgress) onProgress((w + 1) / nWin);
+    if (w % 2 === 1) await yieldNow();
+  }
+  return { frames, onsets, nOut };
+}
+
+// Ansicht mit verschobener Tonhöhe: das Signal wird um `semis` Halbtöne „hochgespielt“ (schneller
+// abgespielt, kürzer), das Modell hört es in anderen Tonhöhen-Bins – seine Fehler sind dort anders
+// verteilt. Die Aktivierungen werden zurück auf Zeit und Tonhöhe des Originals abgebildet.
+async function inferPitchShifted(audio, semis, onProgress, handles) {
+  const r = 2 ** (semis / 12);
+  const n = Math.floor(audio.length / r);
+  const sh = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = i * r;
+    const i0 = Math.floor(x);
+    const fr = x - i0;
+    sh[i] = audio[i0] * (1 - fr) + (audio[i0 + 1] || 0) * fr;
+  }
+  const pass = await inferActivations(sh, 0, onProgress, handles);
+  const nOut = Math.floor(audio.length * (FPS / SR));
+  const frames = new Float32Array(nOut * 88);
+  const onsets = new Float32Array(nOut * 88);
+  for (let i = 0; i < nOut; i++) {
+    const x = i / r;
+    const i0 = Math.floor(x);
+    if (i0 + 1 >= pass.nOut) break;
+    const fr = x - i0;
+    for (let k = 0; k < 88; k++) {
+      const bs = k + semis;
+      if (bs < 0 || bs > 87) continue;
+      frames[i * 88 + k] = pass.frames[i0 * 88 + bs] * (1 - fr) + pass.frames[(i0 + 1) * 88 + bs] * fr;
+      onsets[i * 88 + k] = pass.onsets[i0 * 88 + bs] * (1 - fr) + pass.onsets[(i0 + 1) * 88 + bs] * fr;
+    }
+  }
+  return { frames, onsets, nOut };
+}
+
+const PITCH_VIEWS = [1, -1, 2, -2];
+
+// sources: [{ audio: Float32Array (22050 Hz mono), name }] – die erste ist die Hauptansicht
+// passes: Durchgänge insgesamt (höchstens); pitchViews: davon mit verschobener Tonhöhe
+// Ergebnis: { notes: [{start, end, midi, amp}], passes, ms }
+export async function runEnsemble(sources, { budgetMs = 300000, maxPasses = 6, passes = null, pitchViews = 0, minPasses = 1, onProgress = () => {}, onsetThresh = null, frameThresh = null } = {}) {
+  const total = Math.max(1, passes ?? maxPasses);
+  const tf = await getTf();
+  const model = await getModel();
+  const handles = { tf, model };
+  const t0 = Date.now();
+  // Plan: erst Fensterraster-Verschiebungen aller Ansichten (wichtigste zuerst), dann Tonhöhen-Ansichten
+  const nPitch = Math.min(pitchViews, Math.max(0, total - sources.length));
+  const plan = [];
+  for (let p = 0; p < total - nPitch; p++) plan.push({ src: sources[p % sources.length], shift: SHIFTS[Math.floor(p / sources.length) % SHIFTS.length], semis: 0 });
+  for (let i = 0; i < nPitch; i++) plan.push({ src: sources[i % sources.length], shift: 0, semis: PITCH_VIEWS[i % PITCH_VIEWS.length] });
+  let sum = null;
+  let weight = 0;
+  let nOut = 0;
+  let planned = plan.length;
+  for (let p = 0; p < planned; p++) {
+    const step = plan[p];
+    const prog = (fr) => onProgress((p + fr) / planned, p + 1, planned);
+    const pass = step.semis ? await inferPitchShifted(step.src.audio, step.semis, prog, handles) : await inferActivations(step.src.audio, step.shift, prog, handles);
+    if (!sum) {
+      sum = { frames: new Float32Array(pass.frames.length), onsets: new Float32Array(pass.onsets.length) };
+      nOut = pass.nOut;
+    }
+    for (let i = 0; i < sum.frames.length; i++) {
+      sum.frames[i] += pass.frames[i];
+      sum.onsets[i] += pass.onsets[i];
+    }
+    weight++;
+    if (p === 0 && budgetMs > 0) {
+      // Zeitplan nach dem ersten Durchgang: so viele, wie ins Budget passen
+      const per = Math.max(1, Date.now() - t0);
+      planned = Math.max(minPasses, Math.min(plan.length, Math.floor(budgetMs / per)));
+    }
+    onProgress(weight / planned, weight, planned);
+  }
+  const rowsF = [];
+  const rowsO = [];
+  for (let i = 0; i < nOut; i++) {
+    const fr = new Array(88);
+    const on = new Array(88);
+    for (let k = 0; k < 88; k++) {
+      fr[k] = sum.frames[i * 88 + k] / weight;
+      on[k] = sum.onsets[i * 88 + k] / weight;
+    }
+    rowsF.push(fr);
+    rowsO.push(on);
+  }
+  const multi = weight > 1;
+  const notes = aiNotes({ frames: rowsF, onsets: rowsO }, { onsetThresh: onsetThresh ?? (multi ? 0.45 : 0.5), frameThresh: frameThresh ?? (multi ? 0.28 : 0.3) });
+  return { notes, passes: weight, ms: Date.now() - t0 };
+}
+
+// Markiert Noten der Hauptansicht, die auch im „Seiten“-Signal ((L−R)/2) vorkommen: Die Mitte
+// (Gesang, Bass, Schlagzeug) hebt sich dort auf, seitlich verteilte Gitarren & Streicher bleiben.
+// Solche Töne gehören sehr wahrscheinlich zur Begleitung, nicht zur Gesangsmelodie.
+export function flagSideNotes(notes, sideNotes) {
+  if (!sideNotes || !sideNotes.length) return notes;
+  const by = new Map();
+  for (const s of sideNotes) {
+    if (!by.has(s.midi)) by.set(s.midi, []);
+    by.get(s.midi).push(s);
+  }
+  for (const n of notes) {
+    const c = by.get(n.midi);
+    if (!c) continue;
+    if (c.some((s) => Math.abs(s.start - n.start) < 0.06 && s.amp >= 0.5 * n.amp)) n.side = true;
+  }
+  return notes;
+}

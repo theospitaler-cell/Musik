@@ -14,6 +14,7 @@ import {
   transposeEvents,
   transposeChordList,
   transposeSong,
+  simplifyHarmony,
 } from '../model/song.js';
 
 export const ROLE_NAMES = {
@@ -239,7 +240,9 @@ export function planArrangement(songIn, opts) {
   // Planung mit 4 Funktionen; fehlende Funktionen (Duo/Trio) leihen sich ein vorhandenes Instrument
   const insts = slots.slotVoice.map((v, s) => realInsts[v ?? (s === 2 ? slots.upper ?? slots.lead : s === 1 ? slots.lead : slots.bass ?? slots.lead)]);
   const shift = chooseTransposition(songIn, opts.voices, opts);
-  const song = transposeSong(songIn, shift);
+  const transposed = transposeSong(songIn, shift);
+  // „sauberer“: je Takt ein Akkord – weniger unsichere Wechsel, weniger Reibungen
+  const song = opts.cleanHarmony ? simplifyHarmony(transposed) : transposed;
   const key = song.key;
   const mt = songMeasureTicks(song);
   const M = song.measureCount;
@@ -355,7 +358,7 @@ export function planArrangement(songIn, opts) {
   const themeBlocks = (pass, keyShift, mode) => {
     const firstOfLabel = new Map();
     // Melodie-Solos nur ab Quartett-Funktionen und wenn nicht ausdrücklich „nah am Original“
-    const handoff = mode === 'theme' && slots.n >= 3 && Number(opts.adapt ?? 1) >= 1 && slots.lower !== null;
+    const handoff = mode === 'theme' && slots.n >= 3 && Number(opts.adapt ?? 1) >= 1 && slots.lower !== null && !opts.melodyFirst;
     const featureOrder = slots.n >= 4 ? [2, 1] : [1];
     let featureIdx = 0;
     let featuredLast = false;

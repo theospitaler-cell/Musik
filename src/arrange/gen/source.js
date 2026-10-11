@@ -17,7 +17,7 @@ export function enoughSource(notes, measures) {
 }
 
 // notes: Bass der Vorlage im Abschnitt (blockrelativ, klingend). shift: Oktavlage für das Instrument
-export function sourceBass(ctx, v, notes, { shift = 0, kicks = [] } = {}) {
+export function sourceBass(ctx, v, notes, { shift = 0, kicks = [], calm = false } = {}) {
   const inst = ctx.inst[v];
   const lo = inst.range[0];
   const hi = Math.min(inst.range[1], inst.comfort[1] + 4);
@@ -75,6 +75,17 @@ export function sourceBass(ctx, v, notes, { shift = 0, kicks = [] } = {}) {
     });
   }
   line = tidy([...line, ...fill], ctx.len);
+  if (calm) {
+    // ruhiger: gleiche Töne verschmelzen, nichts kürzer als eine Achtel, höchstens ein Ton je Schlag
+    const merged = [];
+    for (const n of line) {
+      const p = merged[merged.length - 1];
+      if (p && p.midi === n.midi && n.start - (p.start + p.dur) <= ctx.beat / 2) p.dur = n.start + n.dur - p.start;
+      else if (p && n.start - p.start < ctx.beat * 0.9) p.dur = Math.max(p.dur, n.start + n.dur - p.start);
+      else merged.push({ ...n });
+    }
+    line = tidy(merged, ctx.len);
+  }
   const funky = ['funk', 'secondline', 'polka'].includes(ctx.style.id);
   const out = cleanLine(
     line.map((n) => {

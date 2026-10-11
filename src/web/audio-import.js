@@ -1,4 +1,6 @@
-// Audio-Datei -> Song: Dekodieren (Browser) + Analyse im Web-Worker, mit Fortschritt.
+// Audio-Datei -> Song: Dekodieren (Browser) + Analyse im Web-Worker, mit Fortschritt je Aufgabe.
+import { effortOf } from '../core/effort.js';
+
 export async function decodeAudio(bytes) {
   const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   const ctx = new AC(1, 2, 44100);
@@ -9,63 +11,46 @@ export async function decodeAudio(bytes) {
   return { channels, sampleRate: buf.sampleRate, duration: buf.duration };
 }
 
-// Die lokale KI (Basic Pitch) liefert Melodie, Bass und Begleitstimmen – ohne sie sind die Noten
-// deutlich ungenauer. Sie läuft deshalb zuerst dort, wo sie schnell ist:
-//   1. im Hauptfenster mit Grafikbeschleunigung (WebGL): wenige Sekunden für ein ganzes Lied.
+// Aufwand (Stufe 1–5, siehe core/effort.js): Gesang/Begleitung werden getrennt (harmonischer
+// Anteil ohne Schlagzeug), die lokale KI hört das Lied mehrfach (verschobene Fenster, verschiedene
+// Ansichten, dazu das Seitensignal) und die Aktivierungen werden gemittelt. Je höher die Stufe,
+// desto mehr Durchgänge – Stufe 1 ist ein einzelner Durchgang (schnell, aber ungenauer).
+//
+// Die KI läuft zuerst dort, wo sie schnell ist:
+//   1. im Hauptfenster mit Grafikbeschleunigung (WebGL): wenige Sekunden je Durchgang.
 //      (Im Web-Worker bleibt WebGL in manchen Umgebungen hängen – daher nicht dort.)
-//   2. sonst im Web-Worker auf dem Prozessor: langsamer (rund 1–2 s je 2 s Musik), aber sicher.
+//   2. sonst im Web-Worker auf dem Prozessor: langsamer, dafür weniger Durchgänge.
 // Nur wenn beides scheitert, wird ohne KI analysiert (mit Hinweis).
-// Wächter für den Worker: so lange darf ein einzelner Schritt ohne Fortschritt dauern …
-const AI_STALL_MS = 40000;
-// … und so lange die KI insgesamt (absehbar)
-const AI_MAX_MS = 900000;
-// Hauptfenster: langsamer als so viele ms je Fenster (2 s Musik) heißt "keine echte Beschleunigung"
-const MAIN_SLOW_MS = 900;
+const AI_STALL_MS = 60000; // Worker: so lange darf ein Schritt ohne Meldung dauern
 
-async function aiOnMainThread({ channels, sampleRate }, onProgress) {
-  const [{ resampleMono }, ai] = await Promise.all([import('../input/audio.js'), import('../input/ai-pitch.js')]);
-  onProgress('Lokale KI wird geladen', 0.01);
-  const backend = await ai.loadAi();
-  if (backend !== 'webgl') throw new Error('keine Grafikbeschleunigung');
-  const mono = resampleMono(channels, sampleRate);
-  onProgress('Lokale KI hört die Noten', 0.02);
-  let t0 = null;
-  let done = 0;
-  const out = await ai.runBasicPitch(mono, (f, w, n) => {
-    // das erste Fenster enthält das Aufwärmen der Grafikkarte – danach wird gemessen
-    if (w === 1) t0 = performance.now();
-    done = w;
-    if (w >= 4 && n > 8 && (performance.now() - t0) / (w - 1) > MAIN_SLOW_MS) throw Object.assign(new Error('zu langsam'), { slow: true });
-    onProgress('Lokale KI hört die Noten', 0.02 + 0.53 * f);
-  });
-  void done;
-  return ai.aiNotes(out);
+function spawn() {
+  try {
+    return new Worker(new URL('./audio-worker.js', import.meta.url), { type: 'module' });
+  } catch (e) {
+    throw new Error('Audio-Analyse wird von diesem Browser nicht unterstützt: ' + e.message);
+  }
 }
 
-function runWorker({ channels, sampleRate }, { title, ai, aiNotes = null, aiBackend = null, onProgress }) {
+// task-Nachricht an einen frischen Worker; onStage(stage, frac, text); Ergebnis der Nachricht
+function callWorker(msg, { onStage, transfer = [], stall = AI_STALL_MS, watchAi = false } = {}) {
   return new Promise((resolve, reject) => {
     let worker;
     try {
-      worker = new Worker(new URL('./audio-worker.js', import.meta.url), { type: 'module' });
+      worker = spawn();
     } catch (e) {
-      reject(new Error('Audio-Analyse wird von diesem Browser nicht unterstützt: ' + e.message));
+      reject(e);
       return;
     }
-    let inAi = ai;
     let last = Date.now();
-    const t0 = Date.now();
-    let aiStart = null;
-    let aiFrac = 0;
     const timer = setInterval(() => {
-      const el = aiStart ? Date.now() - aiStart : 0;
-      const slow = inAi && aiStart && el > 30000 && el / Math.max(0.005, aiFrac) > AI_MAX_MS;
-      if ((inAi && Date.now() - last > AI_STALL_MS) || slow || (inAi && Date.now() - t0 > AI_MAX_MS)) {
+      // hängt die KI im Worker ohne Meldung, wird abgebrochen (dann läuft die Analyse ohne KI weiter)
+      if (watchAi && Date.now() - last > stall) {
         clearInterval(timer);
         worker.terminate();
         reject(Object.assign(new Error('KI hängt'), { aiStall: true }));
       }
     }, 1000);
-    const done = () => {
+    const end = () => {
       clearInterval(timer);
       worker.terminate();
     };
@@ -73,48 +58,75 @@ function runWorker({ channels, sampleRate }, { title, ai, aiNotes = null, aiBack
       const m = e.data;
       if (m.type === 'progress') {
         last = Date.now();
-        inAi = ai && /KI/.test(m.text) && !/ohne KI/.test(m.text);
-        // Anteil der KI-Arbeit (Worker meldet 0,02 … 0,55 für die KI)
-        if (inAi && /hört/.test(m.text)) {
-          if (aiStart === null) aiStart = Date.now();
-          aiFrac = Math.max(0, (m.frac - 0.02) / 0.53);
-        }
-        onProgress(m.text, m.frac);
-      } else if (m.type === 'done') {
-        done();
-        resolve(m.song);
+        onStage?.(m.stage, m.frac, m.text);
+      } else if (m.type === 'done' || m.type === 'prepared') {
+        end();
+        resolve(m);
       } else if (m.type === 'error') {
-        done();
+        end();
         reject(new Error(m.message));
       }
     };
     worker.onerror = (e) => {
-      done();
+      end();
       reject(new Error(e.message || 'Audio-Analyse fehlgeschlagen'));
     };
-    // Kopie senden (nicht übertragen): bei einem Neustart ohne KI werden die Daten noch gebraucht
-    worker.postMessage({ channels, sampleRate, title, ai, aiNotes, aiBackend });
+    worker.postMessage(msg, transfer);
   });
 }
 
-export async function analyzeAudio(data, { title, onProgress = () => {} } = {}) {
-  // 1) KI im Hauptfenster (Grafikkarte)
+// KI im Hauptfenster (Grafikkarte): Ansichten mid + harm (+ Seite)
+async function aiOnMainThread(prepared, cfg, onStage) {
+  const ai = await import('../input/ai-pitch.js');
+  onStage('ai', 0, 'Lokale KI wird geladen');
+  const backend = await ai.loadAi();
+  if (backend !== 'webgl') throw new Error('keine Grafikbeschleunigung');
+  const sources = [{ audio: prepared.mid, name: 'mid' }];
+  if (prepared.harm) sources.push({ audio: prepared.harm, name: 'harm' });
+  const out = await ai.runEnsemble(sources, {
+    budgetMs: cfg.budgetMs,
+    passes: cfg.passes,
+    pitchViews: cfg.shifts || 0,
+    onProgress: (f, k, n) => onStage('ai', f, n > 1 ? `Durchgang ${k} von ${n}` : 'Lokale KI hört die Noten'),
+  });
+  let side = false;
+  if (cfg.side && prepared.side) {
+    onStage('ai', 0.97, 'Seitensignal wird gehört');
+    const sd = await ai.runEnsemble([{ audio: prepared.side }], { maxPasses: 1, budgetMs: 0 });
+    ai.flagSideNotes(out.notes, sd.notes);
+    side = sd.notes.length > 0;
+  }
+  return { notes: out.notes, meta: { passes: out.passes, ms: out.ms, views: sources.length, side } };
+}
+
+// Ergebnis: Song. onStage(stage, frac 0..1, text) – stage: prep | ai | spec | melody | grid | drums
+export async function analyzeAudio(data, { title, effort = 3, onStage = () => {} } = {}) {
+  const cfg = effortOf(effort).analysis;
+  const base = { channels: data.channels, sampleRate: data.sampleRate, title, effort };
   let aiNotes = null;
+  let aiMeta = null;
+  // 1) Vorbereiten (Trennen) und KI im Hauptfenster
   try {
-    aiNotes = await aiOnMainThread(data, onProgress);
+    const prepared = await callWorker({ task: 'prepare', channels: data.channels, sampleRate: data.sampleRate, hpss: cfg.hpss }, { onStage });
+    const r = await aiOnMainThread(prepared, cfg, onStage);
+    aiNotes = r.notes;
+    aiMeta = r.meta;
   } catch (e) {
     console.info('KI im Hauptfenster nicht nutzbar:', e.message);
   }
-  if (aiNotes && aiNotes.length) return runWorker(data, { title, ai: false, aiNotes, onProgress });
+  if (aiNotes && aiNotes.length) {
+    onStage('ai', 1, '');
+    return (await callWorker({ ...base, task: 'analyze', ai: false, aiNotes, aiMeta }, { onStage })).song;
+  }
   // 2) KI im Worker auf dem Prozessor
   try {
-    onProgress('Lokale KI rechnet auf dem Prozessor (dauert länger)', 0.02);
-    return await runWorker(data, { title, ai: true, aiBackend: 'cpu', onProgress });
+    onStage('ai', 0, 'Lokale KI rechnet auf dem Prozessor (dauert länger)');
+    return (await callWorker({ ...base, task: 'analyze', ai: true, aiBackend: 'cpu' }, { onStage, watchAi: true })).song;
   } catch (e) {
     if (!e.aiStall) throw e;
     // 3) ohne KI
-    onProgress('KI reagiert nicht – Analyse ohne KI', 0.05);
-    const song = await runWorker(data, { title, ai: false, onProgress });
+    onStage('ai', 1, 'KI reagiert nicht – Analyse ohne KI');
+    const song = (await callWorker({ ...base, task: 'analyze', ai: false }, { onStage })).song;
     song.warnings = [...(song.warnings || []), 'Die lokale KI konnte auf diesem Gerät nicht rechnen – die Noten wurden ohne KI erkannt und sind ungenauer.'];
     return song;
   }
