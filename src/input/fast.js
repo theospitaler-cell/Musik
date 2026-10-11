@@ -362,3 +362,54 @@ export function fineChains(notes, B) {
   }
   return { chains, notes: count, share: cand.length ? count / cand.length : 0 };
 }
+
+// Einzelne kurze Töne (Sechzehntel, Staccato): ein Ton unter 120 ms ohne Nachbarn gleicher Tonhöhe
+// ist meist ein Einschwing- oder Abklingrest – oder eben eine einzelne Sechzehntel nach einer Pause
+// bzw. zwischen längeren Tönen. Erst mehrere Merkmale zusammen machen ihn zur Note:
+//  - sein Einsatz liegt genau auf dem 16tel-Raster (±0,15 Stufe),
+//  - er ist mindestens so laut wie die typische Note des Liedes und setzt steil ein (≥ 4×),
+//  - kein lauterer Ton eine Oktave/Quinte darunter beginnt gleichzeitig (Oberton),
+//  - er ist melodisch angebunden: ein lauter, ausgehaltener Ton höchstens 5 Halbtöne entfernt
+//    liegt höchstens 0,35 s davor oder danach.
+// onsetRise(t, midi) aus makeAttackDetector. Rückgabe: Map(Note -> {kind: 'single', grid: 6}).
+export function markSingleNotes(notes, beatSec, { onsetRise, tune = null } = {}) {
+  const T = { err: 0.15, rise: 4, amp: 1.25, ...(tune || {}) };
+  const marks = new Map();
+  if (!notes.length || !beatSec || beatSec.length < 3 || !onsetRise) return marks;
+  const amps = notes.filter((n) => n.midi >= 48 && n.midi <= 96).map((n) => n.amp ?? 0.5).sort((a, b) => a - b);
+  const med = amps.length ? amps[Math.floor(amps.length / 2)] : 0.5;
+  const nb = beatSec.length;
+  const pos = (sec) => {
+    let lo = 0;
+    let hi = nb - 2;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (beatSec[mid] <= sec) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + (sec - beatSec[lo]) / (beatSec[lo + 1] - beatSec[lo]);
+  };
+  const sorted = [...notes].sort((a, b) => a.start - b.start);
+  let first = 0;
+  for (const n of sorted) {
+    if (n.midi < 55 || n.midi > 90 || n.end - n.start >= 0.12 || (n.amp ?? 0.5) < T.amp * med) continue;
+    const q = pos(n.start) * 4;
+    if (Math.abs(q - Math.round(q)) > T.err) continue;
+    while (first < sorted.length && sorted[first].start < n.start - 1) first++;
+    let fragment = false;
+    let harm = false;
+    let linked = false;
+    for (let k = first; k < sorted.length && sorted[k].start <= n.start + 1; k++) {
+      const o = sorted[k];
+      if (o === n) continue;
+      // Fragment eines Tons: gleiche Tonhöhe direkt davor/danach
+      if (o.midi === n.midi && ((o.start > n.start && o.start - n.start < 0.4 && o.start - n.end <= 0.15) || (o.start < n.start && n.start - o.start < 0.5 && n.start - o.end <= 0.15))) fragment = true;
+      if (Math.abs(o.start - n.start) <= 0.06 && [12, 19, 24, 7, 28].includes(n.midi - o.midi) && (o.amp ?? 0.5) >= 0.8 * (n.amp ?? 0.5)) harm = true;
+      if (o.end - o.start >= 0.12 && (o.amp ?? 0.5) >= 0.9 * med && Math.abs(o.midi - n.midi) <= 5 && ((o.end <= n.start + 0.04 && n.start - o.end <= 0.35) || (o.start >= n.end - 0.04 && o.start - n.end <= 0.35))) linked = true;
+    }
+    if (fragment || harm || !linked) continue;
+    if (onsetRise(n.start, n.midi) < T.rise) continue;
+    marks.set(n, { kind: 'single', grid: 6 });
+  }
+  return marks;
+}

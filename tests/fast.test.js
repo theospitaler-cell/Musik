@@ -2,7 +2,7 @@
 // Rettung kurzer Noten, Lesbarkeits-Vereinfachung lässt sie unangetastet.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeAttackDetector, markFastNotes } from '../src/input/fast.js';
+import { makeAttackDetector, markFastNotes, markSingleNotes } from '../src/input/fast.js';
 import { tidyAiNotes, withFastNotes, simplifyLine } from '../src/input/voices.js';
 import { transcribe } from '../src/input/audio.js';
 import { synthSong } from './synth-audio.js';
@@ -100,6 +100,21 @@ test('Muster: Instrumentalläufe bei Tempo 94 und in dichten, leisen Mischungen 
   assert.equal(markFastNotes([...lick, ...near], b94).size, 16, 'beide Linien laufen (Terzen, fast gleich laut)');
   const loud = lick.map((n) => ({ ...n, midi: n.midi + 4, amp: Math.min(1, n.amp * 2.2) }));
   assert.equal(markFastNotes([...lick.map((n) => ({ ...n, amp: 0.4 })), ...loud], b94).size, 8, 'nur die laute Linie');
+});
+
+test('Einzelne Sechzehntel: nur mit Raster, Lautstärke, steilem Einsatz und melodischer Anbindung', () => {
+  // gehaltene Töne C5 (bis 4,0 s) und D5 (ab 4,5 s) mit einer kurzen E5 dazwischen auf der Sechzehntel nach Schlag 9
+  const base = [note(2.0, 72, 2.0, 0.6), note(4.5, 74, 1.0, 0.6), note(1.0, 60, 0.4, 0.6), note(6.0, 67, 0.5, 0.6)];
+  const single = (over = {}) => ({ start: 4.125, end: 4.21, midi: 76, amp: 0.8, ...over });
+  const rise = () => 6;
+  const marked = (extra, r = rise) => markSingleNotes([...base, ...extra], beatSec, { onsetRise: r }).size;
+  assert.equal(marked([single()]), 1, 'laute, steile Sechzehntel zwischen zwei Melodietönen');
+  assert.equal(marked([single({ start: 4.06, end: 4.15 })]), 0, 'neben dem Raster');
+  assert.equal(marked([single({ amp: 0.5 })]), 0, 'leiser als das Lied');
+  assert.equal(marked([single()], () => 2), 0, 'weicher Einsatz');
+  assert.equal(marked([single({ midi: 90 })]), 0, 'ohne melodische Anbindung (zu weit weg)');
+  assert.equal(marked([single(), { start: 4.22, end: 4.5, midi: 76, amp: 0.7 }]), 0, 'Fragment eines Tons: derselbe Ton folgt direkt');
+  assert.equal(marked([single(), { start: 4.125, end: 4.4, midi: 64, amp: 0.8 }]), 0, 'Oberton-Partner: gleichzeitig lauter Ton eine Oktave darunter');
 });
 
 test('KI-Rohnoten: Splitter + gleicher Ton ohne Anschlag = ein Ton ab dem früheren Einsatz', () => {

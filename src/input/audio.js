@@ -14,7 +14,7 @@ import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
 import { fuseMelody } from './ai-pitch.js';
 import { cleanPoly, separateVoices, simplifyLine, tidyAiNotes, withFastNotes } from './voices.js';
-import { makeAttackDetector, markFastNotes, fineChains } from './fast.js';
+import { makeAttackDetector, markFastNotes, markSingleNotes, fineChains } from './fast.js';
 import { barFeatures, audioSections } from './form.js';
 
 const SR = 22050;
@@ -1383,7 +1383,8 @@ export const ANALYSIS_VERSION = 4;
 export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null } = {}) {
   // KI-Rohnoten: Fragmente unter 120 ms weg, Vibrato/kurze Abrisse zu gehaltenen Tönen – es sei
   // denn, zwischen den Teilen liegt ein echter Anschlag (Transient auf den Teiltönen dieses Tons)
-  const attack = aiRaw && aiRaw.length ? makeAttackDetector(mono, SR).reattack : null;
+  const detector = aiRaw && aiRaw.length ? makeAttackDetector(mono, SR) : null;
+  const attack = detector ? detector.reattack : null;
   const ai = aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack }) : aiRaw;
   onProgress('Spektrum wird analysiert', 0);
   const feat = analyzeFrames(mono, onProgress);
@@ -1639,7 +1640,13 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     // Schnelle Läufe und Tonwiederholungen (16tel, Triolen, 32tel): Muster aus mindestens drei
     // gleichmäßigen Tönen auf dem Raster des Schlags, Wiederholungen mit echtem Anschlag. Ihre
     // Töne bleiben auch unter 120 ms und werden nicht ins Achtel-Raster vereinfacht.
-    const aiV = !swing && !shuffle12 && attack ? withFastNotes(ai, markFastNotes(aiRaw, beatSec, { attack })) : ai;
+    let aiV = ai;
+    if (!swing && !shuffle12 && attack) {
+      const marks = markFastNotes(aiRaw, beatSec, { attack });
+      // einzelne kurze Sechzehntel (nicht Teil eines Laufs): strenge Merkmale in fast.js
+      for (const [n, v] of markSingleNotes(aiRaw, beatSec, { onsetRise: detector.onsetRise })) if (!marks.has(n)) marks.set(n, v);
+      aiV = withFastNotes(ai, marks);
+    }
     const nFast = aiV.filter((n) => n.fast).length;
     if (nFast) aiInfo.fast = nFast;
     const poly = cleanPoly(

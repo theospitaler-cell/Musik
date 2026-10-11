@@ -306,7 +306,15 @@ npm run serve     # als Web-App im Browser: http://localhost:8000 (Node, kein Py
 npm install       # einmalig für die Desktop-App
 npm run desktop   # Desktop-App starten (Electron)
 npm run dist      # Installer bauen (dist/)
+node scripts/eval-roundtrip.mjs saints funk   # Genauigkeit der Notenerkennung an bekannter Wahrheit
 ```
+
+**Genauigkeit messen:** `scripts/eval-roundtrip.mjs` setzt ein Demo-Lied zu einer Quartett-Partitur, rendert sie
+zu Audio (Blechbläser + Schlagzeug), lässt die komplette Erkennung mit der lokalen KI darüber laufen und
+vergleicht Note für Note (gleiche Tonhöhe, Einsatz ±60 ms; Erkennungsrate, Trefferquote, F1 je Stimme).
+Stand bei sauberen Instrumentalsätzen: 52–74 % F1 (Balladen am besten, dichte Funk-Sätze am schlechtesten);
+die KI selbst hört 86–98 % der Töne, liefert aber 3–4× so viele Noten wie geschrieben sind – die Nachbearbeitung
+muss Geister (Obertöne, Zerlegungen) entfernen, ohne echte Wiederholungen zu verlieren.
 
 ```
 src/

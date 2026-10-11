@@ -68,14 +68,16 @@ function mono(notes) {
 // Rohnoten der KI (Sekunden) glätten, bevor sie in Stimmen zerlegt werden:
 //  - Fragmente unter minSec (120 ms) verwerfen – das sind Einschwing- und Abklingreste, keine Töne
 //    (schnelle Läufe/Wiederholungen holt withFastNotes danach zurück)
-//  - ein Splitter, dem derselbe Ton ohne neuen Anschlag folgt, ist der Beginn dieses Tons (die KI
-//    löst den Einsatz zweimal aus): ein Ton ab dem früheren Einsatz statt 80 ms zu spät
-//  - eine gehaltene Note (mind. 0,4 s), die nur kurz unterbrochen ist (Vibrato, Abriss von höchstens
-//    60 ms), bleibt eine Note – außer zwischen den Teilen liegt eine tiefe Lücke mit steilem Anstieg
-//    (strong): dann ist es ein neuer Ton.
-// attack(tPrev, tNext, midi) -> {ok, depth}: Anschlag-Erkennung aus dem Audio (fast.js); ohne sie
-// bleibt es bei den Zeit-Regeln.
-export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4, attack = null } = {}) {
+//  - Die KI zerlegt einen Ton oft in mehrere Teile gleicher Tonhöhe (Doppel-Auslösung des Einsatzes,
+//    Einbrüche durch andere Stimmen). Liegen zwei Teile höchstens joinGap (120 ms) auseinander und
+//    gibt es zwischen ihnen keinen echten neuen Anschlag, sind sie ein Ton ab dem früheren Einsatz.
+//    Echter Anschlag: tiefer Einbruch der Teiltöne (≥ 60 %) oder steiler Anstieg (≥ 3×) – an Wahrheit
+//    gemessen trennt das alle echten Wiederholungen und nur 13 % der zerlegten Töne (der frühere
+//    Schwellenwert 30 % trennte die Hälfte fälschlich).
+// attack(tPrev, tNext, midi) -> {depth, rise, …}: Anschlag-Erkennung aus dem Audio (fast.js); ohne sie
+// gelten nur Zeit-Regeln: ein gehaltener Ton (mind. holdSec) mit Abriss von höchstens gapSec bleibt einer.
+export const isNewAttack = (r) => !!r && (r.depth >= 0.6 || r.rise >= 3);
+export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4, attack = null, joinGap = 0.12, joinFirstMax = 0.12 } = {}) {
   const byPitch = new Map();
   for (const n of [...(ai || [])].sort((a, b) => a.start - b.start)) {
     if (!byPitch.has(n.midi)) byPitch.set(n.midi, []);
@@ -83,29 +85,21 @@ export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4, a
   }
   const out = [];
   for (const list of byPitch.values()) {
-    // Splitter + folgender gleicher Ton ohne Anschlag
-    const seq = [];
-    for (let i = 0; i < list.length; i++) {
-      const n = list[i];
-      const nx = list[i + 1];
-      if (attack && nx && n.end - n.start < minSec && nx.start - n.end <= 0.03 && nx.start >= n.start && !attack(n.start, nx.start, n.midi).ok) {
-        nx.start = n.start;
-        nx.amp = Math.max(n.amp ?? 0, nx.amp ?? 0);
-        continue;
-      }
-      seq.push(n);
-    }
     let cur = null;
-    for (const n of seq) {
-      if (n.end - n.start < minSec) continue;
-      const hold = cur && cur.end - cur.start >= holdSec && n.start - cur.end <= gapSec;
-      if (hold && !(attack && attack(cur.start, n.start, n.midi).strong)) {
-        cur.end = Math.max(cur.end, n.end);
-        cur.amp = Math.max(cur.amp ?? 0, n.amp ?? 0);
-      } else {
-        if (cur) out.push(cur);
-        cur = n;
+    for (const n of list) {
+      if (cur) {
+        const gap = n.start - cur.end;
+        // Kandidat: kurzer Anfang (Splitter) bis 120 ms Lücke, oder ein gehaltener Ton mit kleinem Abriss
+        const cand = n.start >= cur.start && ((gap <= joinGap && cur.end - cur.start < joinFirstMax) || (cur.end - cur.start >= holdSec && gap <= gapSec));
+        const join = attack ? cand && !isNewAttack(attack(cur.start, n.start, n.midi)) : cur.end - cur.start >= holdSec && gap <= gapSec;
+        if (join) {
+          cur.end = Math.max(cur.end, n.end);
+          cur.amp = Math.max(cur.amp ?? 0, n.amp ?? 0);
+          continue;
+        }
+        out.push(cur);
       }
+      cur = n;
     }
     if (cur) out.push(cur);
   }
