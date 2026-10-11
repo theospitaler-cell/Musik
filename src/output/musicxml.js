@@ -166,9 +166,38 @@ export function exportMusicXML(arr, opts = {}) {
   const nameCount = {};
   for (const ps of partSpecs) if (ps.kind === 'voice') nameCount[arr.voices[ps.idx].inst.name] = (nameCount[arr.voices[ps.idx].inst.name] || 0) + 1;
   const seen = {};
+  // Gruppenklammern der Partitur: aufeinanderfolgende Stimmen derselben Familie (ab 3 Stimmen im Satz)
+  const groupOf = (ps) => {
+    if (ps.kind !== 'voice') return null;
+    const f = arr.voices[ps.idx].inst.family;
+    return f === 'sax' ? 'woodwind' : f;
+  };
+  const bracketStart = new Map();
+  const bracketStop = new Map();
+  if (!isPart && partSpecs.filter((p) => p.kind === 'voice').length >= 6) {
+    let a = 0;
+    let num = 1;
+    while (a < partSpecs.length) {
+      let b = a;
+      const g = groupOf(partSpecs[a]);
+      while (g && b + 1 < partSpecs.length && groupOf(partSpecs[b + 1]) === g) b++;
+      if (g && b > a) {
+        bracketStart.set(a, num);
+        bracketStop.set(b, num);
+        num++;
+      }
+      a = b + 1;
+    }
+  }
   partSpecs.forEach((ps, k) => {
     const pid = `P${k + 1}`;
     ps.pid = pid;
+    if (bracketStart.has(k)) {
+      w.open('part-group', { type: 'start', number: bracketStart.get(k) });
+      w.el('group-symbol', 'bracket');
+      w.el('group-barline', 'yes');
+      w.close('part-group');
+    }
     if (ps.kind === 'drums') {
       w.open('score-part', { id: pid });
       w.el('part-name', 'Schlagzeug', isPart ? { 'print-object': 'no' } : undefined);
@@ -186,6 +215,7 @@ export function exportMusicXML(arr, opts = {}) {
         w.close('midi-instrument');
       }
       w.close('score-part');
+      if (bracketStop.has(k)) w.el('part-group', null, { type: 'stop', number: bracketStop.get(k) });
       return;
     }
     const v = arr.voices[ps.idx];
@@ -200,10 +230,11 @@ export function exportMusicXML(arr, opts = {}) {
     w.el('instrument-name', base);
     w.close('score-instrument');
     w.open('midi-instrument', { id: `${pid}-I1` });
-    w.el('midi-channel', (ps.idx % 9) + 1);
+    w.el('midi-channel', Math.min(16, ps.idx < 9 ? ps.idx + 1 : ps.idx + 2));
     w.el('midi-program', v.inst.midiProgram + 1);
     w.close('midi-instrument');
     w.close('score-part');
+    if (bracketStop.has(k)) w.el('part-group', null, { type: 'stop', number: bracketStop.get(k) });
   });
   w.close('part-list');
 

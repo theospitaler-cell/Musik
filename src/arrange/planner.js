@@ -133,7 +133,9 @@ function soloRoles(sv, insts) {
 const center = (inst) => (inst.comfort[0] + inst.comfort[1]) / 2;
 export function voiceSlots(insts) {
   const n = insts.length;
-  const lead = 0;
+  // Orchester: die erste Geige führt (Partiturordnung hat das Holz oben, die Melodie liegt bei den Streichern)
+  const vl = n >= 9 ? insts.findIndex((i) => i.id === 'violin') : -1;
+  const lead = vl > 0 ? vl : 0;
   const rest = insts.map((_, i) => i).filter((i) => i !== lead);
   // Bass: tiefstes bass-taugliches Instrument, sonst tiefstes überhaupt
   let bass = null;
@@ -155,6 +157,41 @@ const LEAD_SLOT_ROLES = ['melody', 'hook', 'subject', 'solo'];
 const GROUP_ROLES = ['tutti', 'hits', 'riff', 'final'];
 const HARMONY_ROLES = ['comp', 'pad', 'stabs', 'background'];
 
+// Orchesterbesetzung: ab so vielen Stimmen verteilen sich die Zusatzstimmen nach Familie
+export const ORCHESTRA_FROM = 9;
+const famOf = (inst) => (inst.family === 'sax' ? 'woodwind' : inst.family);
+
+// Streicher tragen den Klangteppich, Holz antwortet und färbt, Blech setzt Akzente und füllt im
+// Tutti. Tacet (Pause) ist erwünscht: nicht jedes Instrument spielt immer – das macht die Dynamik
+// eines Orchesters aus. Zusatzstimmen sind nach Lage sortiert (höchste zuerst).
+function orchestraExtras(out, r4, slots, insts, density, { group, harm }) {
+  const solo = r4.includes('solo');
+  const used = { double: 0, counter: 0, fill: 0 };
+  const cap = (kind, max) => (used[kind] < max ? (used[kind]++, true) : false);
+  const rank = {};
+  for (const v of slots.extras) {
+    const f = famOf(insts[v]);
+    const r = (rank[f] = (rank[f] ?? -1) + 1);
+    if (group) {
+      out[v] = group;
+    } else if (solo) {
+      // Solist: nur Streicher und ein Horn tragen leise Liegeklänge, die anderen schweigen
+      out[v] = f === 'string' || (f === 'brass' && insts[v].id === 'horn' && r === 0) ? 'pad' : 'rest';
+    } else if (density === 'thin') {
+      out[v] = f === 'string' ? (r < 2 ? 'pad' : 'rest') : f === 'woodwind' && cap('fill', 1) ? 'fill' : 'rest';
+    } else if (density === 'build') {
+      if (f === 'string') out[v] = 'pad';
+      else if (f === 'woodwind') out[v] = cap('counter', 1) ? 'counter' : r < 3 ? 'pad' : 'rest';
+      else out[v] = r === 0 ? 'pad' : 'rest';
+    } else {
+      // voll: Holz und erste Geige führen mit der Melodie, Rest begleitet breit
+      if (f === 'woodwind') out[v] = cap('double', 2) ? 'double' : 'pad';
+      else if (f === 'string') out[v] = r === 0 && cap('double', 3) ? 'double' : harm && r % 2 ? harm : 'pad';
+      else out[v] = harm || 'comp';
+    }
+  }
+}
+
 // 4 Funktions-Rollen -> Rollen für n Stimmen
 export function expandRoles(r4, slots, insts, density = null) {
   const out = new Array(slots.n).fill('rest');
@@ -172,6 +209,11 @@ export function expandRoles(r4, slots, insts, density = null) {
   if (slots.n === 2 && slots.bass !== null && r4[3] === 'bass' && !insts[slots.bass].bassCapable) out[slots.bass] = r4[0] === 'melody' ? 'counter' : r4[1] !== 'rest' ? r4[1] : 'counter';
   const group = r4.find((r) => GROUP_ROLES.includes(r) && r !== 'riff') || (r4.filter((r) => r === 'riff').length >= 2 ? 'riff' : null);
   const harm = HARMONY_ROLES.includes(r4[2]) ? r4[2] : HARMONY_ROLES.includes(r4[1]) ? r4[1] : null;
+  // Orchester (ab 9 Stimmen): die Zusatzstimmen werden nach Instrumentenfamilie verteilt
+  if (slots.n >= ORCHESTRA_FROM) {
+    orchestraExtras(out, r4, slots, insts, density, { group, harm });
+    return out;
+  }
   slots.extras.forEach((v, k) => {
     if (group) out[v] = group;
     else if (r4.includes('solo')) out[v] = harm && k < 2 ? harm : 'rest';

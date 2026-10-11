@@ -43,7 +43,7 @@ import { sourceLinesOf, bassOctave } from './original.js';
 import { scoreLines, scoreArrangement } from './quality.js';
 import { sourceBass, sourceComp, enoughSource } from './gen/source.js';
 
-const ENSEMBLE_NAMES = { 2: 'Duett', 3: 'Trio', 4: 'Quartett', 5: 'Quintett', 6: 'Sextett', 7: 'Septett', 8: 'Oktett' };
+const ENSEMBLE_NAMES = { 2: 'Duett', 3: 'Trio', 4: 'Quartett', 5: 'Quintett', 6: 'Sextett', 7: 'Septett', 8: 'Oktett', 9: 'Nonett', 10: 'Dezett', 11: 'Kleines Orchester', 12: 'Kleines Orchester', 13: 'Kammerorchester', 14: 'Kammerorchester', 15: 'Orchester' };
 
 export const DEFAULT_OPTIONS = {
   voices: ['trumpet', 'trumpet', 'trombone', 'sousaphone'],
@@ -97,7 +97,7 @@ export function arrange(songIn, options = {}) {
     return a;
   }
   if (opts.ensemble === 'solo') return opts.playback ? arrangePlayAlong(songIn, opts) : arrangeSoloFree(songIn, opts);
-  if (!Array.isArray(opts.voices) || opts.voices.length < 2 || opts.voices.length > 8) throw new Error('Bitte 2 bis 8 Instrumente wählen');
+  if (!Array.isArray(opts.voices) || opts.voices.length < 2 || opts.voices.length > 15) throw new Error('Bitte 2 bis 15 Instrumente wählen');
   // Original übernehmen: Groove & Melodie 1:1 auf die Instrumente (Form und Takte wie die Vorlage)
   if (opts.original || hasMeterChanges(songIn)) {
     const insts = opts.voices.map((id) => getInstrument(id));

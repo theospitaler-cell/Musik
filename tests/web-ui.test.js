@@ -6,7 +6,8 @@ import { groupLibrary, mergeFolders, sameFolders, songKey, uniqueFolderName } fr
 
 test('Besetzung: jede Vorlage lässt sich auf 2–8 Stimmen bringen', () => {
   for (const p of PRESETS) {
-    for (let n = MIN_VOICES; n <= MAX_VOICES; n++) {
+    if (p.orchestra) continue; // Orchester: eigene Prüfung in orchestra.test.js
+    for (let n = MIN_VOICES; n <= 8; n++) {
       const v = presetVoices(p, n);
       assert.equal(v.length, n, `${p.id} mit ${n} Stimmen`);
       for (const id of v) assert.ok(INSTRUMENTS[id], `${id} ist ein Instrument`);
@@ -30,7 +31,8 @@ test('Besetzung: + und − heben sich bei Vorlagen auf, eigene Besetzung verlier
   assert.equal(bigger.length, 6);
   assert.equal(bigger[0], 'flute');
   assert.equal(resizeVoices(own, 1).length, MIN_VOICES);
-  assert.equal(resizeVoices(own, 12).length, MAX_VOICES);
+  assert.equal(resizeVoices(own, 12).length, 12);
+  assert.equal(resizeVoices(own, 40).length, MAX_VOICES);
 });
 
 test('Besetzung: Feineinstellungen wandern mit ihrem Instrument', () => {

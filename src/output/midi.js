@@ -50,7 +50,7 @@ export function exportMidi(arr) {
   }
   tracks.push(track(meta));
   arr.voices.forEach((v, vi) => {
-    const ch = vi;
+    const ch = vi < 9 ? vi : Math.min(15, vi + 1); // Kanal 10 (Index 9) gehört dem Schlagzeug
     const evs = [];
     evs.push({ tick: 0, data: textMeta(0x03, `${v.label} – ${v.inst.name}`), order: -2 });
     evs.push({ tick: 0, data: [0xc0 | ch, v.inst.midiProgram], order: -1 });

@@ -52,7 +52,7 @@ export const EFFORT = [
     name: 'Ultra',
     short: 'Ultra',
     time: 'bis zu 30 Minuten',
-    text: 'Alles, was möglich ist: viele KI-Durchgänge, große Variantensuche, wiederholtes Nachbessern.',
+    text: 'Alles, was möglich ist: viele KI-Durchgänge, große Variantensuche, wiederholtes Nachbessern. Mit der Besetzung „Orchester“ entsteht eine Konzertpartitur.',
     analysis: { passes: 12, hpss: true, side: true, shifts: 0, budgetMs: 16 * 60000 },
     arrange: { seeds: 60, search: 16, budgetMs: 12 * 60000, sweep: true, polish: 12 },
   },

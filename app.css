@@ -3081,6 +3081,18 @@ body.lib-dragging .folder-card:not(.auto) {
 #effort-gen {
   margin-bottom: 12px;
 }
+.effort-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.effort-hint span {
+  flex: 1 1 200px;
+}
 
 /* Fortschritt in Aufgaben: eine Zeile mit eigenem Balken je Schritt */
 .progress-dock {

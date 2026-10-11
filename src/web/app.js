@@ -660,10 +660,12 @@ function renderCountChooser() {
   const box = $('#cc-grid');
   if (!box || !S.opts) return;
   const ens = S.opts.ensemble;
-  const cur = ens === 'solo' ? 1 : ens === 'drums' ? 'drums' : S.opts.voices.length;
+  const n0 = S.opts.voices.length;
+  const cur = ens === 'solo' ? 1 : ens === 'drums' ? 'drums' : n0 > 8 ? 'orch' : n0;
   box.innerHTML = '';
   const items = [[1, 'Solo']];
-  for (let n = MIN_VOICES; n <= MAX_VOICES; n++) items.push([n, ensembleName(n)]);
+  for (let n = MIN_VOICES; n <= 8; n++) items.push([n, ensembleName(n)]);
+  items.push(['orch', 'Orchester']);
   items.push(['drums', 'Schlagzeug']);
   for (const [k, name] of items) {
     const b = document.createElement('button');
@@ -671,16 +673,32 @@ function renderCountChooser() {
     b.className = 'cc-tile' + (k === cur ? ' active' : '') + (k === 'drums' ? ' drums' : '');
     b.setAttribute('role', 'radio');
     b.setAttribute('aria-checked', String(k === cur));
-    b.innerHTML = k === 'drums' ? `<svg><use href="#i-drum"/></svg><small>${name}</small>` : `<strong>${k}</strong><small>${name}</small>`;
+    b.innerHTML = k === 'drums' ? `<svg><use href="#i-drum"/></svg><small>${name}</small>` : k === 'orch' ? `<strong>${n0 > 8 ? n0 : '9+'}</strong><small>${name}</small>` : `<strong>${k}</strong><small>${name}</small>`;
     b.addEventListener('click', () => pickCount(k));
     box.appendChild(b);
   }
 }
 
+// Konzertpartitur: Kammerorchester in Partiturordnung (Holz, Blech, Streicher)
+function useOrchestra() {
+  const p = PRESETS.find((x) => x.orchestra);
+  if (!p) return;
+  const next = [...p.voices];
+  S.opts.voiceDifficulty = carryPerVoice(S.opts.voices, next, S.opts.voiceDifficulty);
+  S.opts.ranges = carryPerVoice(S.opts.voices, next, S.opts.ranges);
+  S.opts.voices = next;
+  S.opts.style = p.style;
+  applyOptsToUi(readOptsKeepVoices());
+  toast(`Besetzung: ${p.name.replace(/\s*\(.*\)/, '')} · ${next.length} Stimmen`);
+}
+
 function pickCount(k) {
   if (k === 1) setEnsemble('solo');
   else if (k === 'drums') setEnsemble('drums');
-  else {
+  else if (k === 'orch') {
+    if (S.opts.ensemble !== 'quartet') setEnsemble('quartet');
+    useOrchestra();
+  } else {
     if (S.opts.ensemble !== 'quartet') setEnsemble('quartet');
     setVoiceCount(k);
   }
@@ -922,6 +940,7 @@ function renderBand() {
   markPreset();
   renderFineList();
   renderCountChooser();
+  mountEffort($('#effort-gen'));
 }
 
 function setOriginal(on) {
@@ -1254,7 +1273,7 @@ function renderPresets() {
     b.dataset.preset = p.id;
     b.addEventListener('click', () => {
       // Vorlage in der gewählten Anzahl Stimmen
-      const next = presetVoices(p, S.opts.voices.length);
+      const next = presetVoices(p, p.orchestra ? p.voices.length : S.opts.voices.length);
       S.opts.voiceDifficulty = carryPerVoice(S.opts.voices, next, S.opts.voiceDifficulty);
       S.opts.ranges = carryPerVoice(S.opts.voices, next, S.opts.ranges);
       S.opts.voices = next;
@@ -1418,6 +1437,17 @@ function mountEffort(el, { compact = false } = {}) {
     <div class="effort-ticks">${EFFORT.map((x) => `<span class="${x.level === lv ? 'on' : ''}" data-lv="${x.level}">${x.short}</span>`).join('')}</div>
     <p class="effort-text muted small">${e.text}</p>`;
   void compact;
+  // Ultra: die Konzertpartitur gibt es mit Orchester-Besetzung
+  if (el.id === 'effort-gen' && lv === 5 && S.opts && S.opts.ensemble === 'quartet' && S.opts.voices.length <= 8) {
+    const hint = document.createElement('div');
+    hint.className = 'effort-hint small';
+    hint.innerHTML = '<span>Für eine richtige Konzertpartitur: Besetzung als Orchester setzen (Holz, Blech, Streicher).</span> <button type="button" class="btn small">Orchester wählen</button>';
+    hint.querySelector('button').addEventListener('click', () => {
+      useOrchestra();
+      mountAllEffort();
+    });
+    el.appendChild(hint);
+  }
   const set = (v) => {
     v = effortOf(v).level;
     if (v === effortLevel()) return;
@@ -1439,7 +1469,6 @@ function mountAllEffort() {
   mountEffort($('#effort-gen'));
   mountEffort($('#effort-src'), { compact: true });
   mountEffort($('#effort-set'));
-  $('#set-assistant').value = st.assistantKey || '';
 }
 
 // ---- Analyse einer Aufnahme: Aufgaben mit eigenem Balken und gelernter Zeitschätzung

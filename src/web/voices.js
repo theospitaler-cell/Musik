@@ -1,10 +1,11 @@
-// NoteCode – Besetzung mit 2 bis 8 Stimmen: Namen der Stimmen, Vorlagen auf jede
-// Anzahl bringen und beim Vergrößern ein sinnvolles Instrument ergänzen.
+// NoteCode – Besetzung mit 2 bis 15 Stimmen (bis 8 Ensemble, darüber Orchester): Namen der
+// Stimmen, Vorlagen auf jede Anzahl bringen und beim Vergrößern ein sinnvolles Instrument ergänzen.
 import { INSTRUMENTS, PRESETS } from '../arrange/instruments.js';
 
 export const MIN_VOICES = 2;
-export const MAX_VOICES = 8;
-export const ENSEMBLE_NAMES = ['', 'Solo', 'Duo', 'Trio', 'Quartett', 'Quintett', 'Sextett', 'Septett', 'Oktett'];
+export const MAX_VOICES = 15; // MIDI: 16 Kanäle, einer davon Schlagzeug
+export const ORCHESTRA_SIZE = 13;
+export const ENSEMBLE_NAMES = ['', 'Solo', 'Duo', 'Trio', 'Quartett', 'Quintett', 'Sextett', 'Septett', 'Oktett', 'Nonett', 'Dezett', 'Kleines Orchester', 'Kleines Orchester', 'Kammerorchester', 'Kammerorchester', 'Orchester'];
 
 const ROLES = {
   2: ['Oberstimme', 'Unterstimme'],
@@ -18,6 +19,7 @@ const ROLES = {
 
 // Lage der Stimme i in einer Besetzung mit n Stimmen (von oben nach unten)
 export function voiceRole(i, n) {
+  if (n > 8) return i === 0 ? 'Oberstimme' : i === n - 1 ? 'Fundament' : '';
   return (ROLES[n] || ROLES[4])[i] || '';
 }
 
@@ -43,6 +45,11 @@ const ADD_ORDER = {
   string: ['violin', 'violin', 'viola', 'cello', 'violin', 'viola', 'cello', 'contrabass|ebass'],
 };
 
+// Orchester: ab 8 Stimmen ergänzt `nextInstrument` in dieser Reihenfolge (Familien gemischt)
+const ORCHESTRA_ORDER = [
+  'violin', 'cello', 'flute', 'trumpet', 'viola', 'horn', 'contrabass', 'oboe', 'trombone', 'clarinet', 'violin', 'bassoon', 'tuba', 'horn', 'viola',
+];
+
 const mid = (id) => {
   const c = INSTRUMENTS[id]?.comfort || [60, 60];
   return (c[0] + c[1]) / 2;
@@ -62,6 +69,17 @@ function mainFamily(voices) {
 
 // nächstes sinnvolles Instrument für diese Besetzung
 export function nextInstrument(voices) {
+  if (voices.length >= 8) {
+    // zuerst das, was dem Orchester noch fehlt
+    const have = {};
+    for (const v of voices) have[v] = (have[v] || 0) + 1;
+    const need = {};
+    for (const id of ORCHESTRA_ORDER) {
+      need[id] = (need[id] || 0) + 1;
+      if ((have[id] || 0) < need[id]) return id;
+    }
+    return ORCHESTRA_ORDER[voices.length % ORCHESTRA_ORDER.length];
+  }
   const order = ADD_ORDER[mainFamily(voices)];
   const need = {};
   for (const entry of order) {
@@ -94,6 +112,11 @@ export function extendVoices(voices, n) {
 // Vorlage (4 Stimmen) auf n Stimmen: weniger = Ober- und Unterstimme behalten
 export function presetVoices(preset, n) {
   const v = preset.voices;
+  if (preset.keep && n < v.length) {
+    // Orchester verkleinern: wichtigste Stimmen bleiben, Partiturordnung bleibt erhalten
+    const idx = preset.keep.slice(0, n).sort((a, b) => a - b);
+    return idx.map((i) => v[i]);
+  }
   if (n >= v.length) return extendVoices(v, n);
   if (n === 3) return [v[0], v[2], v[3]];
   if (n === 2) return [v[0], v[v.length - 1]];

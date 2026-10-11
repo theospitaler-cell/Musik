@@ -1,4 +1,4 @@
-# NoteCode – Arrangements für 2–8 Instrumente, Solo-, Schlagzeug- & Playback-Noten
+# NoteCode – Arrangements für 2–8 Instrumente (bis Kammerorchester), Solo-, Schlagzeug- & Playback-Noten
 
 NoteCode macht aus einem Song Noten: **Arrangements für 2 bis 8 Instrumente** (Brass, Saxophon,
 Streicher, Holz, Blasmusik … frei kombinierbar – neu arrangiert oder „Original übernehmen“),
@@ -99,6 +99,51 @@ Die Analyse läuft im Hintergrund.
 - **Geprüft an vielen Liedern, nicht an einem**: eine Testsammlung mit Rock, Halftime, Shuffle,
   Walzer, Funk, Ride, Ritardando, Tempowechsel und reinem Schlagzeug misst Tempo, Beats,
   Taktanfänge, Schlagzeug-Trefferquote und Melodie bei jeder Änderung.
+### Aufwand: von „Schnell“ bis „Ultra“
+
+Ein Schieberegler mit fünf Stufen (wie der Aufwand-Regler in Claude) steht bei der Aufnahme, bei
+*Arrangement erstellen* und in den Einstellungen. Mehr Aufwand = mehr Zeit = bessere Noten:
+
+| Stufe | Analyse einer Aufnahme | Arrangieren | Dauer (ca.) |
+|---|---|---|---|
+| Schnell | 1 KI-Durchgang | 1 Fassung | Sekunden |
+| Ausgewogen | 2 KI-Ansichten (Original, ohne Schlagzeug) | wenige Varianten | 1–2 Min. |
+| Gründlich *(Standard)* | 4 Durchgänge, Gesang/Begleitung getrennt, Seitensignal | viele Varianten je Abschnitt | 3–6 Min. |
+| Sehr gründlich | 8 Durchgänge | + Parametersuche, Nachbessern | 10–15 Min. |
+| Ultra | 12 Durchgänge | große Suche, wiederholtes Nachbessern | bis ca. 30 Min. |
+
+Die Zeiten sind Obergrenzen: Die Arbeit hört früher auf, wenn nichts mehr besser wird.
+Beim Arrangieren schreibt NoteCode mehrere Fassungen mit verschiedenen Einstellungen, bewertet sie
+(Spielbarkeit, Stimmführung, Reibungen, Parallelen, Wiedererkennung der Melodie) und nimmt die
+beste; die schwächsten Abschnitte werden einzeln nachgebessert. Der Prüfbericht zeigt, was
+verglichen wurde.
+
+**Fortschritt**: jede Aufgabe (Dekodieren, Stimmen trennen, KI-Durchgänge, Takt/Form, Noten
+setzen …) hat einen eigenen Balken mit eigener, weich nachgeführter Restzeit; die Zeitschätzung
+lernt aus früheren Läufen auf dem Gerät.
+
+### Überarbeiten (Rückmeldung)
+
+Unter dem Titel des Ergebnisses steht *Nicht zufrieden? Überarbeiten lassen*. Dort kann man in
+eigenen Worten schreiben, was nicht stimmt – z. B. „Die Melodie fehlt in der Strophe“, „Stimme 2
+liegt zu hoch“, „Takt 17–24 klingt schief“, „zu schwer“, „Bass zu unruhig“, „Tempo zu schnell“.
+Ein Klick auf *Überarbeiten* wertet das aus (Takte, Stimmen, Stichworte), hört die Aufnahme bei
+Bedarf noch einmal genauer, und arrangiert mit mindestens „Sehr gründlich“ neu. **Leeres Feld =
+alles gründlich überarbeiten.** *Rückgängig* stellt die vorige Fassung wieder her.
+Die Auswertung läuft lokal auf dem Gerät. Optional kann in den Einstellungen ein eigener
+Anthropic-Schlüssel eingetragen werden; dann übersetzt Claude freien Text in die gleichen
+Änderungen (gesendet werden nur der Text und Titel, Tonart, Tempo, Besetzung; der Schlüssel
+bleibt auf dem Gerät).
+
+### Orchester / Konzertpartitur
+
+Die Besetzung *Orchester* (Kammerorchester: Fl, Ob, Klar, Fg, Hn, Trp, Pos, Tuba, Vl, Vl, Va, Vc,
+Kb; bis 15 Stimmen) setzt eine Konzertpartitur in Partiturordnung mit Klammern für Holz, Blech
+und Streicher. Die erste Geige führt; Streicher tragen den Klangteppich, Holz antwortet und
+verdoppelt im Refrain, Blech setzt Akzente und füllt im Tutti – in leisen Teilen schweigen
+Instrumente (Tacet). Mit der Stufe *Ultra* ist das der Weg zur Konzertpartitur. Wie jedes
+automatische Arrangement ist das ein sehr guter Entwurf, kein Ersatz für einen Orchestrator.
+
 Das Ergebnis ist eine Annäherung – am besten bei klar hörbarer Melodie. Die Analyse wird in
 der Bibliothek gespeichert (und synchronisiert), die Aufnahme selbst bleibt auf dem Gerät.
 

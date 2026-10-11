@@ -625,7 +625,9 @@ export function addPerformanceMarks(arr, drumsLine = null) {
           continue;
         }
         const map = EXPR[role];
-        const text = map ? map[style.id] ?? map.all ?? null : null;
+        let text = map ? map[style.id] ?? map.all ?? null : null;
+        // Orchester: Gruppenbezeichnungen (Tutti, Hits, Riff) nur einmal – in der führenden Stimme
+        if (voices.length >= 9 && ['tutti', 'hits', 'riff', 'background'].includes(role) && v !== arr.slots?.lead) text = null;
         if (text && (text !== lastText || role !== lastRole)) line.dirs.push({ t: first.start, kind: 'words', text, placement: 'below' });
         lastText = text;
         lastRole = role;

@@ -177,6 +177,16 @@ export const PRESETS = [
   { id: 'sax', name: 'Saxophonquartett (S, A, T, Bar)', voices: ['sopranoSax', 'altoSax', 'tenorSax', 'bariSax'], style: 'swing' },
   { id: 'strings', name: 'Streichquartett (Vl, Vl, Va, Vc)', voices: ['violin', 'violin', 'viola', 'cello'], style: 'classical' },
   { id: 'woodwind', name: 'Holzbläserquartett (Fl, Ob, Klar, Fg)', voices: ['flute', 'oboe', 'clarinet', 'bassoon'], style: 'classical' },
+  // Konzertpartitur: Partiturordnung Holz – Blech – Streicher. "keep" = Reihenfolge, in der Stimmen
+  // bei kleinerer Besetzung erhalten bleiben (erst Melodieträger und Fundament, dann die Farben).
+  {
+    id: 'orchestra',
+    name: 'Kammerorchester (Fl, Ob, Klar, Fg, Hn, Trp, Pos, Tuba, Vl, Vl, Va, Vc, Kb)',
+    voices: ['flute', 'oboe', 'clarinet', 'bassoon', 'horn', 'trumpet', 'trombone', 'tuba', 'violin', 'violin', 'viola', 'cello', 'contrabass'],
+    keep: [8, 11, 0, 5, 10, 4, 12, 1, 6, 2, 9, 3, 7],
+    style: 'classical',
+    orchestra: true,
+  },
 ];
 
 export function getInstrument(id) {

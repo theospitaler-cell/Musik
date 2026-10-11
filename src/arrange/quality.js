@@ -64,6 +64,9 @@ export function scoreLines(parts, { mt, beat, prevLast = [], clash = 1 } = {}) {
   let prev = null;
   let samples = 0;
   let pen = 0;
+  // Orchester: Einklang und Oktavverdopplung sind das tägliche Brot, und die Instrumente teilen
+  // sich die Lagen – gezählt werden nur Reibungen zwischen benachbarten Stimmen und Parallelen
+  const orch = active.length >= 9;
   for (const t of times) {
     const now = active.map((p, k) => {
       const e = cur[k](t);
@@ -71,14 +74,14 @@ export function scoreLines(parts, { mt, beat, prevLast = [], clash = 1 } = {}) {
     });
     const sounding = now.filter(Boolean);
     if (sounding.length >= 2) samples++;
-    sounding.sort((a, b) => a.rank - b.rank);
+    sounding.sort((a, b) => (orch ? b.m - a.m || a.rank - b.rank : a.rank - b.rank));
     for (let i = 0; i < sounding.length; i++) {
       for (let j = i + 1; j < sounding.length; j++) {
         const a = sounding[i];
         const b = sounding[j];
         const d = a.m - b.m;
-        if (d === 0 && !(DOUBLING.has(a.role) && DOUBLING.has(b.role))) pen += 2.5; // Einklang ohne Grund
-        if (d < 0 && !(a.role === 'double' || b.role === 'double')) pen += 4; // Stimmkreuzung
+        if (!orch && d === 0 && !(DOUBLING.has(a.role) && DOUBLING.has(b.role))) pen += 2.5; // Einklang ohne Grund
+        if (!orch && d < 0 && !(a.role === 'double' || b.role === 'double')) pen += 4; // Stimmkreuzung
         if (j === i + 1 && Math.abs(d) === 1 && a.long && b.long) pen += 4; // Reibung (kleine Sekunde, gehalten)
       }
     }
