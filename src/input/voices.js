@@ -283,6 +283,70 @@ function pickInner(rest, melAt) {
   return [mono(up), mono(lo)];
 }
 
+// Lesbar & spielbar machen: aus einer dichten Aufnahme hört die KI viele Sechzehntel-Splitter
+// (Gesang ist rhythmisch frei, Gitarren-Anschläge, Bass-Drum-Reste). Gedruckte Stimmen stehen im
+// Achtel-Raster; nur echte Synkopen bleiben: ein vorgezogener Ton (Sechzehntel vor der Achtel),
+// der über sie hinaus klingt (push). Töne knapp nach der Zählzeit rücken auf sie, Durchgangs-
+// Splitter zwischen zwei Achteln entfallen, gleiche Töne verschmelzen.
+//   mergeRepeats: gleiche Töne auf aufeinanderfolgenden Achteln zu einem langen Ton (Liegeklang)
+export function simplifyLine(line, { beat = DIV, allowPush = false, mergeRepeats = false } = {}) {
+  const E = beat / 2;
+  const S = beat / 4;
+  if (S !== Math.round(S)) return line;
+  const src = [...line].sort((a, b) => a.start - b.start);
+  const starts = new Set(src.map((n) => n.start));
+  const out = [];
+  const at = (t) => out.find((m) => m.start === t);
+  for (let i = 0; i < src.length; i++) {
+    const n = src[i];
+    const off = (((n.start % E) + E) % E);
+    const next = src[i + 1];
+    let t = n.start;
+    if (off) {
+      const back = n.start - off;
+      const fwd = back + E;
+      const afterBeat = (((back % beat) + beat) % beat) === 0; // Sechzehntel direkt nach der Zählzeit
+      const sustained = n.dur >= E && (!next || next.start >= fwd + S);
+      if (allowPush && !afterBeat && sustained) t = n.start; // echte Synkope
+      else if (afterBeat && !at(back)) t = back;
+      else if (!starts.has(fwd)) t = fwd;
+      else if (!at(back)) t = back;
+      else {
+        // kein Platz: gleicher Ton wie davor -> verlängern, sonst entfällt der Splitter
+        const p = at(back);
+        if (p && p.midi === n.midi) p.dur = Math.max(p.dur, n.start + n.dur - p.start);
+        continue;
+      }
+    }
+    const p = at(t);
+    if (p) {
+      if (p.midi === n.midi || n.dur > p.dur) Object.assign(p, { midi: n.dur > p.dur ? n.midi : p.midi, dur: Math.max(p.dur, n.start + n.dur - t), amp: Math.max(p.amp ?? 0, n.amp ?? 0) });
+      continue;
+    }
+    out.push({ ...n, start: t, dur: Math.max(S, n.start + n.dur - t) });
+  }
+  out.sort((a, b) => a.start - b.start);
+  // Längen: bis zum nächsten Einsatz, mindestens eine Achtel wo Platz ist, Enden auf dem Raster
+  const res = [];
+  for (let i = 0; i < out.length; i++) {
+    const n = out[i];
+    const nx = out[i + 1];
+    const prev = res[res.length - 1];
+    if (prev && prev.midi === n.midi && (mergeRepeats ? n.start - (prev.start + prev.dur) <= S : n.start < prev.start + prev.dur)) {
+      prev.dur = Math.max(prev.dur, n.start + n.dur - prev.start);
+      continue;
+    }
+    let end = n.start + Math.max(n.dur, E);
+    end = Math.ceil(end / S) * S;
+    if (nx && nx.midi !== n.midi) end = Math.min(end, nx.start);
+    else if (nx && !mergeRepeats) end = Math.min(end, nx.start);
+    if (prev && prev.start + prev.dur > n.start) prev.dur = n.start - prev.start;
+    res.push({ ...n, dur: Math.max(S, end - n.start) });
+  }
+  for (let i = 0; i < res.length - 1; i++) if (res[i].start + res[i].dur > res[i + 1].start) res[i].dur = res[i + 1].start - res[i].start;
+  return res.filter((n) => n.dur > 0);
+}
+
 // notes: gereinigte Noten (cleanPoly). hint: Melodie der Signalanalyse (optional, gleiche Ticks)
 export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint = null } = {}) {
   if (!notes.length) return { melody: [], bass: [], inner: [[], []], bassTop: 0 };

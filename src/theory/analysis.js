@@ -44,7 +44,11 @@ function pcWeights(notes, a, b, mt, beatTicks, melodyOnly, barStart = 0) {
 }
 
 function scoreChord(rootPc, kind, penalty, weights, key, scale, prevChord, bassPc) {
-  const c = buildChord(lofNear(rootPc, keyCenter(key)), kind);
+  let c = buildChord(lofNear(rootPc, keyCenter(key)), kind);
+  // keine Doppel-Vorzeichen in den Akkordtönen (Ges-Moll mit Heses -> Fis-Moll)
+  const lofs = c.tones.map((t) => t.lof);
+  if (Math.min(...lofs) <= -9) c = buildChord(c.rootLof + 12, kind);
+  else if (Math.max(...lofs) >= 13) c = buildChord(c.rootLof - 12, kind);
   const pcs = c.tones.map((t) => t.pc);
   let score = 0;
   let total = 0;

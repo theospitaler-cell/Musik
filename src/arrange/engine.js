@@ -39,7 +39,7 @@ import {
   keyAtFactory,
 } from './post.js';
 import { transposeEvents } from '../model/song.js';
-import { sourceLinesOf } from './original.js';
+import { sourceLinesOf, bassOctave } from './original.js';
 import { sourceBass, sourceComp, enoughSource } from './gen/source.js';
 
 const ENSEMBLE_NAMES = { 2: 'Duett', 3: 'Trio', 4: 'Quartett', 5: 'Quintett', 6: 'Sextett', 7: 'Septett', 8: 'Oktett' };
@@ -135,7 +135,7 @@ export function arrange(songIn, options = {}) {
   const kicksAll = (songIn.drumNotes || []).filter((d) => d.midi === 36 || d.midi === 35).map((d) => d.start);
   const bassShifts = new Map();
   const bassShiftFor = (v) => {
-    if (!bassShifts.has(v)) bassShifts.set(v, srcLines.bass && srcLines.bass.length ? fitOctave(srcLines.bass, insts[v]).shift : 0);
+    if (!bassShifts.has(v)) bassShifts.set(v, srcLines.bass && srcLines.bass.length ? bassOctave(srcLines.bass, insts[v]) : 0);
     return bassShifts.get(v);
   };
 

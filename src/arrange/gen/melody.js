@@ -126,7 +126,16 @@ export function adaptMelody(ctx, line, adapt) {
 }
 
 // Artikulation & Phrasierung
-export function articulate(ctx, line, inst) {
+export function articulate(ctx, line, inst, { plain = false } = {}) {
+  // plain: 1:1 aus der Vorlage übernommene Stimmen – nur kurze Töne vor einer Pause bekommen
+  // einen Staccato-Punkt, keine stilistischen Akzente
+  if (plain) {
+    line.forEach((e, i) => {
+      const nxt = line[i + 1];
+      if (e.dur <= 12 && nxt && nxt.start - (e.start + e.dur) >= 12) addArt(e, 'staccato');
+    });
+    return line;
+  }
   const st = ctx.style.id;
   const legato = st === 'ballad' || st === 'classical' || inst.family === 'string';
   const phrases = phrasesOf(line, st === 'funk' || st === 'secondline' ? 12 : 12);

@@ -272,7 +272,7 @@ export function arrangePlayAlong(song, opts) {
     const octave = fixed ? 0 : fitOctave(mel, inst).shift; // eine Oktavlage für die ganze Stimme
     const ctx = new BlockCtx({ style, rng: rng.fork(`v${i}`), key, meter: song.meter, measures: totalBars, chords: chordTrack, tempo, inst: [inst], block: blocks[0], prevState: [{}] });
     let line = cleanLine(mel.map((n) => ev(n.start + off, n.dur, n.midi + octave, n.lof ?? null)));
-    articulate(ctx, line, inst);
+    articulate(ctx, line, inst, { plain: !!ens });
     line = line.map((e) => ({ ...e, role: 'melody' }));
     voices.push({ inst, events: line, dirs: [], label: fixed ? ens.names[i] : srcName(p.source).replace(/\s*\((erkannt|Melodie)\)$/, ''), source: p.source });
     if (octave) notes.push(`${srcName(p.source)} → ${inst.name}: um ${Math.abs(octave / 12)} Oktave${Math.abs(octave) > 12 ? 'n' : ''} ${octave > 0 ? 'höher' : 'tiefer'} gesetzt (gleiche Töne wie die Vorlage).`);

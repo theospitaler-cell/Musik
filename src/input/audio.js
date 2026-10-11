@@ -13,7 +13,7 @@ import { detectKey } from '../theory/keys.js';
 import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
 import { fuseMelody } from './ai-pitch.js';
-import { cleanPoly, separateVoices } from './voices.js';
+import { cleanPoly, separateVoices, simplifyLine } from './voices.js';
 import { barFeatures, audioSections } from './form.js';
 
 const SR = 22050;
@@ -1313,6 +1313,33 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       bpm *= 2;
     }
   }
+  // Schnelle, durchsynkopierte Stücke (fast die Hälfte aller Einsätze auf Sechzehntel-Zwischen-
+  // zeiten bei Tempo 92–112): in gedruckten Noten stehen sie im doppelten Tempo mit Achteln
+  // (Alla-breve-Gefühl) – viel leichter zu lesen als Ketten übergebundener Sechzehntel
+  if (ai && ai.length >= 32 && bpm >= 92 && bpm < 112 && beats.length >= 8) {
+    const bs = beats.map(frameToSec);
+    let odd = 0;
+    let all = 0;
+    let i = 0;
+    for (const n of [...ai].sort((a, b) => a.start - b.start)) {
+      while (i < bs.length - 2 && n.start >= bs[i + 1]) i++;
+      if (n.start < bs[i] || n.start >= bs[i + 1]) continue;
+      const q = ((n.start - bs[i]) / (bs[i + 1] - bs[i])) * 4;
+      const slot = Math.round(q) % 4;
+      if (Math.abs(q - Math.round(q)) > 0.3) continue;
+      all++;
+      if (slot === 1 || slot === 3) odd++;
+    }
+    if (all >= 32 && odd / all >= 0.44) {
+      const dbl = [];
+      for (let k = 0; k < beats.length; k++) {
+        dbl.push(beats[k]);
+        if (k + 1 < beats.length) dbl.push(Math.round((beats[k] + beats[k + 1]) / 2));
+      }
+      beats = dbl;
+      bpm *= 2;
+    }
+  }
   if (beats.length < 8) throw new Error('Im Audio wurde kein durchgehender Rhythmus erkannt (zu kurz oder zu leise).');
   // Sekunde -> Schlagposition (lineare Interpolation zwischen den Beats)
   const beatSec = refineBeats(beats, comb).map(frameToSec);
@@ -1385,7 +1412,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   const swing = !shuffle12 && drumsRough.swing;
 
   onProgress('Noten werden ins Taktraster gesetzt', 0.82);
-  // 16tel-Raster; bei Swing liegen Offbeats auf der Triole -> als gerade Achtel notiert
+  // 16tel-Raster (ab Tempo 150 Achtel – schneller spielt und liest niemand); bei Swing liegen
+  // Offbeats auf der Triole -> als gerade Achtel notiert
+  const GRID = bpm >= 150 ? DIV / 2 : 6;
   const toTick = (sec) => {
     const bp = beatPos(sec) - firstDown;
     const b = Math.floor(bp);
@@ -1398,7 +1427,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       for (let i = 1; i < 3; i++) if (Math.abs(f - opts[i]) < Math.abs(f - opts[best])) best = i;
       return b * DIV + ticks[best];
     }
-    return b * DIV + Math.round((f * DIV) / 6) * 6;
+    return b * DIV + Math.round((f * DIV) / GRID) * GRID;
   };
   // Melodie in Sekunden; mit lokaler KI (Basic Pitch) kombiniert, falls vorhanden
   let melSec = notesF.map((n) => ({ s: melStartSec(n.start), e: melEndSec(n.end), midi: n.midi }));
@@ -1434,7 +1463,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   melody = melody.filter((n, i) => !melody.some((o, j) => j !== i && o.start === n.start && (o.dur > n.dur || (o.dur === n.dur && j < i))));
   // Notenenden lesbar machen: Mini-Lücken schließen (Ausklingen wird oft zu früh erkannt),
   // sonst auf Achtel runden – Einsätze bleiben exakt
-  const unit = swing ? DIV / 2 : 6;
+  const unit = swing ? DIV / 2 : GRID;
   const tidyEnds = (line) => {
     line.sort((a, b) => a.start - b.start);
     line.forEach((n, i) => {
@@ -1469,6 +1498,13 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     polyNotes = poly;
     if (debug) debug({ hint: melody.map((n) => [n.start, n.dur, n.midi]), poly, beat: BT, mt });
     const vs = separateVoices(poly, { beat: BT, mt, step: unit, hint: melody });
+    // Lesbarkeit: im mittleren Tempo stehen die Stimmen im Achtel-Raster (nur echte Synkopen
+    // bleiben als Sechzehntel). Langsame Stücke und Shuffle/Swing behalten ihr Raster.
+    if (GRID === 6 && !swing && !shuffle12 && bpm >= 72) {
+      vs.melody = simplifyLine(vs.melody, { beat: BT, allowPush: true });
+      vs.bass = simplifyLine(vs.bass, { beat: BT });
+      vs.inner = vs.inner.map((l) => simplifyLine(l, { beat: BT, mergeRepeats: true }));
+    }
     const vel = (n) => Math.round(40 + 80 * Math.min(1, n.amp || 0.5));
     const asTrack = (line) => line.filter((n) => n.start >= 0).map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, vel: vel(n) }));
     if (vs.melody.length >= 8) {

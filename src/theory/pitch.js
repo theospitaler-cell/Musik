@@ -71,6 +71,8 @@ export function lofNear(pc, center) {
   let bestD = Infinity;
   for (let k = -3; k <= 3; k++) {
     const l = base + 12 * k;
+    // keine Doppel-Vorzeichen (Heses, Fisis …): lieber der enharmonisch einfache Ton
+    if (l < -8 || l > 12) continue;
     const d = Math.abs(l - center);
     // Gleichstand -> b-Schreibung (kleinere LOF)
     if (d < bestD - 1e-9 || (Math.abs(d - bestD) < 1e-9 && l < best)) {

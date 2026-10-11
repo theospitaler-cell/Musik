@@ -95,6 +95,18 @@ export function toneUnder(upper, chord, scale, last, lo, hi, taken, melPc) {
   return best;
 }
 
+// Oktavlage für eine Basslinie: im Umfang, und so, dass auch die tiefen Töne der Linie noch im
+// bequemen Bereich liegen (ein E-Bass reicht tiefer als Tuba/Posaune gut klingen)
+export function bassOctave(notes, inst) {
+  if (!notes.length) return 0;
+  let shift = fitOctave(notes, inst).shift;
+  const ps = notes.map((n) => n.midi).sort((a, b) => a - b);
+  const low = ps[Math.floor(ps.length * 0.1)];
+  const high = ps[Math.floor(ps.length * 0.95)];
+  while (low + shift < inst.comfort[0] && high + shift + 12 <= inst.comfort[1]) shift += 12;
+  return shift;
+}
+
 // Bass-Spur und Begleitstimmen der Vorlage (einstimmig, Ticks der Vorlage); bei MP3 von der KI
 // gehört, bei MIDI/MusicXML die übrigen Spuren nach Lage
 export function sourceLinesOf(song) {
@@ -154,7 +166,7 @@ export function buildOriginalEnsemble(song, insts, slots) {
   if (slots.bass !== null) {
     const inst = insts[slots.bass];
     const det = bassTrack || [];
-    const shift = det.length ? fitOctave(det, inst).shift : 0;
+    const shift = bassOctave(det, inst);
     bassLine = det.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi + shift, lof: n.lof ?? null }));
     // einzelne Töne, die mehr als eine Oktave aus der Linie springen, in die Lage der Nachbarn
     for (let i = 0; i < bassLine.length; i++) {
@@ -231,9 +243,22 @@ export function buildOriginalEnsemble(song, insts, slots) {
     }
     together = pairs.length / guides[0].length >= 0.7 && pairs.length >= 0.4 * melLine.length && moves >= 8 && parallel / moves >= 0.6;
   }
-  // Spärliche, kurze Einwürfe (Gitarre/Klavier): als Liegeklang im Rhythmus der Einwürfe setzen
-  const perBar = guideOnsets.length / Math.max(1, M);
-  const sustain = !together && perBar < 5 * Math.max(1, guides.length) ? mt : 0;
+  // Sonst sind es Akkord-Einwürfe (Gitarre/Klavier/Streicher): es zählt ihr gemeinsamer Rhythmus
+  // – die Stellen, an denen mehrere Begleittöne zugleich einsetzen. Die Töne selbst werden als
+  // Akkordtöne sauber geführt und klingen bis zum nächsten Einwurf (Liegeklang im Rhythmus).
+  const hits = new Set();
+  if (!together) {
+    const count = new Map();
+    for (const t of guideOnsets) count.set(t, (count.get(t) || 0) + 1);
+    const need = guides.length >= 2 ? 2 : 1;
+    let lastT = -Infinity;
+    for (const t of [...count.keys()].sort((x, y) => x - y)) {
+      if (count.get(t) < need || t - lastT < DIV / 2) continue;
+      hits.add(t);
+      lastT = t;
+    }
+  }
+  const sustain = together ? 0 : mt;
   mids.forEach((v, k) => {
     const inst = insts[v];
     const guide = guides[k] || null;
@@ -241,6 +266,8 @@ export function buildOriginalEnsemble(song, insts, slots) {
     const upperAt = done.map((l) => pitchAt(l, { hold: DIV / 2 }));
     const guideBy = new Map((guide || []).map((n) => [n.start, n]));
     let last = Math.round((inst.comfort[0] + inst.comfort[1]) / 2);
+    // Heimatlage: die Stimme kehrt nach tiefen Stellen der Melodie wieder in ihre gute Lage zurück
+    const home = last;
     const out = [];
     for (let bar = Math.floor(from / mt); bar < M; bar++) {
       const a = bar * mt;
@@ -255,10 +282,18 @@ export function buildOriginalEnsemble(song, insts, slots) {
         seen.add(n.start);
         onsets.push([n.start, n.dur, kind]);
       };
-      for (const n of (guide || []).filter(inBar)) add(n, 'own');
-      for (const g of others) for (const n of g.filter(inBar)) add(n, 'fill');
-      for (const l of done) for (const n of l.filter(inBar)) add(n, 'fill');
-      if (together) for (const n of melLine.filter(inBar)) add(n, 'fill');
+      if (together) {
+        for (const n of (guide || []).filter(inBar)) add(n, 'own');
+        for (const g of others) for (const n of g.filter(inBar)) add(n, 'fill');
+        for (const l of done) for (const n of l.filter(inBar)) add(n, 'fill');
+        for (const n of melLine.filter(inBar)) add(n, 'fill');
+      } else {
+        const hs = [...hits].filter((t) => t >= a && t < b).sort((x, y) => x - y);
+        // mindestens der Taktanfang, wenn im Takt überhaupt begleitet wird
+        hs.forEach((t, i) => add({ start: t, dur: (i + 1 < hs.length ? hs[i + 1] : b) - t }, 'hit'));
+        // Akkordwechsel ohne Einwurf: neu ansetzen (der Liegeton passt sonst nicht mehr)
+        for (const c of chords) if (c.start >= a && c.start < b && !hs.some((t) => Math.abs(t - c.start) <= DIV / 2)) add({ start: c.start, dur: Math.min(b, c.start + c.dur) - c.start }, 'pad');
+      }
       let pad = false;
       if (!onsets.length && a >= 0) {
         pad = true;
@@ -287,7 +322,7 @@ export function buildOriginalEnsemble(song, insts, slots) {
         const chord = chordAt(chords, Math.max(0, t));
         const g = guideBy.get(t);
         let pick = null;
-        if (g) {
+        if (g && together) {
           // gehörter Ton: im Verhältnis zur Melodie wie in der Vorlage, sonst die Oktave, die passt
           const want = g.midi + melShift;
           if (want >= lo && want <= hi) pick = { midi: want, lof: g.lof ?? null };
@@ -300,11 +335,11 @@ export function buildOriginalEnsemble(song, insts, slots) {
             if (best !== null) pick = { midi: best, lof: g.lof ?? null };
           }
         }
-        if (!pick && !pad) {
+        if (!pick && !pad && together) {
           const upper = ups.length ? Math.min(...ups) : m;
           if (upper !== null) pick = toneUnder(upper, chord, scale, Math.min(Math.max(last, lo), hi), lo, hi, taken, melPc);
         }
-        if (!pick) pick = chordToneFor(chord, Math.min(Math.max(last, lo), hi), lo, hi, taken, melPc);
+        if (!pick) pick = chordToneFor(chord, Math.min(Math.max(Math.round(0.7 * last + 0.3 * home), lo), hi), lo, hi, taken, melPc, g ? mod(g.midi + melShift, 12) : null);
         if (!pick) continue;
         out.push({ start: t, dur: d, midi: pick.midi, lof: pick.lof });
         last = pick.midi;
