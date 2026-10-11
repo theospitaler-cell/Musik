@@ -1,0 +1,351 @@
+// Stimmen aus mehrstimmig gehörten Noten (lokale KI): Melodie (oben), Bass (unten) und bis zu
+// zwei Mittelstimmen. Grundlage für „Original übernehmen“ (jede Stimme spielt, was im Lied
+// wirklich erklingt) und für Tonart, Akkorde und Form.
+//
+// Noten: [{start, dur, midi, amp}] in Ticks (auf das 16tel-Raster gesetzt), amp 0..1.
+import { DIV } from '../core/constants.js';
+
+const median = (a) => {
+  if (!a.length) return 0;
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.floor(s.length / 2)];
+};
+const keyOf = (n) => `${n.start}:${n.midi}`;
+
+// Aufräumen: Dopplungen, Oberton-Geister (leise Oktave/Duodezime über einem lauten Ton),
+// sehr leise Kurz-Töne, Überlappungen derselben Tonhöhe.
+export function cleanPoly(notes, { step = 6 } = {}) {
+  const amps = notes.map((n) => n.amp ?? 0.5).sort((a, b) => a - b);
+  const ref = amps.length ? amps[Math.floor(amps.length * 0.8)] || 0.5 : 0.5;
+  // gleiche Tonhöhe, gleicher Einsatz: stärkste/längste Note
+  const byKey = new Map();
+  for (const n of notes) {
+    if (!(n.dur > 0)) continue;
+    const k = keyOf(n);
+    const o = byKey.get(k);
+    if (!o) byKey.set(k, { ...n, amp: n.amp ?? 0.5 });
+    else {
+      o.dur = Math.max(o.dur, n.dur);
+      o.amp = Math.max(o.amp, n.amp ?? 0.5);
+    }
+  }
+  let list = [...byKey.values()].sort((a, b) => a.start - b.start || a.midi - b.midi);
+  // Oberton-Geister
+  const ghost = new Set();
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    for (let j = i + 1; j < list.length && list[j].start - a.start <= step; j++) {
+      const b = list[j];
+      const [lo, hi] = a.midi < b.midi ? [a, b] : [b, a];
+      const iv = hi.midi - lo.midi;
+      if ((iv === 12 || iv === 19 || iv === 24 || iv === 28) && hi.amp < 0.55 * lo.amp) ghost.add(hi);
+    }
+  }
+  list = list.filter((n) => !ghost.has(n) && !(n.dur <= step && n.amp < 0.3 * ref));
+  // gleiche Tonhöhe: frühere Note endet am neuen Anschlag
+  const last = new Map();
+  for (const n of list) {
+    const p = last.get(n.midi);
+    if (p && p.start + p.dur > n.start) p.dur = n.start - p.start;
+    last.set(n.midi, n);
+  }
+  return list.filter((n) => n.dur > 0);
+}
+
+// einstimmige Linie: Überlappungen kürzen
+function mono(notes) {
+  const s = [...notes].sort((a, b) => a.start - b.start);
+  const out = [];
+  for (const n of s) {
+    const p = out[out.length - 1];
+    if (p && p.start === n.start) continue;
+    if (p && p.start + p.dur > n.start) p.dur = n.start - p.start;
+    out.push({ ...n });
+  }
+  return out.filter((n) => n.dur > 0);
+}
+
+// Gruppen gleichzeitiger Anschläge (Töne absteigend)
+function onsetGroups(notes) {
+  const groups = [];
+  for (const n of [...notes].sort((a, b) => a.start - b.start || b.midi - a.midi)) {
+    const g = groups[groups.length - 1];
+    if (g && g.start === n.start) g.notes.push(n);
+    else groups.push({ start: n.start, notes: [n] });
+  }
+  return groups;
+}
+
+// Bass: tiefste Stimme. Die Lage ergibt sich aus dem jeweils tiefsten Ton je Schlag; Töne
+// deutlich darüber (wenn der Bass pausiert) gehören nicht dazu.
+function pickBass(notes, beat, mt, step) {
+  const lowPerBeat = new Map();
+  for (const n of notes) {
+    const b = Math.floor(n.start / beat);
+    if (!lowPerBeat.has(b) || n.midi < lowPerBeat.get(b)) lowPerBeat.set(b, n.midi);
+  }
+  // Lage: unteres Viertel der tiefsten Töne (der Bass pausiert in manchen Teilen – dort ist der
+  // tiefste Ton eine Mittelstimme und würde den Mittelwert nach oben ziehen)
+  const lows = [...lowPerBeat.values()].sort((a, b) => a - b);
+  const center = lows[Math.floor(lows.length * 0.25)] ?? 40;
+  const top = center + 10;
+  const cands = notes.filter((n) => n.midi <= top && n.midi >= center - 16);
+  let line = [];
+  for (const g of onsetGroups(cands)) {
+    // lautester Ton in der Basslage, bei Gleichstand der tiefere (Oktav-Dopplung: unten)
+    const best = g.notes.reduce((a, b) => (b.amp > a.amp * 1.25 || (b.amp >= a.amp * 0.8 && b.midi < a.midi) ? b : a));
+    line.push(best);
+  }
+  // Zusammenhang: ein Ton am oberen Rand der Basslage, dessen Nachbarn in der tiefsten Stimme
+  // fast alle darüber liegen, gehört zu einer Mittelstimme (kein Bass in diesem Abschnitt)
+  const lowest = onsetGroups(notes).map((g) => g.notes[g.notes.length - 1]);
+  const inBand = lowest.map((n) => n.midi <= top);
+  const keep = new Set();
+  lowest.forEach((n, i) => {
+    if (!inBand[i]) return;
+    let near = 0;
+    let band = 0;
+    for (let j = i - 1; j >= 0 && n.start - lowest[j].start <= 8 * beat; j--) (near++, inBand[j] && band++);
+    for (let j = i + 1; j < lowest.length && lowest[j].start - n.start <= 8 * beat; j++) (near++, inBand[j] && band++);
+    if (!near || band / near >= 0.35 || n.midi <= center + 3) keep.add(n.start);
+  });
+  line = mono(line.filter((n) => keep.has(n.start) || n.midi <= center + 3));
+  // Bass-Drum-Geister: die KI hört die Bass Drum oft als kurzen, immer gleichen tiefen Ton –
+  // unabhängig von der Harmonie. Eine Tonhöhe, die in vielen Takten nur als kurzer Nebenton
+  // auftaucht, wird dort gestrichen (bleibt aber, wo sie der Hauptton des Takts ist).
+  const bars = new Map();
+  for (const n of line) {
+    const b = Math.floor(n.start / mt);
+    if (!bars.has(b)) bars.set(b, []);
+    bars.get(b).push(n);
+  }
+  const mainOf = new Map();
+  const side = new Map();
+  for (const [b, ns] of bars) {
+    const w = new Map();
+    for (const n of ns) w.set(n.midi, (w.get(n.midi) || 0) + n.dur);
+    const main = [...w.entries()].sort((x, y) => y[1] - x[1])[0][0];
+    mainOf.set(b, main);
+    for (const m of new Set(ns.filter((n) => n.midi !== main && n.dur <= 2 * step).map((n) => n.midi))) side.set(m, (side.get(m) || 0) + 1);
+  }
+  const ghosts = new Set([...side.entries()].filter(([, c]) => bars.size >= 8 && c >= 0.3 * bars.size).map(([m]) => m));
+  if (ghosts.size) line = line.filter((n) => !(ghosts.has(n.midi) && n.dur <= 2 * step && mainOf.get(Math.floor(n.start / mt)) !== n.midi));
+  return { line: mono(line), top, center };
+}
+
+// Melodie: führende Stimme. Dynamische Programmierung über die Anschlags-Gruppen:
+//  - Die Gesangslinie der Signalanalyse (hint) zeigt, welcher gehörte Ton zur Melodie gehört.
+//  - Laufen zwei Stimmen im gleichen Rhythmus parallel (Terzen/Sexten), führt die obere.
+//  - Ohne Hinweis gilt der oberste deutliche Ton – aber nicht der oberste Ton eines dichten
+//    Akkord-Einwurfs (Gitarre/Klavier), und nie ein Sprung zu einzelnen hohen Tönen.
+function pickMelody(notes, beat, hint, step) {
+  const groups = onsetGroups(notes);
+  if (!groups.length) return [];
+  const ampRef = median(notes.map((n) => n.amp)) || 0.5;
+  // Lage: lautstärke-/dauergewichteter Mittelwert der Töne (Obertöne sind kurz & leise)
+  const wts = notes.map((n) => [n.midi, n.amp * Math.min(n.dur, 2 * beat)]).sort((a, b) => a[0] - b[0]);
+  const wSum = wts.reduce((s, x) => s + x[1], 0);
+  let acc = 0;
+  let center = wts[0][0];
+  for (const [m, w] of wts) {
+    acc += w;
+    if (acc >= 0.6 * wSum) {
+      center = m;
+      break;
+    }
+  }
+  const hs = hint ? [...hint].sort((a, b) => a.start - b.start) : [];
+  let hi = 0;
+  const hintAt = (t) => {
+    while (hi < hs.length - 1 && hs[hi + 1].start <= t + step / 2) hi++;
+    while (hi > 0 && hs[hi].start > t + step / 2) hi--;
+    const h = hs[hi];
+    return h && h.start <= t + step / 2 && h.start + h.dur > t ? h.midi : null;
+  };
+  const THRESH = 0.85;
+  const local = (g, k, h) => {
+    const n = g.notes[k];
+    const dense = g.notes.length >= 4;
+    let s = 0.5 * Math.min(1.5, n.amp / ampRef) + 0.2 * Math.min(1, n.dur / beat);
+    s += (k === 0 ? 0.45 : k === 1 ? 0.15 : 0) * (dense ? 0.3 : 1);
+    s -= 0.05 * Math.max(0, Math.abs(n.midi - center) - 10);
+    if (h !== null) {
+      const d = n.midi - h;
+      if (d === 0) s += 0.9;
+      else if (d % 12 === 0) s += 0.6;
+      else if (Math.abs(d) === 1) s += 0.5;
+      else {
+        // obere Stimme eines parallelen Stimmenpaars (gleicher Einsatz, gleiche Länge)
+        const partner = k === 0 && g.notes.some((m) => m !== n && (m.midi - h) % 12 === 0 && n.midi - m.midi >= 3 && n.midi - m.midi <= 9 && Math.abs(m.dur - n.dur) <= step && n.amp >= 0.6 * m.amp);
+        s += partner ? 1.0 : -0.25;
+      }
+    }
+    return s - THRESH;
+  };
+  const trans = (a, b, gap) => {
+    const d = Math.abs(a.midi - b.midi);
+    // nach einer Pause sind Sprünge normal (neue Phrase)
+    const w = gap >= 2 * beat ? 0.3 : 1;
+    return -w * (0.05 * Math.max(0, d - 4) + (d >= 10 ? 0.5 : 0));
+  };
+  let prev = [{ score: 0, note: null, back: undefined, last: null }];
+  for (const g of groups) {
+    const cur = [];
+    const h = hintAt(g.start);
+    const opts = g.notes.slice(0, 4);
+    for (let k = 0; k <= opts.length; k++) {
+      const note = k < opts.length ? opts[k] : null;
+      const loc = note ? local(g, k, h) : 0;
+      let best = null;
+      for (const p of prev) {
+        let s = p.score + loc;
+        if (note && p.last) s += trans(p.last, note, note.start - (p.last.start + p.last.dur));
+        if (!best || s > best.score) best = { score: s, note, back: p, last: note || p.last };
+      }
+      cur.push(best);
+    }
+    prev = cur;
+  }
+  let node = prev.reduce((a, b) => (b.score > a.score ? b : a));
+  const out = [];
+  while (node && node.back !== undefined) {
+    if (node.note) out.push({ ...node.note });
+    node = node.back;
+  }
+  out.reverse();
+  // Oktav-Flackern: ein einzelner Ton genau eine Oktave neben beiden Nachbarn gehört in deren Lage
+  for (let i = 1; i < out.length - 1; i++) {
+    const a = out[i - 1].midi;
+    const b = out[i].midi;
+    const c = out[i + 1].midi;
+    if (Math.abs(a - c) <= 5 && Math.abs(b - a) >= 9 && Math.abs(b - 12 * Math.round((b - a) / 12) - a) <= 5) out[i].midi = b - 12 * Math.round((b - a) / 12);
+  }
+  return mono(out);
+}
+
+// Lücken von höchstens einer Sechzehntel schließen (gesungene Linie)
+function legato(line, step = 6) {
+  for (let i = 0; i < line.length - 1; i++) {
+    const gap = line[i + 1].start - (line[i].start + line[i].dur);
+    if (gap > 0 && gap <= step) line[i].dur += gap;
+  }
+  return line;
+}
+
+// Mittelstimmen: zwei Ströme, die jeweils in ihrer Lage bleiben (nächster Ton = der dem letzten
+// Ton dieser Stimme am nächsten liegende); die obere bleibt über der unteren.
+function pickInner(rest, melAt) {
+  const up = [];
+  const lo = [];
+  if (!rest.length) return [up, lo];
+  const ps = rest.map((n) => n.midi).sort((a, b) => a - b);
+  let lastUp = ps[Math.floor(ps.length * 0.7)];
+  let lastLo = ps[Math.floor(ps.length * 0.3)];
+  for (const g of onsetGroups(rest)) {
+    const m = melAt(g.start);
+    // Töne über der Melodie zählen eine Oktave tiefer (Oberstimmen-Zusätze), der Rest wie gehört
+    const ns = g.notes.map((n) => ({ n, p: m !== null && n.midi >= m ? n.midi - 12 * Math.ceil((n.midi - m + 1) / 12) : n.midi })).sort((a, b) => b.p - a.p);
+    if (ns.length === 1) {
+      const x = ns[0];
+      // ein einzelner Ton gehört zur zweiten Stimme – außer er liegt klar in der Lage der dritten
+      if (x.p >= lastLo - 1 || Math.abs(x.p - lastUp) <= Math.abs(x.p - lastLo)) (up.push({ ...x.n, midi: x.p }), (lastUp = x.p));
+      else (lo.push({ ...x.n, midi: x.p }), (lastLo = x.p));
+      continue;
+    }
+    // bestes Paar (oben > unten) nach Nähe zu den letzten Tönen
+    let best = null;
+    for (let i = 0; i < ns.length; i++)
+      for (let j = i + 1; j < ns.length; j++) {
+        if (ns[i].p === ns[j].p) continue;
+        const c = Math.abs(ns[i].p - lastUp) + Math.abs(ns[j].p - lastLo) - 0.5 * (ns[i].n.amp + ns[j].n.amp);
+        if (!best || c < best.c) best = { c, a: ns[i], b: ns[j] };
+      }
+    if (!best) {
+      up.push({ ...ns[0].n, midi: ns[0].p });
+      lastUp = ns[0].p;
+      continue;
+    }
+    up.push({ ...best.a.n, midi: best.a.p });
+    lo.push({ ...best.b.n, midi: best.b.p });
+    lastUp = best.a.p;
+    lastLo = best.b.p;
+  }
+  return [mono(up), mono(lo)];
+}
+
+// notes: gereinigte Noten (cleanPoly). hint: Melodie der Signalanalyse (optional, gleiche Ticks)
+export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint = null } = {}) {
+  if (!notes.length) return { melody: [], bass: [], inner: [[], []], bassTop: 0 };
+  const b = pickBass(notes, beat, mt, step);
+  const bassSet = new Set(b.line.map(keyOf));
+  const isBass = (n) => bassSet.has(keyOf(n));
+  // alles über der Basslage
+  let upper = notes.filter((n) => !isBass(n) && n.midi > b.top);
+  // Stücke ohne eigene Oberstimme (nur Bass + Akkorde): dann ist alles über dem Bass Kandidat
+  if (upper.length < 0.15 * notes.length) upper = notes.filter((n) => !isBass(n));
+  let melody = legato(pickMelody(upper, beat, hint, step), step);
+  const parallel = new Set();
+  // Eine Stimme, die im Rhythmus der Melodie mitläuft (gleicher Einsatz, gleiche Länge), ist eine
+  // Parallelstimme – kein Bass, auch wenn sie gerade der tiefste gehörte Ton ist
+  {
+    const melBy = new Map(melody.map((n) => [n.start, n]));
+    const par = b.line.filter((n) => {
+      const m = melBy.get(n.start);
+      return m && n.midi > b.center + 2 && m.midi - n.midi <= 16 && Math.abs(m.dur - n.dur) <= step;
+    });
+    if (par.length >= 0.25 * b.line.length || par.length >= 12) {
+      const drop = parallel;
+      for (const n of par) drop.add(keyOf(n));
+      b.line = b.line.filter((n) => !drop.has(keyOf(n)));
+      bassSet.clear();
+      for (const n of b.line) bassSet.add(keyOf(n));
+      upper = notes.filter((n) => !isBass(n) && (n.midi > b.top || drop.has(keyOf(n))));
+      melody = legato(pickMelody(upper, beat, hint, step), step);
+    }
+  }
+  const melSet = new Set(melody.map(keyOf));
+  const at = (line) => {
+    let i = 0;
+    return (t) => {
+      while (i < line.length - 1 && line[i + 1].start <= t) i++;
+      while (i > 0 && line[i].start > t) i--;
+      const m = line[i];
+      return m && m.start <= t && m.start + m.dur > t ? m.midi : null;
+    };
+  };
+  const melAt = at(melody);
+  // Bass-Tonklasse der letzten zwei Schläge (kurze Basstöne klingen im Ohr weiter)
+  let bi = 0;
+  const bassPcAt = (t) => {
+    while (bi < b.line.length - 1 && b.line[bi + 1].start <= t) bi++;
+    while (bi > 0 && b.line[bi].start > t) bi--;
+    const m = b.line[bi];
+    return m && m.start <= t && t - m.start <= 2 * beat ? ((m.midi % 12) + 12) % 12 : null;
+  };
+  // Mittelstimmen: was übrig bleibt – ohne Oktav-Dopplungen von Melodie und Bass, ohne Reste
+  // in der Lücke direkt über dem Bass
+  const rest = notes.filter((n) => {
+    if (isBass(n) || melSet.has(keyOf(n))) return false;
+    if (n.midi < b.top + 5 && !parallel.has(keyOf(n))) return false;
+    const m = melAt(n.start);
+    if (m !== null && n.midi !== m && (n.midi - m) % 12 === 0) return false;
+    const pc = bassPcAt(n.start);
+    if (pc !== null && ((n.midi % 12) + 12) % 12 === pc && n.midi <= b.top + 14) return false;
+    return true;
+  });
+  const inner = pickInner(rest, at(melody));
+  // Takte ohne Bass in der Basslage: dort ist die tiefste der übrigen Stimmen der Bass
+  // (Bass, der zeitweise höher liegt – z. B. Chiptune, Walking Bass in hoher Lage)
+  const barOf = (n) => Math.floor(n.start / mt);
+  const bassBars = new Map();
+  for (const n of b.line) bassBars.set(barOf(n), (bassBars.get(barOf(n)) || 0) + 1);
+  const lowBars = new Map();
+  for (const n of inner[1]) lowBars.set(barOf(n), (lowBars.get(barOf(n)) || 0) + 1);
+  const move = new Set([...lowBars.entries()].filter(([bar, c]) => c >= 2 && (bassBars.get(bar) || 0) <= 1).map(([bar]) => bar));
+  let bass = b.line;
+  if (move.size) {
+    bass = mono([...b.line.filter((n) => !move.has(barOf(n))), ...inner[1].filter((n) => move.has(barOf(n)))]);
+    inner[1] = inner[1].filter((n) => !move.has(barOf(n)));
+  }
+  return { melody, bass, inner, bassTop: b.top };
+}

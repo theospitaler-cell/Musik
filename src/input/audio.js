@@ -12,7 +12,8 @@ import { harmonize } from '../theory/analysis.js';
 import { detectKey } from '../theory/keys.js';
 import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
-import { fuseMelody, aiBassAndHarmony } from './ai-pitch.js';
+import { fuseMelody } from './ai-pitch.js';
+import { cleanPoly, separateVoices } from './voices.js';
 
 const SR = 22050;
 const N = 2048;
@@ -401,7 +402,46 @@ export function trackBeats(onsetRaw) {
   ibis.sort((a, b) => a - b);
   const med = ibis.length ? ibis[Math.floor(ibis.length / 2)] : Pg;
   let bpm = (60 * FR) / med;
-  return { beats, bpm, onset: o, lagAt: Pt };
+  return { beats, bpm, onset: o, lagAt: Pt, barLag: tempo.barLag };
+}
+
+function medianIbi(beats) {
+  const d = [];
+  for (let i = 1; i < beats.length; i++) d.push(beats[i] - beats[i - 1]);
+  d.sort((a, b) => a - b);
+  return d[Math.floor(d.length / 2)] || 1;
+}
+
+// Harmonik je Schlag aus mehrstimmig gehörten Noten: c = Tonklassen über dem Bass, b = Bass.
+// (Das Spektrum löst unter ~250 Hz keine Halbtöne auf – die KI-Noten schon.)
+export function noteBeatChroma(ai, beatPos, nBeats) {
+  const out = Array.from({ length: nBeats }, () => ({ c: new Float32Array(12), b: new Float32Array(12) }));
+  const low = new Map();
+  const span = ai.map((n) => ({ a: beatPos(n.start), z: beatPos(n.end), midi: n.midi, amp: n.amp ?? 0.5 }));
+  for (const n of span) {
+    const k = Math.floor(n.a);
+    if (!low.has(k) || n.midi < low.get(k)) low.set(k, n.midi);
+  }
+  const lows = [...low.values()].sort((a, b) => a - b);
+  const bassTop = (lows[Math.floor(lows.length / 2)] ?? 40) + 9;
+  for (const n of span) {
+    const pc = ((n.midi % 12) + 12) % 12;
+    for (let k = Math.max(0, Math.floor(n.a)); k < Math.min(nBeats, Math.ceil(Math.min(n.z, n.a + 4))); k++) {
+      const w = (Math.min(n.z, k + 1) - Math.max(n.a, k)) * (0.3 + n.amp);
+      if (w <= 0) continue;
+      if (n.midi <= bassTop) out[k].b[pc] += w;
+      else out[k].c[pc] += w;
+    }
+  }
+  for (const x of out) {
+    const mc = Math.max(...x.c) || 1;
+    const mb = Math.max(...x.b) || 1;
+    for (let k = 0; k < 12; k++) {
+      x.c[k] /= mc;
+      x.b[k] /= mb;
+    }
+  }
+  return out;
 }
 
 // Autokorrelation mit Bruchteil-Lags (lineare Interpolation)
@@ -483,7 +523,7 @@ export function tempoCurve(os) {
   const W = 400; // 8 s Fenster
   const H = 50; // 1 s Schritt
   const lagAt = new Float32Array(n).fill(globalLag);
-  if (n < 2 * W) return { globalLag, globalBpm: gBest, lagAt };
+  if (n < 2 * W) return { globalLag, globalBpm: gBest, lagAt, barLag: bar };
   // nur Tempi in der Nähe des globalen (±45 %) – keine Oktavfehler je Fenster
   const cands = TEMPO_CANDS.filter((b) => b >= gBest / 1.45 && b <= gBest * 1.45);
   const wins = [];
@@ -547,7 +587,7 @@ export function tempoCurve(os) {
     const bpm = cands[path[i]] * (1 - f) + cands[path[j]] * f;
     lagAt[t] = (60 * FR) / bpm;
   }
-  return { globalLag, globalBpm: gBest, lagAt };
+  return { globalLag, globalBpm: gBest, lagAt, barLag: bar };
 }
 
 export function beatChroma(beats, feat, nFrames) {
@@ -594,7 +634,9 @@ export function findMeter(bc, cues = {}) {
   const onset = cues.onset || new Array(n).fill(0);
   const crash = cues.crash || new Array(n).fill(0); // Becken-Akzent auf dem Schlag
   const fillPre = cues.fillPre || new Array(n).fill(0); // dichte Schläge im Schlag davor (Fill)
-  const bassChange = bc.map((x, i) => (i ? 1 - cosine(x.b, bc[i - 1].b) : 0));
+  const some = (a) => a.some((v) => v > 0);
+  // Basswechsel nur, wo auf beiden Schlägen ein Bass klingt (Pausen sind kein Harmoniewechsel)
+  const bassChange = bc.map((x, i) => (i && some(x.b) && some(bc[i - 1].b) ? 1 - cosine(x.b, bc[i - 1].b) : 0));
   const z = (arr) => {
     const m = mean(arr);
     const sd = Math.sqrt(mean(arr.map((v) => (v - m) ** 2))) || 1;
@@ -639,6 +681,7 @@ export function findMeter(bc, cues = {}) {
     let best = 0;
     for (let i = 1; i < m; i++) if (tot[i] > tot[best]) best = i;
     res.all = tot;
+    if (cues.debug) cues.debug({ m, keys, res: res.map((r) => ({ ...r })), tot });
     // Stärke: Abstand der besten Phase zum Mittel
     const raw = res[best];
     return { phase: best, score: raw.kick + raw.bass + raw.nov * 2 + raw.onset * 0.1, all: tot };
@@ -667,9 +710,16 @@ export function findMeter(bc, cues = {}) {
   const withAcc = { ...base, crash: 0.4, fill: 0.3 };
   const m4 = evalMeter(4, base);
   const m3 = evalMeter(3, base);
-  const beatsPer = m3.score > m4.score * 1.35 && m3.score > 0.05 ? 3 : 4;
+  let beatsPer = m3.score > m4.score * 1.35 && m3.score > 0.05 ? 3 : 4;
+  // Wiederholt sich das Rhythmus-Muster deutlich alle 4 (2, 8) bzw. 3 (6) Schläge, entscheidet das
+  if (cues.barBeats) {
+    const near = (k) => Math.abs(Math.log(cues.barBeats / k)) < 0.06;
+    if ([2, 4, 8, 16].some(near)) beatsPer = 4;
+    else if ([3, 6].some(near)) beatsPer = 3;
+  }
   if (beatsPer === 4) {
     const sp = snarePhase();
+    if (cues.debug) cues.debug({ snare: sp, barBeats: cues.barBeats });
     if (sp && sp.phases.length === 1) return { beats: 4, phase: sp.phases[0], snare: sp.type };
     if (sp) {
       // Backbeat: nur zwei Lagen möglich – davon die mit mehr Bass-Drum/Harmoniewechsel auf der "1"
@@ -1218,7 +1268,7 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
 }
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
-export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai = null } = {}) {
+export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai = null, debug = null } = {}) {
   onProgress('Spektrum wird analysiert', 0);
   const feat = analyzeFrames(mono, onProgress);
   onProgress('Tempo & Beats werden erkannt', 0.46);
@@ -1227,7 +1277,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   const fluxNorm = bandNorm(feat.onset);
   const comb = new Float32Array(feat.nFrames);
   for (let i = 0; i < comb.length; i++) comb[i] = fluxNorm[i] + 0.7 * lowNorm[i];
-  let { beats, bpm, onset } = trackBeats(comb);
+  let { beats, bpm, onset, barLag } = trackBeats(comb);
   // Halbes Tempo erkannt? Dann liegt die Snare (Backbeat) zwischen den Schlägen -> verdoppeln
   {
     const midN = bandNorm(feat.midF);
@@ -1263,7 +1313,18 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     }
   }
   if (beats.length < 8) throw new Error('Im Audio wurde kein durchgehender Rhythmus erkannt (zu kurz oder zu leise).');
-  const bc = beatChroma(beats, feat, feat.nFrames);
+  // Sekunde -> Schlagposition (lineare Interpolation zwischen den Beats)
+  const beatSec = refineBeats(beats, comb).map(frameToSec);
+  const beatPos = (sec) => {
+    const b = beatSec;
+    if (sec <= b[0]) return (sec - b[0]) / (b[1] - b[0]);
+    for (let i = 0; i < b.length - 1; i++) if (sec < b[i + 1]) return i + (sec - b[i]) / (b[i + 1] - b[i]);
+    const last = b.length - 1;
+    return last + (sec - b[last]) / (b[last] - b[last - 1]);
+  };
+  // Harmonik je Schlag: mit lokaler KI aus den gehörten Noten (genaue Tonhöhen), sonst Chroma
+  const hasAi = !!(ai && ai.length >= 16);
+  const bc = hasAi ? noteBeatChroma(ai, beatPos, beats.length) : beatChroma(beats, feat, feat.nFrames);
   const lowN = bandNorm(feat.lowP || feat.lowF);
   const midN = bandNorm(feat.midP || feat.midF);
   const peak = (arr, f) => Math.max(arr[f - 1] || 0, arr[f] || 0, arr[f + 1] || 0);
@@ -1284,6 +1345,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       for (let f = a + 2; f < b - 1; f++) if (midN[f] > 0.6 && midN[f] >= midN[f - 1] && midN[f] >= midN[f + 1]) c++;
       return c >= 2 ? c : 0;
     }),
+    // Takt-Periode des Rhythmus-Musters in Schlägen (4 oder 8 -> gerader Takt, 3 oder 6 -> Dreiertakt)
+    barBeats: barLag ? barLag / medianIbi(beats) : null,
+    debug,
   });
   const m = meterInfo.beats;
   const firstDown = meterInfo.phase;
@@ -1292,15 +1356,6 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   const BT = shuffle12 ? 36 : DIV; // Ticks je Grundschlag
   const mt = m * BT;
   const measureCount = Math.max(1, Math.floor((beats.length - firstDown) / m));
-  // Sekunde -> Schlagposition (lineare Interpolation zwischen den Beats)
-  const beatSec = refineBeats(beats, comb).map(frameToSec);
-  const beatPos = (sec) => {
-    const b = beatSec;
-    if (sec <= b[0]) return (sec - b[0]) / (b[1] - b[0]);
-    for (let i = 0; i < b.length - 1; i++) if (sec < b[i + 1]) return i + (sec - b[i]) / (b[i + 1] - b[i]);
-    const last = b.length - 1;
-    return last + (sec - b[last]) / (b[last] - b[last - 1]);
-  };
   // Tonhöhen-Frames: Salienz setzt erst ein, wenn der Ton das Fenster füllt
   const melStartSec = (f) => (f * HOP) / SR + 0.034;
   const melEndSec = (f) => (f * HOP) / SR - 0.1;
@@ -1378,37 +1433,55 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   melody = melody.filter((n, i) => !melody.some((o, j) => j !== i && o.start === n.start && (o.dur > n.dur || (o.dur === n.dur && j < i))));
   // Notenenden lesbar machen: Mini-Lücken schließen (Ausklingen wird oft zu früh erkannt),
   // sonst auf Achtel runden – Einsätze bleiben exakt
-  melody.sort((a, b) => a.start - b.start);
   const unit = swing ? DIV / 2 : 6;
-  melody.forEach((n, i) => {
-    const next = melody[i + 1];
-    const end = n.start + n.dur;
-    if (next && next.start - end <= DIV / 4 + 1) n.dur = next.start - n.start;
-    else {
-      let e = Math.round(end / (DIV / 2)) * (DIV / 2);
-      if (next) e = Math.min(e, next.start);
-      n.dur = Math.max(unit, e - n.start);
-    }
-  });
+  const tidyEnds = (line) => {
+    line.sort((a, b) => a.start - b.start);
+    line.forEach((n, i) => {
+      const next = line[i + 1];
+      const end = n.start + n.dur;
+      if (next && next.start - end <= DIV / 4 + 1) n.dur = next.start - n.start;
+      else {
+        let e = Math.round(end / (DIV / 2)) * (DIV / 2);
+        if (next) e = Math.min(e, next.start);
+        n.dur = Math.max(unit, e - n.start);
+      }
+    });
+    return line;
+  };
+  tidyEnds(melody);
 
   const meter = shuffle12 ? { beats: 3 * m, beatType: 8 } : { beats: m, beatType: 4 };
-  // KI: Basslinie & Begleitung als Spuren (für „Original übernehmen“ & Harmonik)
+  // KI: Stimmen aus den mehrstimmig gehörten Noten – Melodie (Oberstimme), Bass und bis zu zwei
+  // Mittelstimmen. Die Gesangslinie der Signalanalyse dient dabei als Hinweis.
   const aiTracks = [];
-  if (ai && ai.length) {
-    const { bass, harmony } = aiBassAndHarmony(ai, melSec);
-    const toNotes = (list) =>
-      list
+  if (hasAi) {
+    const poly = cleanPoly(
+      ai
         .map((n) => {
           const s0 = toTick(n.start);
-          return { start: s0, dur: Math.max(6, toTick(n.end) - s0), midi: n.midi, vel: Math.round(40 + 80 * Math.min(1, n.amp || 0.5)) };
+          return { start: s0, dur: Math.max(unit, toTick(n.end) - s0), midi: n.midi, amp: n.amp ?? 0.5 };
         })
-        .filter((n) => n.start >= 0);
-    const bn = toNotes(bass);
-    const hn = toNotes(harmony);
-    if (bn.length >= 8) aiTracks.push({ id: 'ai-bass', name: 'Bass (KI)', program: 33, mel: false, notes: bn });
-    if (hn.length >= 8) aiTracks.push({ id: 'ai-harmony', name: 'Begleitung (KI)', program: 0, mel: false, notes: hn });
-    // Harmonik: KI-Noten (mehrstimmig) zusätzlich zum Chroma
-    for (const n of [...bn, ...hn]) pseudo.push({ start: n.start, dur: Math.min(n.dur, DIV * 2), midi: n.midi });
+        .filter((n) => n.start >= -mt + BT && n.start < measureCount * mt),
+      { step: unit },
+    );
+    if (debug) debug({ hint: melody.map((n) => [n.start, n.dur, n.midi]), poly, beat: BT, mt });
+    const vs = separateVoices(poly, { beat: BT, mt, step: unit, hint: melody });
+    const vel = (n) => Math.round(40 + 80 * Math.min(1, n.amp || 0.5));
+    const asTrack = (line) => line.filter((n) => n.start >= 0).map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, vel: vel(n) }));
+    if (vs.melody.length >= 8) {
+      aiInfo.fromVoices = true;
+      melody = tidyEnds(vs.melody.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi })));
+    }
+    const bn = asTrack(vs.bass);
+    if (bn.length >= 8) aiTracks.push({ id: 'ai-bass', name: 'Bass (KI)', program: 33, mel: false, role: 'bass', notes: bn });
+    vs.inner.forEach((line, k) => {
+      const notes = asTrack(line);
+      if (notes.length >= 8) aiTracks.push({ id: `ai-inner${k + 1}`, name: `Mittelstimme ${k + 1} (KI)`, program: 0, mel: false, role: 'inner', notes });
+    });
+    // Harmonik & Tonart aus den gehörten Noten (der Bass zählt doppelt)
+    pseudo.length = 0;
+    for (const n of poly) if (n.start >= 0) pseudo.push({ start: n.start, dur: Math.min(n.dur, DIV * 2), midi: n.midi });
+    for (const n of vs.bass) if (n.start >= 0) pseudo.push({ start: n.start, dur: Math.min(n.dur, DIV * 2), midi: n.midi });
   }
   const key = detectKey([...pseudo, ...melody.filter((n) => n.start >= 0).map((n) => ({ midi: n.midi, dur: n.dur * 0.5 }))]);
   const chords = harmonize(pseudo, { meter, key, measureCount, melodyOnly: false });
@@ -1439,7 +1512,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // Zeitbezug zur Datei: Schlag i liegt bei beatSec[i] Sekunden; Takt 1 beginnt bei Schlag firstDown
   fin.timing = { beatSec, firstBeat: firstDown, beatTicks: BT };
   if (aiTracks.length) fin.tracks = [{ id: 'ai-melody', name: 'Gesang / Melodie (KI)', program: 52, mel: true, notes: fin.melody.map((n) => ({ ...n, vel: 90 })) }, ...aiTracks];
-  if (aiInfo) fin.warnings.push(`Lokale KI (Basic Pitch): ${aiInfo.notes} Noten gehört – Melodie ${aiInfo.changed ? `an ${aiInfo.changed} Stellen korrigiert, ` : ''}${aiInfo.added} Töne ergänzt; Bass & Begleitung als eigene Spuren.`);
+  if (aiInfo) fin.warnings.push(`Lokale KI (Basic Pitch): ${aiInfo.notes} Noten gehört – Melodie, Bass${aiTracks.length > 1 ? ' und Mittelstimmen' : ''} als eigene Spuren.`);
   // Tempowechsel, rit./accel. aus den echten Schlagzeiten
   const tm = tempoMarksFromTiming(fin.timing, m, measureCount);
   fin.tempoMarks = tm.marks.map((x) => ({ ...x, bpm: Math.round(shuffle12 ? x.bpm * 1.5 : x.bpm) }));
