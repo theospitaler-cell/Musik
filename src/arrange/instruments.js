@@ -245,6 +245,25 @@ export function doubleStopPossible(lo, hi, inst) {
 }
 
 // Bestes Oktav-Verschieben einer Linie für ein Instrument
+// Melodie: die Originaloktave bleibt. Nur wenn mehr als ein Drittel der Töne außerhalb des
+// Tonumfangs läge, wird die ganze Stimme um eine Oktave verschoben (sonst eine Oktave zu tief,
+// obwohl die Melodie oben nur an wenigen Stellen herausragt).
+export function fitMelodyOctave(notes, inst) {
+  if (!notes.length) return 0;
+  const [rlo, rhi] = inst.range;
+  const out = notes.filter((n) => n.midi > rhi || n.midi < rlo).length;
+  return out / notes.length > 1 / 3 ? fitOctave(notes, inst).shift : 0;
+}
+
+// Ton in den Tonumfang des Instruments falten (eine Oktave auf oder ab) – nur für einzelne Töne
+export function foldIntoRange(midi, inst) {
+  let m = midi;
+  const [rlo, rhi] = inst.range;
+  while (m > rhi) m -= 12;
+  while (m < rlo) m += 12;
+  return m;
+}
+
 export function fitOctave(notes, inst, { allowClimax = false, prefer = 0 } = {}) {
   if (!notes.length) return { shift: 0, penalty: 0, outOfRange: 0 };
   let best = null;

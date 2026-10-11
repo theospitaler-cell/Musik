@@ -9,7 +9,7 @@ import { Rng } from '../core/rng.js';
 import { keyName, keyNameDe } from '../theory/keys.js';
 import { normalizeChords, songMeasureTicks, makeBarGrid, hasMeterChanges } from '../model/song.js';
 import { getStyle } from './styles.js';
-import { getInstrument, withRange, fitOctave } from './instruments.js';
+import { getInstrument, withRange, fitOctave, fitMelodyOctave, foldIntoRange } from './instruments.js';
 import { ROLE_NAMES } from './planner.js';
 import { difficultyRange, levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
 import { BlockCtx, cleanLine, ev } from './context.js';
@@ -279,9 +279,11 @@ export function arrangePlayAlong(song, opts) {
       src = t ? monoLine(t.notes, low) : [];
     }
     const mel = src.filter((n) => n.start + off >= 0 && n.start < endTick - off);
-    const octave = fixed ? 0 : fitOctave(mel, inst).shift; // eine Oktavlage für die ganze Stimme
+    // Melodie: Originaloktave, einzelne zu hohe/tiefe Töne fallen eine Oktave; andere Stimmen: eine Oktavlage
+    const isMel = !fixed && p.source === 'melody';
+    const octave = fixed ? 0 : isMel ? fitMelodyOctave(mel, inst) : fitOctave(mel, inst).shift;
     const ctx = new BlockCtx({ style, rng: rng.fork(`v${i}`), key, meter: song.meter, measures: totalBars, chords: chordTrack, tempo, inst: [inst], block: blocks[0], prevState: [{}] });
-    let line = cleanLine(mel.map((n) => ev(n.start + off, n.dur, n.midi + octave, n.lof ?? null)));
+    let line = cleanLine(mel.map((n) => ev(n.start + off, n.dur, isMel ? foldIntoRange(n.midi + octave, inst) : n.midi + octave, n.lof ?? null)));
     articulate(ctx, line, inst, { plain: !!ens });
     line = line.map((e) => ({ ...e, role: 'melody' }));
     voices.push({ inst, events: line, dirs: [], label: fixed ? ens.names[i] : srcName(p.source).replace(/\s*\((erkannt|Melodie)\)$/, ''), source: p.source });

@@ -5,7 +5,9 @@
 //   Fortgeschritten (4): Durchgangstöne zwischen langen Tönen, Auftakt-Läufe (Achtel),
 //                        Sprünge mit Durchgangston, Vorschlagsnoten auf Phrasen-Höhepunkten
 //   Profi (5):           16tel-Läufe & Doppelschläge, Pausen mit Läufen/Arpeggien gefüllt,
-//                        Oktavsprünge auf Höhepunkten, Triller/Shakes auf langen hohen Tönen
+//                        Oktavsprünge auf Höhepunkten, Triller/Shakes auf langen hohen Tönen,
+//                        dazu: Läufe am Ende schon ab einem Schlag, kurze Lücken (ab zwei
+//                        Sechzehnteln) werden mit einem Lauf auf den nächsten Ton gefüllt
 import { mod } from '../core/constants.js';
 import { chordAt } from '../model/song.js';
 import { chordScale } from '../theory/chords.js';
@@ -83,7 +85,7 @@ export function embellishLine(events, lv, { chordTrack, keyAt, inst, style, mt, 
     const gap = n.start - end;
     const target = n.pitches[0];
     // 1) lange Töne: Durchgang / Lauf zum nächsten Ton (Original-Einsatz bleibt)
-    if (gap === 0 && e.dur >= 2 * beat && !e.orn && rng.chance(P.pass)) {
+    if (gap === 0 && (e.dur >= 2 * beat || (pro && e.dur >= beat)) && !e.orn && rng.chance(P.pass)) {
       const count = Math.round(beat / unit);
       let fig = stepsToward(m, target, count, scaleAt(end - beat));
       if (Math.abs(target - m) <= 2 && pro) {
@@ -93,7 +95,8 @@ export function embellishLine(events, lv, { chordTrack, keyAt, inst, style, mt, 
         fig = [up, m, dn, m].slice(0, count);
       }
       fig = fig.filter(inRange);
-      if (fig.length >= 2) {
+      // der Ton behält mindestens eine Sechzehntel (sonst würde der Lauf den ganzen Ton ersetzen)
+      if (fig.length >= 2 && e.dur - fig.length * unit >= unit) {
         const figStart = end - fig.length * unit;
         e.dur = figStart - e.start;
         fig.forEach((f, k) => out.push(mk(e, figStart + k * unit, unit, f)));
@@ -109,6 +112,22 @@ export function embellishLine(events, lv, { chordTrack, keyAt, inst, style, mt, 
         e.dur -= nFig * u;
         fig.forEach((f, k) => out.push(mk(e, end - nFig * u + k * u, u, f)));
         continue;
+      }
+    }
+    // 2b) Profi: kurze Lücke (zwei bis drei Sechzehntel) wird mit einem Lauf auf den nächsten Ton gefüllt
+    if (pro && gap >= 2 * unit && gap < beat && rng.chance(0.6)) {
+      const count = Math.floor(gap / unit);
+      const sc = scaleAt(n.start - count * unit);
+      let fig = [];
+      let x = target;
+      for (let k = 0; k < count; k++) {
+        x = scaleStep(x, -1, sc);
+        fig.unshift(x);
+      }
+      fig = fig.filter(inRange);
+      if (fig.length >= 2) {
+        const s0 = n.start - fig.length * unit;
+        if (s0 >= end) fig.forEach((g, k) => out.push(mk(e, s0 + k * unit, unit, g)));
       }
     }
     // 3) Pausen: Auftakt-Lauf in die nächste Phrase (bzw. Profi: Lauf/Arpeggio über die Pause)
