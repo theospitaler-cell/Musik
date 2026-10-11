@@ -13,6 +13,8 @@ import { buildPlan, planMarkdown } from '../output/report.js';
 import { printedMeasures, timelineToPrinted } from '../output/form.js';
 import { zip } from '../core/zip.js';
 import { keyNameDe, transposeKey } from '../theory/keys.js';
+import { shiftDownbeat, scaleNoteValues } from '../model/retime.js';
+import { ANALYSIS_VERSION } from '../input/audio.js';
 import { Player } from './player.js';
 import { ScoreFollower } from './follow.js';
 import { bindPractice, syncPractice } from './practice.js';
@@ -1255,12 +1257,93 @@ function renderAnalysis() {
   if (s.source === 'audio') extra.push(`Aufnahme ${fmtTime(s.duration || 0)}`);
   if (s.drumNotes && s.drumNotes.length) extra.push(s.source === 'audio' ? 'Schlagzeug erkannt' : 'mit Schlagzeug');
   if (s.tracks && s.tracks.length > 1) extra.push(`${s.tracks.length} Spuren`);
+  // Aufnahme: Taktraster von Hand korrigieren & ältere Analysen neu berechnen
+  const audio = s.source === 'audio';
+  const old = audio && ((s.analysisVersion || 1) < ANALYSIS_VERSION || s.aiUsed === false);
+  const retime = audio
+    ? `<div class="retime">
+        <span class="rt-label" title="Liegt die „1“ in den Noten falsch? Hier rückt der Taktstrich um einen Schlag.">Taktanfang</span>
+        <button type="button" class="btn ghost small" data-rt="shift:-1" title="Die „1“ einen Schlag früher">◀ früher</button>
+        <button type="button" class="btn ghost small" data-rt="shift:1" title="Die „1“ einen Schlag später">später ▶</button>
+        <span class="rt-label" title="Zu viele Sechzehntel? Doppeltes Tempo schreibt dieselbe Musik in Achteln.">Notenwerte</span>
+        <button type="button" class="btn ghost small" data-rt="scale:2" title="Doppeltes Tempo, doppelte Notenwerte (Achtel statt Sechzehntel)">Tempo ×2</button>
+        <button type="button" class="btn ghost small" data-rt="scale:0.5" title="Halbes Tempo, halbe Notenwerte">Tempo ÷2</button>
+        ${S.source?.audioId ? `<button type="button" class="btn ${old ? 'primary' : 'ghost'} small" data-rt="again" title="Die Aufnahme mit der aktuellen Erkennung neu analysieren">Neu analysieren</button>` : ''}
+      </div>`
+    : '';
+  const oldNote = old ? `<div class="warn">⚠ ${s.aiUsed === false ? 'Diese Analyse lief ohne die lokale KI' : 'Diese Analyse stammt aus einer älteren Version'} – „Neu analysieren“ liefert deutlich bessere Noten.</div>` : '';
   box.innerHTML = `<div class="a-title">${s.title}</div>
     <div class="kv"><span>${keyNameDe(s.key)}${s.keyDetected ? ' (erkannt)' : ''}</span><span>${s.meter.beats}/${s.meter.beatType}</span><span>♩ ${s.tempo || '–'}</span><span>${s.measureCount} Takte${s.pickup ? ' + Auftakt' : ''}</span><span>Form ${form}</span><span>${chordInfo}</span>${extra.map((x) => `<span>${x}</span>`).join('')}</div>
     ${partsHtml}
+    ${retime}
+    ${oldNote}
     ${(s.warnings || []).map((w) => `<div class="warn">⚠ ${w}</div>`).join('')}`;
   const mp = $('#melody-part');
   if (mp) mp.addEventListener('change', () => setSource({ ...S.source, melodyPart: Number(mp.value) }));
+  $$('[data-rt]', box).forEach((b) => b.addEventListener('click', () => retimeSong(b.dataset.rt)));
+}
+
+// Aufnahme: Taktanfang verschieben, Notenwerte verdoppeln/halbieren oder neu analysieren –
+// danach wird ein vorhandenes Arrangement sofort neu geschrieben
+async function retimeSong(action) {
+  if (S.busy) return toast(BUSY_MSG);
+  if (!S.song || S.source?.format !== 'audio') return;
+  const [kind, val] = action.split(':');
+  let song = null;
+  if (kind === 'shift') song = shiftDownbeat(S.song, Number(val));
+  else if (kind === 'scale') {
+    const f = Number(val);
+    if (f === 2 && S.song.tempo > 150) return toast('Schneller geht es nicht sinnvoll – das Tempo liegt schon über 150.');
+    if (f === 0.5 && S.song.tempo < 80) return toast('Langsamer geht es nicht sinnvoll – das Tempo liegt schon unter 80.');
+    song = scaleNoteValues(S.song, f);
+  } else if (kind === 'again') return reanalyze();
+  if (!song) return;
+  const had = !!S.arr;
+  const id = S.currentId;
+  if (!(await setSource({ ...S.source, song }))) return;
+  toast(kind === 'shift' ? 'Taktanfang verschoben' : `Tempo jetzt ♩ = ${song.tempo}`, 'ok');
+  if (had) {
+    S.currentId = id;
+    await generate();
+  }
+}
+
+// Gespeicherte Aufnahme mit der aktuellen Erkennung neu analysieren
+async function reanalyze() {
+  const src = S.source;
+  let blob = null;
+  try {
+    blob = await S.local.getKV(`audio:${src.audioId}`);
+  } catch {
+    /* kein lokaler Speicher */
+  }
+  if (!(blob instanceof Blob)) return toast('Die Aufnahme liegt nicht auf diesem Gerät – bitte die Datei noch einmal laden.', 'error');
+  S.busy++;
+  renderTabBar();
+  const pg = progress('Song wird neu analysiert');
+  try {
+    pg.set('Audio wird dekodiert', null);
+    await nextFrame();
+    const decoded = await decodeAudio(new Uint8Array(await blob.arrayBuffer()));
+    const song = await analyzeAudio(decoded, { title: S.song?.title || src.name.replace(/\.[^.]+$/, ''), onProgress: (t, f) => pg.set(t, 0.05 + 0.93 * f) });
+    const had = !!S.arr;
+    const id = S.currentId;
+    pg.set('Fertig', 1);
+    if (await setSource({ ...src, song })) {
+      toast('Neu analysiert', 'ok');
+      if (had) {
+        S.currentId = id;
+        await generate();
+      }
+    }
+  } catch (e) {
+    console.error(e);
+    toast('Analyse fehlgeschlagen: ' + e.message, 'error');
+  } finally {
+    S.busy--;
+    renderTabBar();
+    setTimeout(() => pg.done(), 300);
+  }
 }
 
 // replace: im aktiven Tab ersetzen; sonst öffnet ein weiteres Lied einen neuen Tab

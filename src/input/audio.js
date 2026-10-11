@@ -361,49 +361,121 @@ export function trackBeats(onsetRaw) {
   const Pt = tempo.lagAt;
   // Dynamische Programmierung (Ellis) mit örtlicher Periode
   // Übergangskosten: Abweichung vom vorigen Schlagabstand (stetige Tempoänderung wie rit./accel.
-  // bleibt billig) und schwächer vom örtlichen Tempo der Tempokurve
-  const score = new Float32Array(n);
-  const back = new Int32Array(n).fill(-1);
+  // bleibt billig) und schwächer vom örtlichen Tempo der Tempokurve.
+  // strict: eng am Raster des Grundtempos bleiben (für Stücke mit gleichmäßigem Tempo)
   const tight = 100;
+  const jumpCap = 3;
   const tightCurve = 30;
-  for (let t = 0; t < n; t++) {
-    let best = 0;
-    let arg = -1;
-    const P = Pt[t];
-    for (let tau = t - Math.round(2 * P); tau <= t - Math.round(P / 2); tau++) {
-      if (tau < 0) continue;
-      const I = back[tau] >= 0 ? tau - back[tau] : P;
-      const d = Math.log((t - tau) / I);
-      const dc = Math.log((t - tau) / P);
-      const v = score[tau] - Math.min(tight * d * d, 3) - tightCurve * dc * dc;
-      if (arg < 0 || v > best) {
-        best = v;
-        arg = tau;
+  const run = (strict) => {
+    const score = new Float32Array(n);
+    const back = new Int32Array(n).fill(-1);
+    for (let t = 0; t < n; t++) {
+      let best = 0;
+      let arg = -1;
+      const P = Pt[t];
+      const tc = strict && Math.abs(P / Pg - 1) < 0.012 ? 3 * tightCurve : tightCurve;
+      for (let tau = t - Math.round(2 * P); tau <= t - Math.round(P / 2); tau++) {
+        if (tau < 0) continue;
+        const I = back[tau] >= 0 ? tau - back[tau] : P;
+        const d = Math.log((t - tau) / I);
+        const dc = Math.log((t - tau) / P);
+        const v = score[tau] - Math.min(tight * d * d, jumpCap) - tc * dc * dc;
+        if (arg < 0 || v > best) {
+          best = v;
+          arg = tau;
+        }
       }
+      score[t] = o[t] + (arg >= 0 ? best : 0);
+      back[t] = arg;
     }
-    score[t] = o[t] + (arg >= 0 ? best : 0);
-    back[t] = arg;
-  }
-  // Ende: bestes Score im letzten Periodenfenster
-  let t = n - 1;
-  let bestEnd = -Infinity;
-  for (let i = Math.max(0, n - Math.round(Pt[n - 1] || Pg)); i < n; i++)
-    if (score[i] > bestEnd) {
-      bestEnd = score[i];
-      t = i;
+    // Ende: bestes Score im letzten Periodenfenster
+    let t = n - 1;
+    let bestEnd = -Infinity;
+    for (let i = Math.max(0, n - Math.round(Pt[n - 1] || Pg)); i < n; i++)
+      if (score[i] > bestEnd) {
+        bestEnd = score[i];
+        t = i;
+      }
+    const bs = [];
+    while (t >= 0) {
+      bs.push(t);
+      t = back[t];
     }
-  const beats = [];
-  while (t >= 0) {
-    beats.push(t);
-    t = back[t];
+    return bs.reverse();
+  };
+  let beats = run(false);
+  // Gleichmäßiges Tempo? Dann zieht eine Synkopen-Figur (z. B. ein Intro ohne Schlagzeug) den
+  // Schlag leicht über ein paar Takte schneller oder langsamer – und schiebt so unbemerkt einen
+  // Schlag ein. Echte Änderungen sehen anders aus: sie halten mindestens 8 Takte an
+  // (Tempowechsel) oder stehen am Schluss (rit.). Ohne solche Änderungen: zweiter Durchgang
+  // eng am Raster.
+  {
+    const win = [];
+    for (let i = 0; i + 8 < beats.length; i += 8) win.push((beats[i + 8] - beats[i]) / 8);
+    const sorted = [...win].sort((x, y) => x - y);
+    const med8 = sorted[Math.floor(sorted.length / 2)] || Pg;
+    const dev = win.map((v) => v / med8 - 1);
+    let sustained = false;
+    for (let i = 0; i + 4 <= dev.length; i++) {
+      const seg = dev.slice(i, i + 4);
+      if (seg.every((v) => v > 0.05) || seg.every((v) => v < -0.05)) sustained = true;
+    }
+    const tail = beats.length >= 10 ? (beats[beats.length - 1] - beats[beats.length - 5]) / 4 / med8 - 1 : 0;
+    const lastWin = dev.length ? dev[dev.length - 1] : 0;
+    const finalChange = Math.abs(tail) > 0.08 || Math.abs(lastWin) > 0.08;
+    if (win.length >= 6 && !sustained && !finalChange) beats = run(true);
   }
-  beats.reverse();
+  repairBeats(beats);
   const ibis = [];
   for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);
   ibis.sort((a, b) => a - b);
   const med = ibis.length ? ibis[Math.floor(ibis.length / 2)] : Pg;
   let bpm = (60 * FR) / med;
   return { beats, bpm, onset: o, lagAt: Pt, barLag: tempo.barLag };
+}
+
+// Ausrutscher reparieren: ein starker Anschlag einer Synkope kann einen Schlag „stehlen“ oder
+// einen zusätzlichen einschieben – danach lägen alle Taktstriche einen Schlag daneben. Liegt eine
+// kurze Folge unregelmäßiger Schlagabstände zwischen zwei ruhigen Stellen und passt in die Lücke
+// eine ganze Zahl normaler Schläge, werden die Schläge dort gleichmäßig verteilt. Stetige
+// Änderungen (rit., accel., Tempowechsel) bleiben unberührt: sie passen nicht ins alte Raster.
+export function repairBeats(beats, depth = 0) {
+  const n = beats.length;
+  if (n < 12) return beats;
+  const ibi = (i) => beats[i + 1] - beats[i];
+  const localMed = (i) => {
+    const a = [];
+    for (let k = Math.max(0, i - 8); k < Math.min(n - 1, i + 9); k++) a.push(ibi(k));
+    a.sort((x, y) => x - y);
+    return a[Math.floor(a.length / 2)];
+  };
+  const bad = [];
+  for (let i = 0; i < n - 1; i++) bad.push(Math.abs(ibi(i) / localMed(i) - 1) > 0.12);
+  let i = 0;
+  while (i < n - 1) {
+    if (!bad[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < n - 1 && (bad[j + 1] || (j + 2 < n - 1 && bad[j + 2]))) j++;
+    // Anker: je ein ruhiger Schlag davor und danach
+    const a = i;
+    const b = j + 1;
+    if (a >= 1 && b <= n - 2 && b - a <= 8) {
+      const med = (localMed(Math.max(0, a - 1)) + localMed(Math.min(n - 2, b))) / 2;
+      const span = beats[b] - beats[a];
+      const k = Math.round(span / med);
+      if (k >= 1 && Math.abs(span / k / med - 1) < 0.07) {
+        const fixed = [];
+        for (let q = 1; q < k; q++) fixed.push(Math.round(beats[a] + (q * span) / k));
+        beats.splice(a + 1, b - a - 1, ...fixed);
+        return depth < 40 ? repairBeats(beats, depth + 1) : beats; // Indizes haben sich verschoben: von vorn
+      }
+    }
+    i = j + 1;
+  }
+  return beats;
 }
 
 function medianIbi(beats) {
@@ -578,6 +650,27 @@ export function tempoCurve(os) {
   for (let w = wins.length - 1; w >= 0; w--) {
     path[w] = k;
     if (w > 0) k = back[w - 1][k];
+  }
+  // Kurze Ausflüge, die wieder beim Grundtempo landen (höchstens ~14 s, weniger als 20 %
+  // Abweichung), sind fast immer Fehl-Lagen einer Synkopen-Figur (z. B. ein Intro ohne
+  // Schlagzeug) – kein rit./accel. Dort gilt das Grundtempo; echte Änderungen bleiben: sie
+  // halten länger an oder enden nicht wieder im alten Tempo (Schluss-rit., Tempowechsel).
+  {
+    const base = cands.reduce((b, c, i) => (Math.abs(c - gBest) < Math.abs(cands[b] - gBest) ? i : b), 0);
+    const off = (w) => Math.abs(cands[path[w]] / gBest - 1) > 0.03;
+    let w = 0;
+    while (w < path.length) {
+      if (!off(w)) {
+        w++;
+        continue;
+      }
+      let z = w;
+      while (z + 1 < path.length && off(z + 1)) z++;
+      const bounded = w > 0 && z < path.length - 1;
+      const small = path.slice(w, z + 1).every((k2) => Math.abs(cands[k2] / gBest - 1) < 0.2);
+      if (bounded && small && z - w + 1 <= 14) for (let q = w; q <= z; q++) path[q] = base;
+      w = z + 1;
+    }
   }
   // je Frame interpolieren
   for (let t = 0; t < n; t++) {
@@ -1268,6 +1361,9 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
   return drumHitsFromActivations(feat.drumAct, bf, firstDown, meterBeats, measureCount, sections, { compound, frameToBeat, wash: feat.sustainHigh, perc: feat.percHigh });
 }
 
+// Wird erhöht, wenn die Analyse deutlich bessere Ergebnisse liefert (Hinweis „neu analysieren“)
+export const ANALYSIS_VERSION = 2;
+
 // mono: Float32Array (22050 Hz, siehe resampleMono)
 export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai = null, debug = null } = {}) {
   onProgress('Spektrum wird analysiert', 0);
@@ -1302,7 +1398,11 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     const ks = (f) => Math.max(kickSnare[Math.round(f) - 1] || 0, kickSnare[Math.round(f)] || 0, kickSnare[Math.round(f) + 1] || 0);
     const kOn = mean(beats.slice(0, -1).map(ks));
     const kOff = mean(beats.slice(0, -1).map((b, i) => ks((b + beats[i + 1]) / 2)));
-    const evenPulse = bpm < 100 && kOn > 0.2 && kOff >= 0.8 * kOn;
+    // … aber nur, wenn das Rhythmus-Muster dann einen Dreiertakt ergibt (oder keine Takt-Periode
+    // erkennbar ist): im geraden Takt sind starke Achtel-Zwischenschläge normales Synkopen-Spiel
+    const bb = barLag ? barLag / medianIbi(beats) : null;
+    const tripleIfDoubled = bb === null || [3, 6, 12].some((k) => Math.abs(Math.log((2 * bb) / k)) < 0.06);
+    const evenPulse = bpm < 100 && kOn > 0.2 && kOff >= 0.8 * kOn && tripleIfDoubled;
     if ((bpm < 110 && mean(off) > 1.5 * mean(on) && mean(off) > 0.1) || evenPulse) {
       const dbl = [];
       for (let i = 0; i < beats.length; i++) {
@@ -1577,6 +1677,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   if (tm.marks.length > 1) fin.warnings.push(`Tempo ändert sich im Stück (${tm.marks.filter((x) => x.kind !== 'tempo' || x.bar > 0).map((x) => `Takt ${x.bar + 1}: ${x.kind === 'rit' ? 'rit.' : x.kind === 'accel' ? 'accel.' : x.kind === 'atempo' ? 'a tempo' : (shuffle12 ? '♩. = ' + Math.round(x.bpm / 1.5) : '♩ = ' + x.bpm)}`).join(', ')}).`);
   if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
   fin.duration = mono.length / SR;
+  // Stand der Analyse: ältere, gespeicherte Analysen lassen sich in der App neu berechnen
+  fin.analysisVersion = ANALYSIS_VERSION;
+  fin.aiUsed = hasAi;
   onProgress('Fertig', 1);
   return fin;
 }
