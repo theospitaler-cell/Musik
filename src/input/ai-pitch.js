@@ -74,11 +74,27 @@ export async function runBasicPitch(audio, onProgress = () => {}) {
       onsets.push(oa[i]);
       contours.push(ca[i]);
     }
-    onProgress((w + 1) / nWin);
-    // dem Browser Luft lassen
-    if (w % 4 === 3) await new Promise((r) => setTimeout(r, 0));
+    onProgress((w + 1) / nWin, w + 1, nWin);
+    // dem Browser Luft lassen (Fortschrittsanzeige) – ohne setTimeout, das in verdeckten Fenstern
+    // auf eine Sekunde gedrosselt wird
+    if (w % 2 === 1) await yieldNow();
   }
   return { frames, onsets, contours };
+}
+
+function yieldNow() {
+  return new Promise((r) => {
+    if (typeof MessageChannel === 'undefined') {
+      setTimeout(r, 0);
+      return;
+    }
+    const c = new MessageChannel();
+    c.port1.onmessage = () => {
+      c.port1.close();
+      r();
+    };
+    c.port2.postMessage(0);
+  });
 }
 
 // Noten (Sekunden) aus der KI-Ausgabe
@@ -87,11 +103,14 @@ export function aiNotes(out, { onsetThresh = 0.5, frameThresh = 0.3, minNoteLen 
   return noteFramesToTime(raw).map((n) => ({ start: n.startTimeSeconds, end: n.startTimeSeconds + n.durationSeconds, midi: n.pitchMidi, amp: n.amplitude }));
 }
 
-// KI vorab laden (Modell & Rechen-Backend), damit der erste Analyseschritt sichtbar wird
-export async function loadAi() {
+// KI vorab laden (Modell & Rechen-Backend), damit der erste Analyseschritt sichtbar wird.
+// backend: 'cpu' erzwingt das Rechnen auf dem Prozessor. Ergebnis: Name des aktiven Backends.
+export async function loadAi(backend = null) {
   const tf = await getTf();
+  if (backend && tf.getBackend() !== backend) await tf.setBackend(backend);
   await tf.ready();
   await getModel();
+  return tf.getBackend();
 }
 
 // Ist die KI verfügbar (TensorFlow.js lädt)?
