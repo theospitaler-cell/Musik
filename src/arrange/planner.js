@@ -95,7 +95,8 @@ function dominantOf(chord) {
 function melodyFits(notes, inst) {
   if (!notes.length) return true;
   const f = fitOctave(notes, inst);
-  return f.outOfRange === 0 && f.penalty < 3;
+  // einzelne Spitzentöne außerhalb des Umfangs (höchstens 5 %) werden später oktaviert
+  return f.outOfRange <= 0.05 * notes.length && f.penalty < 3 + 50 * 0.05;
 }
 
 function soloIndex(opt, count = 4) {
@@ -198,6 +199,11 @@ export function sectionDensity(sections, song) {
   const labels = Object.keys(count).filter((l) => count[l] >= 2);
   labels.sort((a, b) => count[b] - count[a] || meanPitch(b) - meanPitch(a));
   const chorus = labels[0] || null;
+  // Aufnahme: die Dichte folgt der Lautstärke des Originals (leise Teile dünn, laute voll)
+  if (sections.every((sec) => typeof sec.energy === 'number')) {
+    const density = sections.map((sec) => (sec.energy < 0.4 ? 'thin' : sec.energy < 0.66 ? 'build' : 'full'));
+    return { density, chorus, byEnergy: true };
+  }
   const out = new Array(n).fill('full');
   const seen = {};
   sections.forEach((sec, i) => {
@@ -345,6 +351,11 @@ export function planArrangement(songIn, opts) {
   // --- Thema (Durchgang 1) ------------------------------------------------
   const themeBlocks = (pass, keyShift, mode) => {
     const firstOfLabel = new Map();
+    // Melodie-Solos nur ab Quartett-Funktionen und wenn nicht ausdrücklich „nah am Original“
+    const handoff = mode === 'theme' && slots.n >= 3 && Number(opts.adapt ?? 1) >= 1 && slots.lower !== null;
+    const featureOrder = slots.n >= 4 ? [2, 1] : [1];
+    let featureIdx = 0;
+    let featuredLast = false;
     let prevVoice = -1;
     const rotation = [0, 2, 1, 3];
     let rotIdx = 0;
@@ -360,10 +371,25 @@ export function planArrangement(songIn, opts) {
       let type = 'theme';
       let name = `Thema ${sec.label}`;
       let intensity = 0.5;
+      let feature = false;
       if (mode === 'theme') {
-        // Stimme 1 = Lead/Melodie, immer oben (wie in Verlagsarrangements)
+        // Stimme 1 = Lead/Melodie, immer oben (wie in Verlagsarrangements) …
         mv = 0;
         intensity = { thin: 0.42, build: 0.58, full: 0.78 }[dens.density[i]] ?? 0.5;
+        // … außer in den „Melodie-Solos“: ein wiederholter (oder jeder zweite ruhige) Formteil
+        // gehört einer anderen Stimme – abwechselnd untere und obere Mittelstimme
+        const repeat = sections.slice(0, i).some((x) => x.label === sec.label);
+        const calm = dens.density[i] !== 'full';
+        const due = dens.byEnergy ? calm && i > 0 && i < sections.length - 1 && !featuredLast : repeat && calm;
+        if (handoff && due && melody.length >= sec.length) {
+          const cand = featureOrder[featureIdx % featureOrder.length];
+          if (melodyFits(melody, insts[cand])) {
+            mv = cand;
+            feature = true;
+            featureIdx++;
+          }
+        }
+        featuredLast = feature;
       } else if (mode === 'trio') {
         mv = 2;
         type = 'trio';
@@ -394,6 +420,7 @@ export function planArrangement(songIn, opts) {
       if (mode === 'theme' && !firstOfLabel.has(sec.label)) firstOfLabel.set(sec.label, mv);
       if (type === 'shout') roles = ['tutti', 'tutti', 'tutti', 'bass'];
       else if (mode === 'theme' && mv === 0) roles = densityRoles(dens.density[i], style);
+      else if (feature) roles = mv === 2 ? ['fill', 'rest', 'melody', 'bass'] : ['fill', 'melody', 'comp', 'bass'];
       else roles = themeRoles(mv, insts, i + pass);
       if (type === 'shout') mv = 0;
       prevVoice = mv;
@@ -408,7 +435,8 @@ export function planArrangement(songIn, opts) {
         density,
         // erste Vorstellung eines Formteils: Melodie exakt wie im Original (Wiedererkennung)
         firstStatement: mode === 'theme' && (firstOfLabel.get(sec.label) === mv && !res.some((x) => x.source.label === sec.label)),
-        segments: [{ bars: sec.length, roles, density, susp: density === 'build' }],
+        segments: [{ bars: sec.length, roles, density, susp: density === 'build', note: feature ? `Melodie-Solo: ${insts[mv].name} (Stimme 1 antwortet in den Pausen)` : undefined }],
+        feature,
         intensity,
         dyn: style.dyn[type === 'trio' ? 'theme' : type] || style.dyn.theme,
         keyShift,
@@ -559,7 +587,11 @@ export function planArrangement(songIn, opts) {
   const n = theme.length;
   // Shout: letzte Wiederholung des häufigsten Formteils im letzten Drittel, sonst letzter Teil
   let shoutAt = -1;
-  if (n >= 2) {
+  if (dens.byEnergy) {
+    let best = -1;
+    for (let i = Math.floor(n / 2); i < n; i++) if (!theme[i].instrumental && sections[i].energy >= 0.6 && (best < 0 || sections[i].energy >= sections[best].energy)) best = i;
+    shoutAt = best;
+  } else if (n >= 2) {
     const top = Object.entries(labelCount).sort((x, y) => y[1] - x[1])[0][0];
     for (let i = n - 1; i >= Math.floor((n * 2) / 3); i--) if (theme[i].source.label === top && !theme[i].instrumental) {
       shoutAt = i;
@@ -594,7 +626,10 @@ export function planArrangement(songIn, opts) {
     ];
   };
   // Hat das Lied selbst ein instrumentales Intro, ersetzt es das generierte Intro
-  if (theme.length && theme[0].instrumental && theme[0].measures >= 2) {
+  if (songIn.source === 'audio' && theme.length >= 3) {
+    blocks.pop();
+    theme[0].name = 'Intro';
+  } else if (theme.length && theme[0].instrumental && theme[0].measures >= 2) {
     blocks.pop();
     const t0 = theme[0];
     add({ ...t0, type: 'intro', name: 'Intro', segments: instrumentalRoles(t0.measures, true), intensity: 0.55, dyn: style.dyn.intro, motif: firstMelody });

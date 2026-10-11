@@ -39,6 +39,8 @@ import {
   keyAtFactory,
 } from './post.js';
 import { transposeEvents } from '../model/song.js';
+import { sourceLinesOf } from './original.js';
+import { sourceBass, sourceComp, enoughSource } from './gen/source.js';
 
 const ENSEMBLE_NAMES = { 2: 'Duett', 3: 'Trio', 4: 'Quartett', 5: 'Quintett', 6: 'Sextett', 7: 'Septett', 8: 'Oktett' };
 
@@ -124,6 +126,19 @@ export function arrange(songIn, options = {}) {
   const chordTrack = [];
   const songMotif = sliceMelody(song, 0, Math.min(2, song.measureCount));
 
+  // Bass & Begleitstimmen der Vorlage (in die Tonart des Arrangements transponiert): der Groove
+  // des Liedes bleibt erhalten. Nur bei „frei“ (adapt 2) schreibt der Stil eigene Muster.
+  const useSource = Number(opts.adapt ?? 1) < 2;
+  const srcAll = useSource ? sourceLinesOf(songIn) : { bass: null, guides: [] };
+  const trLine = (line) => (line ? line.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi + plan.shift })) : null);
+  const srcLines = { bass: trLine(srcAll.bass), guides: srcAll.guides.map(trLine) };
+  const kicksAll = (songIn.drumNotes || []).filter((d) => d.midi === 36 || d.midi === 35).map((d) => d.start);
+  const bassShifts = new Map();
+  const bassShiftFor = (v) => {
+    if (!bassShifts.has(v)) bassShifts.set(v, srcLines.bass && srcLines.bass.length ? fitOctave(srcLines.bass, insts[v]).shift : 0);
+    return bassShifts.get(v);
+  };
+
   const copies = []; // {src, dst, len} in Ticks – nach der Nachbearbeitung kopiert
   blocks.forEach((b, bi) => {
     const blockStart = b.startBar * mt;
@@ -156,7 +171,7 @@ export function arrange(songIn, options = {}) {
         prevState,
       });
       const lvS = levelFor(opts, soloVs[0]);
-      b.preSolo = { v: soloVs[0], line: genSolo(sctx, soloVs[0], { lyrical: style.id === 'ballad' || style.id === 'classical' || (lvS !== null && lvS <= 2), melody: b.paraphrase || null }) };
+      b.preSolo = { v: soloVs[0], line: genSolo(sctx, soloVs[0], { lyrical: style.id === 'ballad' || style.id === 'classical' || (lvS !== null && lvS <= 2), melody: b.paraphrase || null, full: Number(opts.adapt ?? 1) < 2 }) };
     }
     b.segments.forEach((seg, si) => {
       const s0 = seg.startBar * mt;
@@ -186,6 +201,15 @@ export function arrange(songIn, options = {}) {
       ctx.nextBlockChord = nextSeg ? sliceChordsRel(b.chords, nextSeg.startBar * mt, nextSeg.startBar * mt + mt)[0]?.chord : nextChord;
       const roles = seg.roles;
       const lines = {};
+      // Ausschnitt der Vorlage für diesen Abschnitt (Bass, Begleitstimmen, Bass Drum)
+      let segSrc = null;
+      if (useSource && b.source && (srcLines.bass || srcLines.guides.length)) {
+        const a0 = b.source.from * mt + s0;
+        const a1 = b.source.from * mt + s1;
+        const ks = b.keyShift || 0;
+        const cut = (line) => (line ? sliceRel(line, a0, a1).map((n) => ({ ...n, midi: n.midi + ks })) : null);
+        segSrc = { bass: cut(srcLines.bass), guides: srcLines.guides.map(cut), kicks: kicksAll.filter((k) => k >= a0 && k < a1).map((k) => k - a0) };
+      }
       const melodySlice = b.melody ? sliceRel(b.melody, s0, s1) : [];
       const climax = b.type === 'shout' || b.type === 'coda';
 
@@ -251,7 +275,7 @@ export function arrange(songIn, options = {}) {
 
       // 3) Bass – die Mittelstimmen richten sich danach (Gegenbewegung)
       for (const v of groupOf('bass')) {
-        lines[v] = genBass(ctx, v);
+        lines[v] = segSrc && enoughSource(segSrc.bass, seg.bars) ? sourceBass(ctx, v, segSrc.bass, { shift: bassShiftFor(v), kicks: segSrc.kicks }) : genBass(ctx, v);
         if (!ctx.bassLine) ctx.bassLine = lines[v];
       }
 
@@ -283,7 +307,16 @@ export function arrange(songIn, options = {}) {
         const partners = generatedComps.map((x) => lines[x]);
         // Gegenstimme als Partner einbeziehen, um Dopplungen zu vermeiden
         for (let k = 0; k < N; k++) if (roles[k] === 'counter' && lines[k]) partners.push(lines[k]);
+        const guide = segSrc ? segSrc.guides[rank] : null;
+        const fromSource = segSrc && r !== 'background' && segSrc.guides.some((g) => enoughSource(g, seg.bars));
         if (r === 'background') lines[v] = genBackground(ctx, v, { partners, rank });
+        else if (fromSource)
+          lines[v] = sourceComp(ctx, v, r, {
+            guide: guide && guide.length ? guide : null,
+            others: segSrc.guides.filter((g) => g && g !== guide),
+            partners: generatedComps.map((x) => lines[x]),
+            melShift: b.melodyShift ?? 0,
+          });
         else lines[v] = genComp(ctx, v, r, { partners, rank });
         generatedComps.push(v);
         rank++;

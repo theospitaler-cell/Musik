@@ -189,7 +189,7 @@ function paraphrase(ctx, mel, from, to, lo, hi) {
   return line;
 }
 
-export function genSolo(ctx, v, { lyrical = false, from = 0, to = null, melody = null } = {}) {
+export function genSolo(ctx, v, { lyrical = false, from = 0, to = null, melody = null, full = false } = {}) {
   const inst = ctx.inst[v];
   const [clo, chi] = inst.comfort;
   const top = Math.min(inst.range[1] - 1, chi + (inst.family === 'brass' ? 2 : 4));
@@ -201,9 +201,10 @@ export function genSolo(ctx, v, { lyrical = false, from = 0, to = null, melody =
   let t = from + (lyrical ? 0 : ctx.rng.pick([0, 0, 6, 12]));
   const motif = (ctx.songMotif || []).slice(0, 6);
   let phrase = 0;
-  // erste Hälfte: Paraphrase der Melodie des Formteils (Wiedererkennung)
+  // Paraphrase der Melodie des Formteils (Wiedererkennung): die erste Hälfte, bei „full“ der
+  // ganze Formteil – das Solo bleibt dann durchgehend die ausgezierte Melodie des Liedes
   if (melody && melody.length && end - from >= 4 * ctx.mt) {
-    const half = from + Math.floor((end - from) / ctx.mt / 2) * ctx.mt;
+    const half = full ? end : from + Math.floor((end - from) / ctx.mt / 2) * ctx.mt;
     const para = paraphrase(ctx, melody, from, half - ctx.beat / 2, clo, top);
     if (para.length >= 3) {
       out.push(...para);

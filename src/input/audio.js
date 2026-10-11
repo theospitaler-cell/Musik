@@ -14,6 +14,7 @@ import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
 import { fuseMelody } from './ai-pitch.js';
 import { cleanPoly, separateVoices } from './voices.js';
+import { barFeatures, audioSections } from './form.js';
 
 const SR = 22050;
 const N = 2048;
@@ -1454,6 +1455,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // KI: Stimmen aus den mehrstimmig gehörten Noten – Melodie (Oberstimme), Bass und bis zu zwei
   // Mittelstimmen. Die Gesangslinie der Signalanalyse dient dabei als Hinweis.
   const aiTracks = [];
+  let polyNotes = null;
   if (hasAi) {
     const poly = cleanPoly(
       ai
@@ -1464,6 +1466,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
         .filter((n) => n.start >= -mt + BT && n.start < measureCount * mt),
       { step: unit },
     );
+    polyNotes = poly;
     if (debug) debug({ hint: melody.map((n) => [n.start, n.dur, n.midi]), poly, beat: BT, mt });
     const vs = separateVoices(poly, { beat: BT, mt, step: unit, hint: melody });
     const vel = (n) => Math.round(40 + 80 * Math.min(1, n.amp || 0.5));
@@ -1506,6 +1509,23 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   onProgress('Form wird bestimmt', 0.92);
   const fin = finalizeSong(song);
   fin.chordsDetected = true;
+  // Formteile aus Takt-Merkmalen (Harmonik, Melodie, Lautstärke, Dichte, Schlagzeug) – jede
+  // Wiederholung bekommt denselben Buchstaben, jeder Teil seine relative Lautstärke
+  if (measureCount >= 12) {
+    const energy = [];
+    for (let b = 0; b < measureCount; b++) {
+      const a = Math.round(beats[firstDown + b * m] ?? 0);
+      const z = Math.round(beats[firstDown + (b + 1) * m] ?? feat.nFrames);
+      let e = 0;
+      for (let t = a; t < z; t++) e += feat.energy[t] || 0;
+      energy.push(20 * Math.log10(1e-5 + e / Math.max(1, z - a)));
+    }
+    const secs = audioSections(barFeatures({ mt, measureCount, melody: fin.melody, notes: polyNotes || pseudo, drumNotes: drumsRough.notes || [], energy }));
+    if (secs && secs.length >= 2) {
+      fin.sections = secs;
+      fin.sectionsDetected = true;
+    }
+  }
   // Schlagzeug: NMF-Zerlegung in Bass Drum, Snare, Hi-Hat, Becken, Toms; Anschläge ins Raster
   onProgress('Schlagzeug wird Instrument für Instrument getrennt', 0.93);
   fin.drumNotes = transcribeDrums(feat, refineBeats(beats, comb), firstDown, m, measureCount, fin.sections, { compound: shuffle12 }).notes;

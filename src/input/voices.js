@@ -162,7 +162,7 @@ function pickMelody(notes, beat, hint, step) {
     const h = hs[hi];
     return h && h.start <= t + step / 2 && h.start + h.dur > t ? h.midi : null;
   };
-  const THRESH = 0.85;
+  const THRESH = 0.9;
   const local = (g, k, h) => {
     const n = g.notes[k];
     const dense = g.notes.length >= 4;
@@ -171,13 +171,14 @@ function pickMelody(notes, beat, hint, step) {
     s -= 0.05 * Math.max(0, Math.abs(n.midi - center) - 10);
     if (h !== null) {
       const d = n.midi - h;
-      if (d === 0) s += 0.9;
-      else if (d % 12 === 0) s += 0.6;
+      // die Signalanalyse irrt sich oft um eine Oktave – die Oktavlage entscheidet die Linie
+      if (d % 12 === 0) s += 0.9;
       else if (Math.abs(d) === 1) s += 0.5;
       else {
         // obere Stimme eines parallelen Stimmenpaars (gleicher Einsatz, gleiche Länge)
         const partner = k === 0 && g.notes.some((m) => m !== n && (m.midi - h) % 12 === 0 && n.midi - m.midi >= 3 && n.midi - m.midi <= 9 && Math.abs(m.dur - n.dur) <= step && n.amp >= 0.6 * m.amp);
-        s += partner ? 1.0 : -0.25;
+        // Abzug nur, wenn der Hinweis-Ton hier wirklich zur Wahl steht
+        s += partner ? 1.0 : g.notes.some((m) => (m.midi - h) % 12 === 0) ? -0.25 : 0;
       }
     }
     return s - THRESH;
@@ -219,6 +220,15 @@ function pickMelody(notes, beat, hint, step) {
     const b = out[i].midi;
     const c = out[i + 1].midi;
     if (Math.abs(a - c) <= 5 && Math.abs(b - a) >= 9 && Math.abs(b - 12 * Math.round((b - a) / 12) - a) <= 5) out[i].midi = b - 12 * Math.round((b - a) / 12);
+  }
+  // Begleit-Einsprengsel: ein kurzer Ton, der zwischen zwei Melodietönen mindestens eine Quinte
+  // nach unten ausschert, gehört zur Begleitung
+  for (let i = 1; i < out.length - 1; i++) {
+    const p = out[i - 1];
+    const n = out[i];
+    const x = out[i + 1];
+    if (n.dur > 2 * step || n.start - p.start > 2 * beat || x.start - n.start > 2 * beat) continue;
+    if (p.midi - n.midi >= 7 && x.midi - n.midi >= 7) out.splice(i--, 1);
   }
   return mono(out);
 }

@@ -19,7 +19,7 @@ const medianOf = (xs) => {
 };
 
 // einstimmige Linie aus einer (evtl. mehrstimmigen) Spur: oberste bzw. unterste Töne
-function monoLine(notes, low = false) {
+export function monoLine(notes, low = false) {
   const s = [...notes].sort((a, b) => a.start - b.start || (low ? a.midi - b.midi : b.midi - a.midi));
   const out = [];
   for (const n of s) {
@@ -47,7 +47,7 @@ function pitchAt(line, { hold = 0 } = {}) {
 // Pause dazwischen), sonst mindestens eine Achtel – Einsätze bleiben exakt.
 // sustain: Töne klingen bis zum nächsten Einsatz (höchstens "sustain" Ticks) – Liegeklang im
 // Rhythmus der Begleitung
-function tidy(line, total, { sustain = 0 } = {}) {
+export function tidy(line, total, { sustain = 0 } = {}) {
   line.sort((a, b) => a.start - b.start);
   line.forEach((n, i) => {
     const next = line[i + 1] ? line[i + 1].start : total;
@@ -61,7 +61,7 @@ function tidy(line, total, { sustain = 0 } = {}) {
 }
 
 // Akkordton für einen Liegeklang: nahe am letzten Ton, bevorzugt Terz/Septime, keine Dopplung
-function chordToneFor(chord, last, lo, hi, taken, melPc) {
+export function chordToneFor(chord, last, lo, hi, taken, melPc, prefPc = null) {
   if (!chord) return null;
   let best = null;
   for (const t of chord.tones)
@@ -71,6 +71,7 @@ function chordToneFor(chord, last, lo, hi, taken, melPc) {
       c += t.role === 'root' ? 1.5 : t.role === 'fifth' ? 0.8 : t.role === 'seventh' ? 0.2 : 0;
       if (taken.includes(t.pc)) c += 3;
       if (t.pc === melPc) c += 1.5;
+      if (t.pc === prefPc) c -= 1.5;
       if (!best || c < best.c) best = { c, midi: m, lof: t.lof };
     }
   return best;
@@ -78,7 +79,7 @@ function chordToneFor(chord, last, lo, hi, taken, melPc) {
 
 // Ton unter einer bewegten Oberstimme (Parallelführung): Terz bis Sexte darunter, Akkordton vor
 // Tonleiterton, nahe am letzten Ton dieser Stimme
-function toneUnder(upper, chord, scale, last, lo, hi, taken, melPc) {
+export function toneUnder(upper, chord, scale, last, lo, hi, taken, melPc) {
   let best = null;
   for (let m = Math.max(lo, upper - 9); m <= Math.min(hi, upper - 3); m++) {
     const pc = mod(m, 12);
@@ -92,6 +93,26 @@ function toneUnder(upper, chord, scale, last, lo, hi, taken, melPc) {
     if (!best || c < best.c) best = { c, midi: m, lof: tone ? tone.lof : null };
   }
   return best;
+}
+
+// Bass-Spur und Begleitstimmen der Vorlage (einstimmig, Ticks der Vorlage); bei MP3 von der KI
+// gehört, bei MIDI/MusicXML die übrigen Spuren nach Lage
+export function sourceLinesOf(song) {
+  const total = song.measureCount * songMeasureTicks(song);
+  const from = -(song.pickup || 0);
+  const inSong = (n) => n.start >= from && n.start < total;
+  const tracks = (song.tracks || []).filter((t) => !t.mel && t.notes && t.notes.length >= 4);
+  const med = (t) => medianOf(t.notes.map((n) => n.midi));
+  let bassTrack = tracks.find((t) => t.role === 'bass') || null;
+  if (!bassTrack && tracks.length) {
+    const lowest = tracks.reduce((a, b) => (med(b) < med(a) ? b : a));
+    if (med(lowest) < 55) bassTrack = lowest;
+  }
+  const guides = tracks
+    .filter((t) => t !== bassTrack)
+    .sort((a, b) => med(b) - med(a))
+    .map((t) => monoLine(t.notes.filter(inSong)));
+  return { bass: bassTrack ? monoLine(bassTrack.notes.filter(inSong), true) : null, guides };
 }
 
 // song -> Linien je Stimme (klingend, Ticks der Vorlage). insts: Instrumente in Stimmen-
@@ -124,23 +145,15 @@ export function buildOriginalEnsemble(song, insts, slots) {
   const melOnsets = new Set(melLine.map((n) => n.start));
 
   // Quellen: Bass-Spur und Begleitstimmen der Vorlage (bei MP3 von der KI gehört)
-  const tracks = (song.tracks || []).filter((t) => !t.mel && t.notes && t.notes.length >= 4);
-  const med = (t) => medianOf(t.notes.map((n) => n.midi));
-  let bassTrack = tracks.find((t) => t.role === 'bass') || null;
-  if (!bassTrack && tracks.length) {
-    const lowest = tracks.reduce((a, b) => (med(b) < med(a) ? b : a));
-    if (med(lowest) < 55) bassTrack = lowest;
-  }
-  const guides = tracks
-    .filter((t) => t !== bassTrack)
-    .sort((a, b) => med(b) - med(a))
-    .map((t) => monoLine(t.notes.filter(inSong)));
+  const src = sourceLinesOf(song);
+  const bassTrack = src.bass;
+  const guides = src.guides;
 
   // ---- Bass ----
   let bassLine = [];
   if (slots.bass !== null) {
     const inst = insts[slots.bass];
-    const det = bassTrack ? monoLine(bassTrack.notes.filter(inSong), true) : [];
+    const det = bassTrack || [];
     const shift = det.length ? fitOctave(det, inst).shift : 0;
     bassLine = det.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi + shift, lof: n.lof ?? null }));
     // einzelne Töne, die mehr als eine Oktave aus der Linie springen, in die Lage der Nachbarn
