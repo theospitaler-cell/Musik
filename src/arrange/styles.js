@@ -180,29 +180,236 @@ export const STYLES = {
   },
 };
 
-export const STYLE_LIST = Object.values(STYLES).map((s) => ({ id: s.id, name: s.name }));
+// ---- Weitere Stile ---------------------------------------------------------
+// Jeder ist eine Spielart eines Grundstils (id = Grundstil: Satztechnik, Artikulation, Solo-
+// Sprache), mit eigenem Namen, Tempobereich, Bass-, Begleit- und Schlagzeug-Mustern.
+// key = Kennung für Auswahl & Speichern.
+for (const [k, st] of Object.entries(STYLES)) st.key = k;
+const variant = (base, key, over) => (STYLES[key] = { ...STYLES[base], modulateFinal: 0, modulateTrio: 0, ...over, id: base, key });
+
+variant('ballad', 'pop', {
+  name: 'Pop',
+  tempoRange: [72, 138],
+  defaultTempo: 104,
+  heading: 'Pop',
+  hint: 'Straight 8ths',
+  fxRate: 0.25,
+  dyn: { intro: 'mp', theme: 'mf', interlude: 'mf', solo: 'mf', shout: 'f', recap: 'mf', coda: 'f', variation: 'mf' },
+  bass: {
+    kind: 'riff',
+    riffs: [
+      [[0, 6, 'R', ''], [6, 2, 'R', ''], [8, 4, '5', ''], [12, 2, 'R', ''], [14, 2, 'S', '']],
+      [[0, 2, 'R', ''], [2, 2, 'R', ''], [4, 2, 'R', ''], [6, 2, 'R', ''], [8, 2, 'R', ''], [10, 2, 'R', ''], [12, 2, 'R', ''], [14, 2, 'S', '']],
+      [[0, 4, 'R', ''], [4, 2, 'R', ''], [6, 2, '5', ''], [8, 4, 'R8', ''], [12, 4, '5', '']],
+    ],
+  },
+  comp: {
+    4: ['X-------X-------', 'X-----x-X-------', 'X---x---X---x---', 'X-----X---X-----'],
+    pads: ['X---------------', 'X-------X-------'],
+    riffs: ['X-----x-X-----x-'],
+  },
+  drums: { 4: { hh: 'x.x.x.x.x.x.x.x.', sn: '....X.......X...', bd: 'X.....x.X.......' } },
+});
+
+variant('funk', 'rock', {
+  name: 'Rock',
+  feel: 'straight8',
+  tempoRange: [100, 190],
+  defaultTempo: 132,
+  heading: 'Rock',
+  hint: 'Driving 8ths',
+  sub: 12,
+  fxRate: 0.35,
+  dyn: { intro: 'f', theme: 'mf', interlude: 'f', solo: 'mf', shout: 'ff', recap: 'f', coda: 'ff', variation: 'mf' },
+  bass: {
+    kind: 'riff',
+    riffs: [
+      [[0, 2, 'R', 'acc'], [2, 2, 'R', ''], [4, 2, 'R', ''], [6, 2, 'R', ''], [8, 2, 'R', 'acc'], [10, 2, 'R', ''], [12, 2, 'R', ''], [14, 2, 'A', '']],
+      [[0, 2, 'R', 'acc'], [2, 2, 'R', ''], [4, 2, 'R8', ''], [6, 2, 'R', ''], [8, 2, 'R', 'acc'], [10, 2, 'R', ''], [12, 2, '5', ''], [14, 2, 'b7', '']],
+    ],
+  },
+  comp: {
+    4: ['X-..X-..X-..X-..', 'X-....X-X-......', 'X-X-..X-..X-X-..'],
+    pads: ['X-------X-------'],
+    riffs: ['X-X-..X-X-X-..X-'],
+  },
+  drums: { 4: { hh: 'x.x.x.x.x.x.x.x.', sn: '....X.......X...', bd: 'X.......X.x.....' } },
+});
+
+variant('funk', 'soul', {
+  name: 'Soul / R&B',
+  tempoRange: [76, 126],
+  defaultTempo: 98,
+  heading: 'Soul',
+  hint: 'Laid back',
+  fxRate: 0.45,
+  bass: {
+    kind: 'riff',
+    riffs: [
+      [[0, 3, 'R', 'acc'], [3, 1, 'R', ''], [4, 2, '5', ''], [8, 3, 'R', ''], [11, 1, '5', ''], [12, 2, '6', ''], [14, 2, 'A', '']],
+      [[0, 4, 'R', 'acc'], [6, 2, '3', ''], [8, 2, '5', ''], [10, 2, '6', ''], [12, 2, 'R8', 'acc'], [14, 2, 'S', '']],
+    ],
+  },
+  comp: {
+    4: ['....X-......X-..', '....x.x.....X-..', '..x-X-....x-X-..'],
+    pads: ['X---------------', 'X-------X-------'],
+    riffs: ['x.x.X-..x.x.X-..'],
+  },
+  drums: { 4: { hh: 'x.x.x.x.x.x.x.x.', sn: '....X.......X...', bd: 'X.....x.x.X.....' } },
+});
+
+variant('secondline', 'latin', {
+  name: 'Latin (Bossa / Samba)',
+  feel: 'straight8',
+  tempoRange: [88, 150],
+  defaultTempo: 116,
+  heading: 'Latin',
+  hint: 'Straight 8ths',
+  fxRate: 0.35,
+  bass: {
+    kind: 'riff',
+    riffs: [
+      [[0, 6, 'R', ''], [6, 2, '5', ''], [8, 6, '5', ''], [14, 2, 'R', '']],
+      [[0, 3, 'R', 'acc'], [6, 2, '5', ''], [8, 2, '5', ''], [12, 2, 'R8', ''], [14, 2, 'S', '']],
+    ],
+  },
+  comp: {
+    4: ['X-..x-.x..x-..x-', '..x-..x-x...x-..', 'x-.x-.x-..x-.x-.'],
+    pads: ['X---------------', 'X-------X-------'],
+    riffs: ['x-.x-.x-x-.x-.x-'],
+  },
+  drums: { 4: { hh: 'x.x.x.x.x.x.x.x.', rim: 'x..x..x...x.x...', bd: 'x.....xxx.....xx' } },
+});
+
+variant('funk', 'reggae', {
+  name: 'Reggae / Ska',
+  feel: 'straight8',
+  tempoRange: [60, 170],
+  defaultTempo: 84,
+  heading: 'Reggae',
+  hint: 'Offbeats kurz',
+  sub: 12,
+  fxRate: 0.25,
+  dyn: { intro: 'mf', theme: 'mf', interlude: 'mf', solo: 'mp', shout: 'f', recap: 'mf', coda: 'f', variation: 'mf' },
+  bass: {
+    kind: 'riff',
+    riffs: [
+      [[0, 2, 'R', ''], [4, 2, 'R', ''], [6, 2, '5', ''], [10, 2, '3', ''], [12, 4, 'R', '']],
+      [[2, 2, 'R', ''], [4, 4, '5-', ''], [10, 2, 'R', ''], [12, 2, '3', ''], [14, 2, 'S', '']],
+    ],
+  },
+  comp: {
+    4: ['....o.......o...', '..o...o...o...o.', '....o.o.....o.o.'],
+    pads: ['X---------------'],
+    riffs: ['..o...o...o...o.'],
+  },
+  drums: { 4: { hh: 'x.x.x.x.x.x.x.x.', rim: '........x.......', bd: '........x.......' } },
+});
+
+variant('funk', 'disco', {
+  name: 'Disco / Dance',
+  feel: 'straight8',
+  tempoRange: [106, 138],
+  defaultTempo: 120,
+  heading: 'Disco',
+  hint: 'Four on the floor',
+  sub: 12,
+  fxRate: 0.4,
+  bass: {
+    kind: 'riff',
+    riffs: [
+      [[0, 2, 'R', 'st'], [2, 2, 'R8', 'st'], [4, 2, 'R', 'st'], [6, 2, 'R8', 'st'], [8, 2, 'R', 'st'], [10, 2, 'R8', 'st'], [12, 2, 'R', 'st'], [14, 2, 'R8', 'st']],
+      [[0, 2, 'R', 'st'], [2, 2, 'R8', 'st'], [4, 2, 'R', 'st'], [6, 2, 'R8', 'st'], [8, 2, 'R', 'st'], [10, 2, 'R8', 'st'], [12, 2, '5', 'st'], [14, 2, 'A', '']],
+    ],
+  },
+  comp: {
+    4: ['..x-..x-..x-..x-', '..o...o...o.x-..', 'X-....x-..x-..x-'],
+    pads: ['X---------------', 'X-------X-------'],
+    riffs: ['..x-..x-..x-x-x-'],
+  },
+  drums: { 4: { hh: '..x...x...x...x.', sn: '....X.......X...', bd: 'X...X...X...X...' } },
+});
+
+variant('swing', 'blues', {
+  name: 'Blues / Shuffle',
+  tempoRange: [56, 150],
+  defaultTempo: 96,
+  heading: 'Shuffle',
+  hint: 'Achtel triolisch',
+  fxRate: 0.55,
+});
+
+variant('polka', 'march', {
+  name: 'Marsch',
+  tempoRange: [92, 132],
+  defaultTempo: 112,
+  heading: 'Tempo di Marcia',
+  hint: null,
+});
+
+variant('polka', 'waltz', {
+  name: 'Walzer',
+  tempoRange: [84, 210],
+  defaultTempo: 150,
+  heading: 'Tempo di Valse',
+  hint: null,
+});
+
+export const STYLE_LIST = Object.values(STYLES).map((s) => ({ id: s.key, name: s.name }));
 
 export function getStyle(id) {
   return STYLES[id] || STYLES.funk;
 }
 
-// Stil automatisch aus dem Song ableiten (Taktart, Tempo, Swing, Besetzung der Vorlage)
+// Anteil der Einsätze auf Sechzehntel-Zwischenzeiten (Melodie + Bass): hoch = Funk-/Soul-Gefühl
+function sixteenthShare(song) {
+  const notes = [...(song.melody || []), ...((song.tracks || []).find((t) => t.role === 'bass')?.notes || [])].filter((n) => n.start >= 0);
+  if (notes.length < 16) return 0;
+  return notes.filter((n) => n.start % 12 === 6).length / notes.length;
+}
+
+// Bass Drum auf allen vier Zählzeiten (Disco/Dance)?
+function fourOnFloor(song) {
+  const kicks = (song.drumNotes || []).filter((d) => d.midi === 36 || d.midi === 35);
+  const bars = song.measureCount || 0;
+  if (!bars || kicks.length < 2 * bars) return false;
+  const mt = ((song.meter?.beats || 4) * 96) / (song.meter?.beatType || 4);
+  const per = new Map();
+  for (const k of kicks) if (k.start >= 0 && k.start % 24 === 0) per.set(Math.floor(k.start / mt), (per.get(Math.floor(k.start / mt)) || 0) + 1);
+  return [...per.values()].filter((c) => c >= 4).length >= 0.6 * bars;
+}
+
+// Stil automatisch aus dem Song ableiten: Taktart, Tempo, Swing/Shuffle, Sechzehntel-Gefühl,
+// Schlagzeug-Muster, Titel/Spurnamen – aus allen Stilen, nicht nur den Grundstilen
 export function autoStyle(song) {
   const m = song.meter || { beats: 4, beatType: 4 };
   const tempo = song.tempo || 100;
   const names = (song.parts || song.tracks || []).map((p) => p.name || '').join(' ');
+  const text = `${names} ${song.title || ''}`;
   const classicalNames = /(violin|viola|cello|violoncello|kontrabass|soprano|sopran|alto|tenor|bass\b|oboe|fagott|bassoon|horn in f|cembalo|organ|orgel)/i;
   const classicalCount = (song.parts || []).filter((p) => classicalNames.test(p.name || '')).length;
   if (classicalCount >= 3) return 'classical';
   if (/(composer|bach|mozart|beethoven|haydn|händel|handel|schubert|brahms|vivaldi)/i.test(song.composer || '')) return 'classical';
-  if (song.swing) return 'swing';
-  if (m.beatType === 8 && m.beats % 3 === 0) return tempo < 90 ? 'ballad' : 'polka';
-  if (m.beats === 3) return tempo < 110 ? 'ballad' : 'classical';
-  if (m.beats === 2) return 'polka';
-  if (tempo < 82) return 'ballad';
-  if (tempo >= 112 && tempo <= 140 && /(marsch|march|polka)/i.test(song.title || '')) return 'polka';
-  if (/(swing|jazz|blues)/i.test(names + ' ' + (song.title || ''))) return 'swing';
-  return 'funk';
+  // ausdrückliche Hinweise im Titel
+  if (/(walzer|waltz|valse)/i.test(text) && m.beats === 3) return 'waltz';
+  if (/\b(marsch|march|marcia)\b/i.test(text)) return 'march';
+  if (/polka/i.test(text)) return 'polka';
+  if (/(reggae|ska)/i.test(text)) return 'reggae';
+  if (/(samba|bossa|salsa|latin|mambo|cha.?cha|rumba)/i.test(text)) return 'latin';
+  if (/(blues|shuffle|boogie)/i.test(text)) return 'blues';
+  if (/(swing|jazz)/i.test(text)) return 'swing';
+  if (/(second line|new orleans)/i.test(text)) return 'secondline';
+  if (song.swing) return tempo < 104 ? 'blues' : 'swing';
+  if (m.beatType === 8 && m.beats % 3 === 0) return tempo < 90 ? 'ballad' : m.beats >= 12 ? 'blues' : 'polka';
+  if (m.beats === 3) return tempo < 100 ? 'ballad' : tempo < 126 ? 'classical' : 'waltz';
+  if (m.beats === 2) return tempo < 112 ? 'march' : 'polka';
+  if (tempo < 74) return 'ballad';
+  const s16 = sixteenthShare(song);
+  if (tempo >= 106 && tempo <= 138 && fourOnFloor(song)) return 'disco';
+  if (tempo < 92) return s16 >= 0.22 ? 'soul' : 'ballad';
+  if (tempo <= 126) return s16 >= 0.3 ? 'funk' : s16 >= 0.18 ? 'soul' : 'pop';
+  if (tempo <= 150) return s16 >= 0.25 ? 'funk' : 'pop';
+  return 'rock';
 }
 
 // Muster auf die Taktlänge (in 16teln) zuschneiden/wiederholen

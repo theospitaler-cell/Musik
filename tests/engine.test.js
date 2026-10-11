@@ -304,7 +304,9 @@ test('Stil „Automatisch“ wählt passend zum Song', () => {
   assert.ok(grace.options.styleAuto);
   assert.equal(grace.style.id, 'ballad', '3/4, ruhig -> Ballade');
   const saints = arrange(demoSong('saints'), { style: 'auto', seed: 1 });
-  assert.equal(saints.style.id, 'funk');
+  // 4/4, mittleres Tempo, gerade Achtel ohne Sechzehntel-Synkopen -> Pop (Spielart der Ballade)
+  assert.equal(saints.style.key, 'pop');
+  assert.equal(saints.style.id, 'ballad');
   const solo = arrange(demoSong('grace'), { style: 'auto', ensemble: 'solo', soloInstrument: 'trumpet' });
   assert.equal(solo.style.id, 'ballad');
 });

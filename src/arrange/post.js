@@ -567,6 +567,7 @@ export function tempoTerm(bpm) {
 
 export function tempoHeading(style, bpm) {
   // kurz & üblich: Stil- bzw. Tempowort, Metronomzahl folgt separat
+  if (style.heading) return { text: style.heading, hint: style.hint ?? null };
   switch (style.id) {
     case 'swing':
       return { text: bpm < 110 ? 'Slow Swing' : bpm < 170 ? 'Medium Swing' : 'Up-Tempo Swing', hint: 'Achtel triolisch' };

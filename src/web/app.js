@@ -26,7 +26,24 @@ import { groupLibrary, mergeFolders, sameFolders, songTitleOf, uniqueFolderName 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const VOICE_COLORS = ['#1f3a5f', '#4f6d8f', '#8a6a2f', '#5b5f66', '#2f7d4f', '#7a4a5c', '#3f6f73', '#6a5f8f'];
-const STYLE_TAG = { auto: 'Passend zum Song', funk: 'Funk', secondline: 'New Orleans', swing: 'Jazz', ballad: 'Pop', classical: 'Klassik', polka: 'Blasmusik' };
+const STYLE_TAG = {
+  auto: 'Passend zum Song',
+  funk: 'Funk',
+  secondline: 'New Orleans',
+  swing: 'Jazz',
+  ballad: 'Ruhig',
+  classical: 'Klassik',
+  polka: 'Blasmusik',
+  pop: 'Pop',
+  rock: 'Rock',
+  soul: 'Soul',
+  latin: 'Latin',
+  reggae: 'Offbeat',
+  disco: 'Dance',
+  blues: 'Blues',
+  march: 'Blasmusik',
+  waltz: '3/4',
+};
 
 const S = {
   settings: null,
