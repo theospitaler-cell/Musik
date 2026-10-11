@@ -397,7 +397,8 @@ test('Dichte-Dramaturgie: Strophe dünn (Melodie, Bass, Einwürfe), Refrain voll
   const first = theme[0];
   assert.equal(first.density, 'thin');
   const active = first.segments[0].roles.filter((r) => r !== 'rest').length;
-  assert.ok(active <= 3, `Strophe: ${first.segments[0].roles}`);
+  // dünn = Melodie, Antworten in den Pausen, ein Liegeklang, Bass (nie nur Melodie + Bass)
+  assert.ok(active <= 4, `Strophe: ${first.segments[0].roles}`);
   const chorus = theme.find((b) => b.density === 'full');
   assert.ok(chorus, 'Refrain voll');
   assert.ok(chorus.segments[0].roles.includes('double'), `Melodie im Refrain verdoppelt: ${chorus.segments[0].roles}`);

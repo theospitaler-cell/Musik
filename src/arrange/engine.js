@@ -115,9 +115,11 @@ export function arrange(songIn, options = {}) {
   const regPos = new Map(slots.order.map((v, k) => [v, k]));
   const byRegister = (vs) => [...vs].sort((a, b) => (regPos.get(a) ?? a) - (regPos.get(b) ?? b));
   const rng = new Rng(opts.seed);
-  // Tempo: Nutzerangabe > Vorlage (wenn stilgerecht) > Stil-Standard
+  // Tempo: Nutzerangabe > Tempo des Liedes (es soll wiedererkannt werden) > Stil-Standard.
+  // Nur bei „frei“ (adapt 2) bestimmt der Stil das Tempo, wenn das Lied nicht in seinen Bereich passt.
   let tempo = opts.tempo || null;
-  if (!tempo && song.tempo && style.tempoRange && song.tempo >= style.tempoRange[0] && song.tempo <= style.tempoRange[1]) tempo = song.tempo;
+  const inStyle = style.tempoRange && song.tempo >= style.tempoRange[0] && song.tempo <= style.tempoRange[1];
+  if (!tempo && song.tempo && (inStyle || Number(opts.adapt ?? 1) < 2)) tempo = song.tempo;
   tempo = Math.round(tempo || style.defaultTempo);
   const beat = song.meter.beatType === 8 && song.meter.beats % 3 === 0 && song.meter.beats > 3 ? (DIV * 3) / 2 : (DIV * 4) / song.meter.beatType;
   const prevState = insts.map(() => ({}));
@@ -322,6 +324,10 @@ export function arrange(songIn, options = {}) {
         rank++;
       }
 
+      // Melodie-Solo einer tieferen Stimme: leise Liegeklänge der höheren Stimmen dürfen darüber
+      // liegen (Background über dem Solisten – wie in gedruckten Sätzen)
+      if (b.feature && ctx.melodyVoice !== undefined)
+        for (let v = 0; v < N; v++) if (lines[v] && v !== ctx.melodyVoice && ['pad', 'comp'].includes(roles[v]) && regPos.get(v) < regPos.get(ctx.melodyVoice)) for (const e of lines[v]) e.above = true;
       // in absolute Zeit übertragen
       for (let v = 0; v < N; v++) {
         const l = lines[v];

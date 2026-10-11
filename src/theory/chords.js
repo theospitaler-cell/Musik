@@ -123,17 +123,21 @@ export function parseChord(symbol) {
   return buildChord(rootLof, kind, tensions, bassLof, String(symbol).trim());
 }
 
+// Akkordtöne ohne Doppel-Vorzeichen schreiben (Ges-Moll: A statt Heses) – so stehen sie in
+// gedruckten Stimmen
+const plain = (lof) => (lof <= -9 ? lof + 12 : lof >= 13 ? lof - 12 : lof);
+
 export function buildChord(rootLof, kind, tensions = [], bassLof = null, symbol = null) {
   const def = KINDS[kind] || KINDS.major;
   const rootPc = lofPc(rootLof);
   const tones = def.tones.map(([iv, role]) => {
     let [semi, lofOff] = IV[iv];
     if (role === 'fifth' && tensions.includes('b5') && kind === 'dominant') [semi, lofOff] = IV.b5;
-    return { pc: mod(rootPc + semi, 12), lof: rootLof + lofOff, role, iv };
+    return { pc: mod(rootPc + semi, 12), lof: plain(rootLof + lofOff), role, iv };
   });
   const tens = tensions
     .filter((x) => IV[x])
-    .map((iv) => ({ pc: mod(rootPc + IV[iv][0], 12), lof: rootLof + IV[iv][1], role: 'tension', iv }));
+    .map((iv) => ({ pc: mod(rootPc + IV[iv][0], 12), lof: plain(rootLof + IV[iv][1]), role: 'tension', iv }));
   const chord = {
     rootLof,
     rootPc,
@@ -174,7 +178,10 @@ export function kindText(c) {
 
 export function transposeChord(c, semis) {
   if (!c || semis === 0) return c;
-  const d = semisToLofDelta(semis);
+  let d = semisToLofDelta(semis);
+  // Grundton nach der Transposition nicht in exotischer Schreibweise (Eis-Moll -> F-Moll)
+  if (c.rootLof + d > 9) d -= 12;
+  else if (c.rootLof + d < -8) d += 12;
   return buildChord(c.rootLof + d, c.kind, c.tensions, c.bassLof === null ? null : c.bassLof + d);
 }
 

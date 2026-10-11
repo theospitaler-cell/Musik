@@ -222,7 +222,8 @@ export function sectionDensity(sections, song) {
 // Rollen (4 Funktionen) je Dichte, stilgerecht
 function densityRoles(density, style) {
   const harm = style.id === 'ballad' || style.id === 'classical' ? 'pad' : style.id === 'funk' || style.id === 'secondline' ? 'stabs' : 'comp';
-  if (density === 'thin') return ['melody', 'fill', 'rest', 'bass'];
+  // dünn heißt nicht leer: Melodie, ein Liegeklang darunter, Antworten in den Pausen, Bass
+  if (density === 'thin') return ['melody', 'fill', 'pad', 'bass'];
   if (density === 'build') return ['melody', 'pad', 'counter', 'bass'];
   return ['melody', harm, harm === 'pad' ? 'pad' : 'comp', 'bass'];
 }
@@ -420,7 +421,7 @@ export function planArrangement(songIn, opts) {
       if (mode === 'theme' && !firstOfLabel.has(sec.label)) firstOfLabel.set(sec.label, mv);
       if (type === 'shout') roles = ['tutti', 'tutti', 'tutti', 'bass'];
       else if (mode === 'theme' && mv === 0) roles = densityRoles(dens.density[i], style);
-      else if (feature) roles = mv === 2 ? ['fill', 'rest', 'melody', 'bass'] : ['fill', 'melody', 'comp', 'bass'];
+      else if (feature) roles = mv === 2 ? ['fill', 'pad', 'melody', 'bass'] : ['fill', 'melody', 'pad', 'bass'];
       else roles = themeRoles(mv, insts, i + pass);
       if (type === 'shout') mv = 0;
       prevVoice = mv;

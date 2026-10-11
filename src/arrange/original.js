@@ -95,6 +95,28 @@ export function toneUnder(upper, chord, scale, last, lo, hi, taken, melPc) {
   return best;
 }
 
+// Läuft eine Begleitstimme mit der Melodie mit (Parallelstimme)? Gleiche Einsätze UND gleiche
+// Bewegungsrichtung – Akkord-Einwürfe, die nur zufällig mit Melodietönen zusammenfallen, nicht.
+// melody/guide: [{start, midi}] bzw. Ereignisse mit pitches
+export function movesTogether(guide, melody) {
+  if (!guide || guide.length < 8 || !melody || !melody.length) return false;
+  const pitch = (n) => n.midi ?? n.pitches[0];
+  const melBy = new Map(melody.map((n) => [n.start, pitch(n)]));
+  const pairs = guide.filter((n) => melBy.has(n.start)).map((n) => [melBy.get(n.start), pitch(n)]);
+  let moves = 0;
+  let parallel = 0;
+  for (let i = 1; i < pairs.length; i++) {
+    const dm = Math.sign(pairs[i][0] - pairs[i - 1][0]);
+    const dg = Math.sign(pairs[i][1] - pairs[i - 1][1]);
+    if (!dm && !dg) continue;
+    moves++;
+    if (dm === dg) parallel++;
+  }
+  // Parallelstimmen liegen in Terzen und Sexten (auch Quarten) unter der Melodie
+  const sweet = pairs.filter(([m, g]) => [3, 4, 5, 8, 9].includes((((m - g) % 12) + 12) % 12)).length;
+  return pairs.length / guide.length >= 0.7 && pairs.length >= 0.4 * melody.length && moves >= 6 && parallel / moves >= 0.7 && sweet / pairs.length >= 0.6;
+}
+
 // Oktavlage für eine Basslinie: im Umfang, und so, dass auch die tiefen Töne der Linie noch im
 // bequemen Bereich liegen (ein E-Bass reicht tiefer als Tuba/Posaune gut klingen)
 export function bassOctave(notes, inst) {
@@ -228,21 +250,7 @@ export function buildOriginalEnsemble(song, insts, slots) {
   const guideOnsets = guides.flatMap((g) => g.map((n) => n.start));
   // (gleiche Einsätze UND gleiche Bewegungsrichtung – Akkord-Einwürfe, die nur zufällig mit
   // Melodietönen zusammenfallen, zählen nicht)
-  let together = false;
-  if (guides[0] && guides[0].length >= 16) {
-    const melBy = new Map(melLine.map((n) => [n.start, n.midi]));
-    const pairs = guides[0].filter((n) => melBy.has(n.start)).map((n) => [melBy.get(n.start), n.midi]);
-    let moves = 0;
-    let parallel = 0;
-    for (let i = 1; i < pairs.length; i++) {
-      const dm = Math.sign(pairs[i][0] - pairs[i - 1][0]);
-      const dg = Math.sign(pairs[i][1] - pairs[i - 1][1]);
-      if (!dm && !dg) continue;
-      moves++;
-      if (dm === dg) parallel++;
-    }
-    together = pairs.length / guides[0].length >= 0.7 && pairs.length >= 0.4 * melLine.length && moves >= 8 && parallel / moves >= 0.6;
-  }
+  const together = movesTogether(guides[0], melLine);
   // Sonst sind es Akkord-Einwürfe (Gitarre/Klavier/Streicher): es zählt ihr gemeinsamer Rhythmus
   // – die Stellen, an denen mehrere Begleittöne zugleich einsetzen. Die Töne selbst werden als
   // Akkordtöne sauber geführt und klingen bis zum nächsten Einwurf (Liegeklang im Rhythmus).

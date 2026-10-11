@@ -36,10 +36,15 @@ export function keepLeadOnTop(arr, report) {
   const allowed = arr._crossAllowed || (arr._crossAllowed = new Set());
   arr.voices.forEach((line, vi) => {
     for (const e of line.events) {
-      if (LEAD.has(e.role) || e.role === 'double' || e.role === 'final' || e.role === 'tutti') continue;
+      if (LEAD.has(e.role) || e.role === 'double' || e.role === 'final' || e.role === 'tutti' || e.above) continue;
       const lead = leadVoiceAt(arr, e.start);
       if (!lead || lead.v === line) continue;
-      const lm = lead.e.pitches[0];
+      // kurze Abstecher der Melodie nach unten zählen nicht: maßgeblich ist ihre Lage ringsum
+      let lm = lead.e.pitches[0];
+      if (lead.e.dur <= arr.beat / 2 && HARMONY.has(e.role) && e.dur >= arr.beat) {
+        const near = lead.v.events.filter((x) => LEAD.has(x.role) && Math.abs(x.start - e.start) <= arr.mt).map((x) => x.pitches[0]).sort((a, b) => a - b);
+        if (near.length >= 3) lm = Math.max(lm, near[Math.floor(near.length / 2)] - 2);
+      }
       if (top(e) <= lm) continue;
       // erlaubte, klanglich motivierte Überschneidungen: Fill/Gegenstimme über einem gehaltenen
       // Melodieton (Antwort in der Lücke) und kurze Durchgangstöne

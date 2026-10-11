@@ -3,7 +3,7 @@
 // Akkord-Einwürfe) – statt eines beliebigen Stil-Musters.
 import { DIV, mod } from '../../core/constants.js';
 import { ev, addArt, cleanLine, soundingAt } from '../context.js';
-import { chordToneFor, toneUnder, tidy } from '../original.js';
+import { chordToneFor, toneUnder, tidy, movesTogether } from '../original.js';
 import { scalePcs } from '../../theory/keys.js';
 
 const medianOf = (xs) => {
@@ -97,13 +97,21 @@ export function sourceComp(ctx, v, kind, { guide = null, others = [], partners =
   const guideBy = new Map((guide || []).map((n) => [n.start, n]));
   // Parallelstimme (läuft mit der Melodie mit): Töne wie gehört. Sonst – Akkord-Einwürfe von
   // Gitarre/Klavier – zählt der Rhythmus; die Töne werden sauber als Akkordtöne geführt.
-  let together = false;
-  if (guide && guide.length >= 6 && ctx.melodyLine && ctx.melodyLine.length) {
-    const melOn = new Set(ctx.melodyLine.map((e) => e.start));
-    together = guide.filter((n) => melOn.has(n.start)).length / guide.length >= 0.7;
-  }
+  const together = movesTogether(guide, ctx.melodyLine);
   let last = ctx.lastPitch(v, Math.round(inst.comfort[0] + (inst.comfort[1] - inst.comfort[0]) * 0.45));
   if (last < inst.range[0] || last > inst.range[1]) last = Math.round((inst.comfort[0] + inst.comfort[1]) / 2);
+  // Heimatlage: nach tiefen Stellen kehrt die Stimme in ihre gute Lage zurück
+  const home = Math.round(inst.comfort[0] + (inst.comfort[1] - inst.comfort[0]) * 0.5);
+  // Decke: die Melodie – aber nicht jeder kurze Abstecher nach unten, sondern ihre Lage im Takt
+  const melCeil = (t) => {
+    if (!lead) return null;
+    const a0 = Math.floor(t / ctx.mt) * ctx.mt;
+    const ps = lead.filter((e) => e.start >= a0 && e.start < a0 + ctx.mt).map((e) => e.pitches[0]);
+    const now = soundingAt(lead, t);
+    if (!ps.length) return now;
+    const med = medianOf(ps);
+    return now === null ? med : Math.max(now, med - 2);
+  };
   const out = [];
   for (let bar = 0; bar < ctx.measures; bar++) {
     const a = bar * ctx.mt;
@@ -116,9 +124,20 @@ export function sourceComp(ctx, v, kind, { guide = null, others = [], partners =
       seen.add(t);
       onsets.push([t, d]);
     };
-    for (const n of (guide || []).filter(inBar)) add(n.start, n.dur);
-    for (const g of others) for (const n of g.filter(inBar)) add(n.start, n.dur);
-    for (const p of partners) for (const e of p.filter(inBar)) add(e.start, e.dur);
+    if (together) {
+      for (const n of (guide || []).filter(inBar)) add(n.start, n.dur);
+      for (const g of others) for (const n of g.filter(inBar)) add(n.start, n.dur);
+      for (const p of partners) for (const e of p.filter(inBar)) add(e.start, e.dur);
+    } else {
+      // Akkord-Einwürfe: nur die Stellen, an denen die Begleitung gemeinsam einsetzt
+      const all = [guide || [], ...others].filter((g) => g.length);
+      const count = new Map();
+      for (const g of all) for (const n of g.filter(inBar)) count.set(n.start, (count.get(n.start) || 0) + 1);
+      const need = all.length >= 2 ? 2 : 1;
+      for (const t of [...count.keys()].sort((x, y) => x - y)) if (count.get(t) >= need) add(t, DIV / 2);
+      // Akkordwechsel ohne Einwurf: neu ansetzen
+      if (onsets.length) for (const c of ctx.chords) if (c.start >= a && c.start < b && !onsets.some(([t]) => Math.abs(t - c.start) <= DIV / 2)) add(c.start, DIV / 2);
+    }
     let pad = false;
     if (!onsets.length) {
       pad = true;
@@ -141,7 +160,7 @@ export function sourceComp(ctx, v, kind, { guide = null, others = [], partners =
       }
     }
     for (const [t, d] of onsets) {
-      const m = lead ? soundingAt(lead, t) : null;
+      const m = melCeil(t);
       const ups = partners.map((p) => soundingAt(p, t)).filter((x) => x !== null);
       let hi = Math.min(inst.range[1], inst.comfort[1] + 2);
       if (m !== null) hi = Math.min(hi, m - 1);
@@ -173,7 +192,7 @@ export function sourceComp(ctx, v, kind, { guide = null, others = [], partners =
         const upper = ups.length ? Math.min(...ups) : m;
         if (upper !== null) pick = toneUnder(upper, chord, scale, Math.min(Math.max(last, lo), hi), lo, hi, taken, melPc);
       }
-      if (!pick) pick = chordToneFor(chord, Math.min(Math.max(last, lo), hi), lo, hi, taken, melPc, g ? mod(g.midi + melShift, 12) : null);
+      if (!pick) pick = chordToneFor(chord, Math.min(Math.max(Math.round(0.7 * last + 0.3 * home), lo), hi), lo, hi, taken, melPc, g ? mod(g.midi + melShift, 12) : null);
       if (!pick) continue;
       out.push({ start: t, dur: Math.min(d, ctx.len - t), midi: pick.midi, lof: pick.lof });
       last = pick.midi;
