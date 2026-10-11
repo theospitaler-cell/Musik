@@ -16,6 +16,8 @@ import { BlockCtx, cleanLine, ev } from './context.js';
 import { articulate } from './gen/melody.js';
 import { embellishLine } from './embellish.js';
 import { genDrumsSegment, drumsFromNotes, addGrooveFills, varyDrums } from './gen/drums.js';
+import { buildOriginalEnsemble } from './original.js';
+import { voiceSlots } from './planner.js';
 import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, newReport, keyAtFactory } from './post.js';
 
 function letterOf(n) {
@@ -114,6 +116,12 @@ export function chordLine(song, kind, inst) {
 // „Original übernehmen“ für mehrere Instrumente: Melodie in Stimme 1, Bass-Spur (oder Grundtöne im
 // Groove) in der tiefsten Stimme, weitere Original-Spuren nach Lage, fehlende Stimmen aus der Harmonik
 export function originalEnsembleParts(song, voices, slots) {
+  // voller Satz: Melodie, Basslinie und Begleitstimmen der Vorlage, Lücken mit Akkordtönen im
+  // selben Rhythmus (siehe original.js)
+  if (slots) {
+    const mids = slots.order.filter((x) => x !== slots.lead && x !== slots.bass);
+    return voices.map((inst, v) => ({ source: v === slots.lead ? 'melody' : v === slots.bass ? 'ens:bass' : `ens:mid${mids.indexOf(v)}`, inst }));
+  }
   const tracks = (song.tracks || []).filter((t) => !t.mel && t.notes.length >= 4);
   const med = (t) => {
     const ps = t.notes.map((n) => n.midi).sort((a, b) => a - b);
@@ -192,6 +200,7 @@ export function arrangePlayAlong(song, opts) {
   const sections = song.sections.length ? song.sections : [{ label: 'A', start: 0, length: M }];
   const sources = playAlongSources(song);
   const CHORD_NAMES = { 'chords:bass': 'Bass (Grundtöne im Groove)', 'chords:third': 'Harmonie (Terz)', 'chords:guide': 'Harmonie (Septime/Quinte)', 'chords:root': 'Harmonie (Grundton)' };
+  let ens = null; // voller Satz für „Original übernehmen“ (bei Bedarf gebaut)
   const srcName = (id) => CHORD_NAMES[id] || sources.find((s) => s.id === id)?.name || id;
   let parts = (opts.playParts && opts.playParts.length ? opts.playParts : defaultPlayParts(opts)).filter((p) => p && p.source && p.inst);
   // Schlagzeug höchstens einmal, nur aus der Schlagzeug-Quelle
@@ -240,12 +249,19 @@ export function arrangePlayAlong(song, opts) {
   const voices = [];
   const levels = [];
   const notes = [];
+  const partInst = (p, i) => withRange(difficultyRange(getInstrument(p.inst), levelFor({ difficulty: opts.difficulty, voiceDifficulty: opts.voiceDifficulty }, i)), opts.ranges ? opts.ranges[i] : null);
+  if (melodicParts.some((p) => p.source.startsWith('ens:'))) {
+    const insts = melodicParts.map(partInst);
+    ens = buildOriginalEnsemble(song, insts, voiceSlots(insts));
+  }
   melodicParts.forEach((p, i) => {
     const lv = levelFor({ difficulty: opts.difficulty, voiceDifficulty: opts.voiceDifficulty }, i);
     levels.push(lv);
-    const inst = withRange(difficultyRange(getInstrument(p.inst), lv), opts.ranges ? opts.ranges[i] : null);
+    const inst = partInst(p, i);
     let src;
-    if (p.source === 'melody') src = song.melody;
+    const fixed = p.source.startsWith('ens:') && ens && ens.lines[i];
+    if (fixed) src = ens.lines[i];
+    else if (p.source === 'melody') src = song.melody;
     else if (p.source.startsWith('chords:')) src = chordLine(song, p.source.slice(7), inst);
     else {
       const t = (song.tracks || []).find((x) => x.id === p.source);
@@ -253,12 +269,12 @@ export function arrangePlayAlong(song, opts) {
       src = t ? monoLine(t.notes, low) : [];
     }
     const mel = src.filter((n) => n.start + off >= 0 && n.start < endTick - off);
-    const octave = fitOctave(mel, inst).shift; // eine Oktavlage für die ganze Stimme
+    const octave = fixed ? 0 : fitOctave(mel, inst).shift; // eine Oktavlage für die ganze Stimme
     const ctx = new BlockCtx({ style, rng: rng.fork(`v${i}`), key, meter: song.meter, measures: totalBars, chords: chordTrack, tempo, inst: [inst], block: blocks[0], prevState: [{}] });
     let line = cleanLine(mel.map((n) => ev(n.start + off, n.dur, n.midi + octave, n.lof ?? null)));
     articulate(ctx, line, inst);
     line = line.map((e) => ({ ...e, role: 'melody' }));
-    voices.push({ inst, events: line, dirs: [], label: srcName(p.source).replace(/\s*\((erkannt|Melodie)\)$/, ''), source: p.source });
+    voices.push({ inst, events: line, dirs: [], label: fixed ? ens.names[i] : srcName(p.source).replace(/\s*\((erkannt|Melodie)\)$/, ''), source: p.source });
     if (octave) notes.push(`${srcName(p.source)} → ${inst.name}: um ${Math.abs(octave / 12)} Oktave${Math.abs(octave) > 12 ? 'n' : ''} ${octave > 0 ? 'höher' : 'tiefer'} gesetzt (gleiche Töne wie die Vorlage).`);
   });
 
