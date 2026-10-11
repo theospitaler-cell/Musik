@@ -4,7 +4,7 @@
 // Wählbar: welche Stimmen der Vorlage (Gesang, Bass, Gitarre, Schlagzeug …) übernommen
 // werden und auf welchem Instrument sie gespielt werden – eine, mehrere oder alle.
 // Beim Schlagzeug kommen auf Wunsch Fills dazu, die im Groove bleiben.
-import { DIV } from '../core/constants.js';
+import { DIV, dynFromEnergy } from '../core/constants.js';
 import { Rng } from '../core/rng.js';
 import { keyName, keyNameDe } from '../theory/keys.js';
 import { normalizeChords, songMeasureTicks, makeBarGrid, hasMeterChanges } from '../model/song.js';
@@ -18,7 +18,7 @@ import { embellishLine } from './embellish.js';
 import { genDrumsSegment, drumsFromNotes, addGrooveFills, varyDrums } from './gen/drums.js';
 import { buildOriginalEnsemble } from './original.js';
 import { voiceSlots } from './planner.js';
-import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, newReport, keyAtFactory } from './post.js';
+import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, tempoTerm, newReport, keyAtFactory } from './post.js';
 
 function letterOf(n) {
   return n < 26 ? String.fromCharCode(65 + n) : String.fromCharCode(65 + (n % 26)) + (Math.floor(n / 26) + 1);
@@ -222,7 +222,8 @@ export function arrangePlayAlong(song, opts) {
       measures: sec.length,
       startBar: leadBars + sec.start,
       rehearsal: letterOf(i),
-      dyn: style.dyn.theme,
+      // Aufnahme: Lautstärke des Formteils wie im Original
+      dyn: typeof sec.energy === 'number' ? dynFromEnergy(sec.energy) : style.dyn.theme,
       intensity: 0.6,
       key,
       keyShift: 0,
@@ -351,7 +352,8 @@ export function arrangePlayAlong(song, opts) {
   }
   for (const v of voices) v.dirs.sort((a, b) => a.t - b.t);
   if (drums) drums.dirs.sort((a, b) => a.t - b.t);
-  const th = tempoHeading(style, tempo);
+  // 1:1 aus der Vorlage: neutrale Tempobezeichnung (der gewählte Stil spielt hier keine Rolle)
+  const th = ens ? { text: tempoTerm(tempo), hint: null } : tempoHeading(style, tempo);
   report.notes = notes;
   const who = [...voices.map((v) => v.inst.name), ...(drums ? ['Schlagzeug'] : [])];
   return {

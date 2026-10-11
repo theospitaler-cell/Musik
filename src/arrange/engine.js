@@ -439,6 +439,13 @@ export function arrange(songIn, options = {}) {
   applyDynamics(arr);
   simplifyForReading(arr, song.meter);
   addPerformanceMarks(arr);
+  // Tempoverlauf der Vorlage (rit., accel., neues Tempo) – die Wiedergabe wird langsamer und
+  // schneller wie das Lied, in den Noten stehen die Angaben an denselben Stellen
+  const stm = sourceTempoMap(song, blocks, mt, tempo);
+  if (stm) {
+    arr.tempoMap = stm.map;
+    for (const m of stm.marks) for (const v of voices) v.dirs.push({ ...m });
+  }
   spellAll(arr);
   // Kopien (D.S.-Durchgang, wiederholte Tags) einsetzen
   const copyRange = (list, getT, setT, c) => {
@@ -521,7 +528,7 @@ export function arrange(songIn, options = {}) {
       tempo,
       tempoText: th.text,
       styleHint: th.hint,
-      swing: style.feel === 'swing8',
+      swing: style.feel === 'swing8' || !!song.swing, // auch das Swing-Gefühl der Vorlage
     },
     song,
     style,
@@ -546,6 +553,57 @@ export function arrange(songIn, options = {}) {
     levels: arr.levels,
     roleNames: ROLE_NAMES,
   };
+}
+
+// Tempo je Takt aus der Vorlage, übertragen auf die Takte des Arrangements. Nur echte Änderungen
+// (ab 4 % Abweichung vom Grundtempo) – kleines Schwanken einer Aufnahme bleibt unberücksichtigt.
+function sourceTempoMap(song, blocks, mt, tempo) {
+  const marks = (song.tempoMarks || []).filter((x) => !(x.kind === 'tempo' && x.bar === 0));
+  if (!marks.length) return null;
+  const scale = song.tempo ? tempo / song.tempo : 1;
+  let barBpm = () => null;
+  const tg = song.timing;
+  if (tg && tg.beatSec && tg.beatSec.length > 2) {
+    const bt = tg.beatTicks || DIV;
+    const bpb = mt / bt;
+    const compound = song.meter.beatType === 8 && song.meter.beats % 3 === 0 && song.meter.beats > 3;
+    barBpm = (bar) => {
+      const a = tg.firstBeat + bar * bpb;
+      const z = a + bpb;
+      if (a < 0 || z >= tg.beatSec.length || a !== Math.floor(a)) return null;
+      const bpm = (60 * bpb) / (tg.beatSec[z] - tg.beatSec[a]);
+      return compound ? bpm * 1.5 : bpm;
+    };
+  } else if (song.tempoEvents && song.tempoEvents.length > 1) {
+    barBpm = (bar) => {
+      let v = song.tempoEvents[0].bpm;
+      for (const e of song.tempoEvents) if (e.t <= bar * mt) v = e.bpm;
+      return v;
+    };
+  } else return null;
+  const map = [];
+  let last = null;
+  for (const b of blocks) {
+    for (let k = 0; k < b.measures; k++) {
+      let bpm = b.source ? barBpm(b.source.from + k) : null;
+      if (bpm === null || Math.abs(bpm - song.tempo) / song.tempo < 0.04) bpm = song.tempo;
+      const v = Math.round(bpm * scale);
+      if (last === null || v !== last) {
+        map.push({ t: (b.startBar + k) * mt, bpm: v });
+        last = v;
+      }
+    }
+  }
+  if (!map.length || map[0].t !== 0) map.unshift({ t: 0, bpm: Math.round(tempo) });
+  const out = [];
+  for (const tm of marks) {
+    for (const b of blocks) {
+      if (!b.source || tm.bar < b.source.from || tm.bar >= b.source.to) continue;
+      const t = (b.startBar + tm.bar - b.source.from) * mt;
+      out.push(tm.kind === 'tempo' ? { t, kind: 'metro', bpm: Math.round(tm.bpm * scale), meter: song.meter } : { t, kind: 'words', text: { rit: 'rit.', accel: 'accel.', atempo: 'a tempo' }[tm.kind] });
+    }
+  }
+  return { map, marks: out };
 }
 
 // Melodie-Verdopplung für große Besetzungen: Oktave tiefer, wenn bequem spielbar, sonst eine

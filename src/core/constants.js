@@ -47,6 +47,11 @@ export function dynVelocity(d) {
   return [40, 52, 66, 80, 96, 112][dynIndex(d)];
 }
 
+// Lautstärke eines Formteils der Aufnahme (0..1, relativ zum Lied) -> Dynamikstufe
+export function dynFromEnergy(e) {
+  return e < 0.18 ? 'p' : e < 0.4 ? 'mp' : e < 0.62 ? 'mf' : e < 0.84 ? 'f' : 'ff';
+}
+
 export function clamp(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
 }

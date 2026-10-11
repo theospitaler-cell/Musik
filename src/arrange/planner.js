@@ -1,5 +1,5 @@
 // Formplanung & Rollenverteilung ("Regieplan").
-import { mod } from '../core/constants.js';
+import { mod, dynFromEnergy } from '../core/constants.js';
 import { buildChord, transposeChord } from '../theory/chords.js';
 import { transposeKey } from '../theory/keys.js';
 import { semisToLofDelta } from '../theory/pitch.js';
@@ -657,6 +657,13 @@ export function planArrangement(songIn, opts) {
     if (b.type !== 'theme' || !b.density) continue;
     const base = style.dyn.theme || 'mf';
     b.dyn = b.density === 'full' ? up(base, 1) : b.density === 'thin' && style.id === 'ballad' ? up(base, -1) : base;
+  }
+  // Aufnahme: die Lautstärken des Originals übernehmen (leise Strophe, lauter Refrain …)
+  for (const b of blocks) {
+    const sec = b.source ? sections.find((x) => x.start === b.source.from) : null;
+    if (!sec || typeof sec.energy !== 'number') continue;
+    if (b.type === 'theme' || b.type === 'interlude') b.dyn = dynFromEnergy(sec.energy);
+    else if (b.type === 'shout') b.dyn = up(dynFromEnergy(sec.energy), sec.energy < 0.84 ? 1 : 0);
   }
   // Rollen der 4 Funktionen auf die echten Stimmen (2–8) verteilen
   for (const b of blocks) {
