@@ -432,6 +432,34 @@ function tempoSalience(A, lag) {
 }
 const tempoPrior = (bpm) => Math.exp(-0.5 * Math.pow(Math.log2(bpm / 105) / 0.8, 2));
 
+// Takt-Periode: Wiederholt sich das Rhythmus-Muster in einem Abstand von 1,2–4,5 s deutlich
+// stärker als in allen anderen (typisch: ein Takt oder zwei), muss der Schlag diese Periode
+// ganzzahlig teilen. Das schließt Schein-Tempi aus, die nur aus einer Synkopen-Figur stammen
+// (z. B. punktierte Achtel = 4/3 des Tempos – die Figur passt nie in den Takt).
+const BAR_DIVS = [2, 3, 4, 6, 8, 12, 16];
+export function dominantPeriod(A, n) {
+  const lo = Math.round(1.2 * FR);
+  const hi = Math.min(Math.round(4.5 * FR), Math.floor(n / 3));
+  const peaks = [];
+  for (let l = lo; l <= hi; l++) {
+    const v = A(l);
+    if (v > 0 && v >= A(l - 1) && v >= A(l + 1) && v >= A(l - 2) && v >= A(l + 2)) peaks.push({ l, v });
+  }
+  if (!peaks.length) return null;
+  peaks.sort((a, b) => b.v - a.v);
+  const top = peaks[0];
+  // Vielfache/Teiler derselben Periode (halber, doppelter Takt) sind keine Konkurrenten
+  const related = (l) => [1 / 3, 1 / 2, 2 / 3, 1, 3 / 2, 2, 3].some((r) => Math.abs(Math.log(l / (top.l * r))) < 0.04);
+  const rival = peaks.find((p) => !related(p.l));
+  if (rival && top.v < 1.15 * rival.v) return null;
+  // Lage der Spitze auf Bruchteile eines Frames genau (Parabel)
+  const a = A(top.l - 1);
+  const b = top.v;
+  const c = A(top.l + 1);
+  const d = a - 2 * b + c;
+  return top.l + (d < 0 ? (0.5 * (a - c)) / d : 0);
+}
+
 // Tempokurve: globales Tempo + örtliches Tempo je Fenster (Viterbi über die Fenster,
 // Sprünge kosten, bleiben aber möglich – für Tempowechsel zwischen Formteilen und rit.)
 export function tempoCurve(os) {
@@ -441,7 +469,10 @@ export function tempoCurve(os) {
   let gBest = 105;
   let gScore = -Infinity;
   const gS = TEMPO_CANDS.map((bpm) => tempoSalience(Ag, (60 * FR) / bpm));
+  const bar = dominantPeriod(Ag, n);
+  const fitsBar = (bpm) => !bar || BAR_DIVS.some((k) => Math.abs(Math.log(bar / k / ((60 * FR) / bpm))) < 0.025);
   TEMPO_CANDS.forEach((bpm, k) => {
+    if (!fitsBar(bpm)) return;
     const sc = gS[k] * tempoPrior(bpm);
     if (sc > gScore) {
       gScore = sc;
