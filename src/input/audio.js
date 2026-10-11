@@ -13,7 +13,8 @@ import { detectKey } from '../theory/keys.js';
 import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
 import { fuseMelody } from './ai-pitch.js';
-import { cleanPoly, separateVoices, simplifyLine, tidyAiNotes } from './voices.js';
+import { cleanPoly, separateVoices, simplifyLine, tidyAiNotes, withFastNotes } from './voices.js';
+import { makeAttackDetector, markFastNotes, fineChains } from './fast.js';
 import { barFeatures, audioSections } from './form.js';
 
 const SR = 22050;
@@ -1373,13 +1374,17 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
   return drumHitsFromActivations(feat.drumAct, bf, firstDown, meterBeats, measureCount, sections, { compound, frameToBeat, wash: feat.sustainHigh, perc: feat.percHigh });
 }
 
-// Wird erhöht, wenn die Analyse deutlich bessere Ergebnisse liefert (Hinweis „neu analysieren“)
-export const ANALYSIS_VERSION = 3;
+// Wird erhöht, wenn die Analyse deutlich bessere Ergebnisse liefert (Hinweis „neu analysieren“;
+// gespeicherte Aufnahmen werden beim Öffnen einmalig neu berechnet).
+//   4: schnelle Läufe und Tonwiederholungen (Anschlag-Erkennung), Halbtempo-Korrektur ab 150 BPM
+export const ANALYSIS_VERSION = 4;
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
 export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null } = {}) {
-  // KI-Rohnoten: Fragmente unter 120 ms weg, Vibrato/kurze Abrisse zu gehaltenen Tönen
-  const ai = aiRaw && aiRaw.length ? tidyAiNotes(aiRaw) : aiRaw;
+  // KI-Rohnoten: Fragmente unter 120 ms weg, Vibrato/kurze Abrisse zu gehaltenen Tönen – es sei
+  // denn, zwischen den Teilen liegt ein echter Anschlag (Transient auf den Teiltönen dieses Tons)
+  const attack = aiRaw && aiRaw.length ? makeAttackDetector(mono, SR).reattack : null;
+  const ai = aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack }) : aiRaw;
   onProgress('Spektrum wird analysiert', 0);
   const feat = analyzeFrames(mono, onProgress);
   onProgress('Tempo & Beats werden erkannt', 0.46);
@@ -1389,6 +1394,8 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   const comb = new Float32Array(feat.nFrames);
   for (let i = 0; i < comb.length; i++) comb[i] = fluxNorm[i] + 0.7 * lowNorm[i];
   let { beats, bpm, onset, barLag } = trackBeats(comb);
+  let halfTimeFixed = false;
+  let pulseRatio = null; // Bass Drum + Snare zwischen den Schlägen im Verhältnis zu denen auf den Schlägen
   // Halbes Tempo erkannt? Dann liegt die Snare (Backbeat) zwischen den Schlägen -> verdoppeln
   {
     const midN = bandNorm(feat.midF);
@@ -1412,6 +1419,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     const ks = (f) => Math.max(kickSnare[Math.round(f) - 1] || 0, kickSnare[Math.round(f)] || 0, kickSnare[Math.round(f) + 1] || 0);
     const kOn = mean(beats.slice(0, -1).map(ks));
     const kOff = mean(beats.slice(0, -1).map((b, i) => ks((b + beats[i + 1]) / 2)));
+    pulseRatio = kOn > 0.2 ? kOff / kOn : null;
     // … aber nur, wenn das Rhythmus-Muster dann einen Dreiertakt ergibt (oder keine Takt-Periode
     // erkennbar ist): im geraden Takt sind starke Achtel-Zwischenschläge normales Synkopen-Spiel
     const bb = barLag ? barLag / medianIbi(beats) : null;
@@ -1425,6 +1433,24 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       }
       beats = dbl;
       bpm *= 2;
+    }
+  }
+  // Plausibilität bei langsamem Tempo: häufen sich regelmäßige Ketten aus 32teln (Abstand 0,09–0,17
+  // Schlag, mindestens 5 % der Töne) und liegen Bass Drum/Snare auch zwischen den Schlägen, hat die
+  // Erkennung die Hälfte gewählt (150 als 75: die Sechzehntel wären 32tel) – Oktav-Korrektur auf das
+  // doppelte Tempo. Echte langsame Lieder (Balladen mit Sechzehntel-Hi-Hat, Gitarrenzupfen) haben
+  // kaum solche Ketten und bleiben unberührt.
+  if (aiRaw && aiRaw.length >= 32 && bpm >= 50 && bpm < 92 && bpm * 2 <= 190 && beats.length >= 8 && pulseRatio !== null && pulseRatio >= 0.6) {
+    const fc = fineChains(aiRaw, 60 / bpm);
+    if (fc.chains >= 3 && fc.notes >= 16 && fc.share >= 0.05) {
+      const dbl = [];
+      for (let i = 0; i < beats.length; i++) {
+        dbl.push(beats[i]);
+        if (i + 1 < beats.length) dbl.push(Math.round((beats[i] + beats[i + 1]) / 2));
+      }
+      beats = dbl;
+      bpm *= 2;
+      halfTimeFixed = true;
     }
   }
   // Schnelle, durchsynkopierte Stücke (fast die Hälfte aller Einsätze auf Sechzehntel-Zwischen-
@@ -1530,7 +1556,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // 16tel-Raster (ab Tempo 150 Achtel – schneller spielt und liest niemand); bei Swing liegen
   // Offbeats auf der Triole -> als gerade Achtel notiert
   const GRID = bpm >= 150 ? DIV / 2 : 6;
-  const toTick = (sec) => {
+  // g: feineres Raster für Noten schneller Läufe/Wiederholungen (16tel 6, Triolen-Achtel 8,
+  // 16tel-Triolen 4, 32tel 3 Ticks) – das Raster hängt am Schlag, nicht an den Notenenden
+  const toTick = (sec, g = GRID) => {
     const bp = beatPos(sec) - firstDown;
     const b = Math.floor(bp);
     const f = bp - b;
@@ -1542,7 +1570,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       for (let i = 1; i < 3; i++) if (Math.abs(f - opts[i]) < Math.abs(f - opts[best])) best = i;
       return b * DIV + ticks[best];
     }
-    return b * DIV + Math.round((f * DIV) / GRID) * GRID;
+    return b * DIV + Math.round((f * DIV) / g) * g;
   };
   // Melodie in Sekunden; mit lokaler KI (Basic Pitch) kombiniert, falls vorhanden
   let melSec = notesF.map((n) => ({ s: melStartSec(n.start), e: melEndSec(n.end), midi: n.midi }));
@@ -1584,7 +1612,14 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     line.forEach((n, i) => {
       const next = line[i + 1];
       const end = n.start + n.dur;
-      if (next && next.start - end <= DIV / 4 + 1) n.dur = next.start - n.start;
+      if (n.fast) {
+        // schnelle Noten: Wert = eine Rasterstufe bis zum nächsten Einsatz, kein Runden auf Achtel
+        const g = n.grid || 6;
+        let d = Math.max(n.dur, g);
+        if (next) d = Math.min(d, next.start - n.start);
+        if (next && next.start - (n.start + d) <= DIV / 4 + 1) d = next.start - n.start;
+        n.dur = Math.max(1, d);
+      } else if (next && next.start - end <= DIV / 4 + 1) n.dur = next.start - n.start;
       else {
         let e = Math.round(end / (DIV / 2)) * (DIV / 2);
         if (next) e = Math.min(e, next.start);
@@ -1601,11 +1636,19 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   const aiTracks = [];
   let polyNotes = null;
   if (hasAi) {
+    // Schnelle Läufe und Tonwiederholungen (16tel, Triolen, 32tel): Muster aus mindestens drei
+    // gleichmäßigen Tönen auf dem Raster des Schlags, Wiederholungen mit echtem Anschlag. Ihre
+    // Töne bleiben auch unter 120 ms und werden nicht ins Achtel-Raster vereinfacht.
+    const aiV = !swing && !shuffle12 && attack ? withFastNotes(ai, markFastNotes(aiRaw, beatSec, { attack })) : ai;
+    const nFast = aiV.filter((n) => n.fast).length;
+    if (nFast) aiInfo.fast = nFast;
     const poly = cleanPoly(
-      ai
+      aiV
         .map((n) => {
-          const s0 = toTick(n.start);
-          return { start: s0, dur: Math.max(unit, toTick(n.end) - s0), midi: n.midi, amp: n.amp ?? 0.5 };
+          const g = n.fast ? n.grid || 6 : GRID;
+          const s0 = toTick(n.start, g);
+          const d = Math.max(n.fast ? g : unit, toTick(n.end, g) - s0);
+          return { start: s0, dur: d, midi: n.midi, amp: n.amp ?? 0.5, ...(n.fast ? { fast: true, grid: g } : {}) };
         })
         .filter((n) => n.start >= -mt + BT && n.start < measureCount * mt),
       { step: unit },
@@ -1613,6 +1656,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     polyNotes = poly;
     if (debug) debug({ hint: melody.map((n) => [n.start, n.dur, n.midi]), poly, beat: BT, mt });
     const vs = separateVoices(poly, { beat: BT, mt, step: unit, hint: melody });
+    // Mittelstimmen (Gitarren-Anschläge, Akkord-Einwürfe) bleiben lesbar vereinfacht: schnelle
+    // Läufe und Wiederholungen gelten für Melodie und Bass
+    vs.inner = vs.inner.map((l) => l.map(({ fast, grid, ...n }) => n));
     // Lesbarkeit: im mittleren Tempo stehen die Stimmen im Achtel-Raster (nur echte Synkopen
     // bleiben als Sechzehntel). Langsame Stücke und Shuffle/Swing behalten ihr Raster.
     if (GRID === 6 && !swing && !shuffle12 && bpm >= 72) {
@@ -1621,10 +1667,10 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       vs.inner = vs.inner.map((l) => simplifyLine(l, { beat: BT, mergeRepeats: true }));
     }
     const vel = (n) => Math.round(40 + 80 * Math.min(1, n.amp || 0.5));
-    const asTrack = (line) => line.filter((n) => n.start >= 0).map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, vel: vel(n) }));
+    const asTrack = (line) => line.filter((n) => n.start >= 0).map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, vel: vel(n), ...(n.fast ? { fast: true, grid: n.grid } : {}) }));
     if (vs.melody.length >= 8) {
       aiInfo.fromVoices = true;
-      melody = tidyEnds(vs.melody.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi })));
+      melody = tidyEnds(vs.melody.map((n) => ({ start: n.start, dur: n.dur, midi: n.midi, ...(n.fast ? { fast: true, grid: n.grid } : {}) })));
     }
     const bn = asTrack(vs.bass);
     if (bn.length >= 8) aiTracks.push({ id: 'ai-bass', name: 'Bass (KI)', program: 33, mel: false, role: 'bass', notes: bn });
@@ -1691,6 +1737,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   if (tm.marks.length > 1 && fin.tempoMarks[0]) fin.tempo = fin.tempoMarks[0].bpm;
   if (tm.marks.length > 1) fin.warnings.push(`Tempo ändert sich im Stück (${tm.marks.filter((x) => x.kind !== 'tempo' || x.bar > 0).map((x) => `Takt ${x.bar + 1}: ${x.kind === 'rit' ? 'rit.' : x.kind === 'accel' ? 'accel.' : x.kind === 'atempo' ? 'a tempo' : (shuffle12 ? '♩. = ' + Math.round(x.bpm / 1.5) : '♩ = ' + x.bpm)}`).join(', ')}).`);
   if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
+  if (halfTimeFixed) fin.warnings.push(`Tempo auf ${Math.round(bpm)} korrigiert: bei der halben Geschwindigkeit wären die schnellen Noten 32tel gewesen (mit „Tempo ÷2“ im Projekt umkehrbar).`);
   fin.duration = mono.length / SR;
   // Stand der Analyse: ältere, gespeicherte Analysen lassen sich in der App neu berechnen
   fin.analysisVersion = ANALYSIS_VERSION;

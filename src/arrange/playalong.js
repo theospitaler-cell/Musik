@@ -17,6 +17,7 @@ import { articulate } from './gen/melody.js';
 import { embellishLine } from './embellish.js';
 import { genDrumsSegment, drumsFromNotes, addGrooveFills, varyDrums } from './gen/drums.js';
 import { buildOriginalEnsemble } from './original.js';
+import { capLeaps } from './voicing.js';
 import { voiceSlots } from './planner.js';
 import { enforceRange, insertBreaths, applyDynamics, spellAll, simplifyForReading, addPerformanceMarks, tempoHeading, tempoTerm, newReport, keyAtFactory } from './post.js';
 
@@ -341,6 +342,8 @@ export function arrangePlayAlong(song, opts) {
       v.events = limitLeaps(simplifyRhythm(v.events, lv, mt, beat), lv, v.inst);
       enforceRange(v.events, v.inst, report);
     }
+    // Spielbare Sprünge: höchstens eine Oktave innerhalb einer Stimme (Oktavversetzung)
+    report.leapFixes = (report.leapFixes || 0) + capLeaps(v.events, v.inst, { restGap: 4 * beat });
     insertBreaths(v, v.inst, tempo, report, lv && lv <= 2 ? 0.75 : 1);
   });
   applyDynamics(arr);

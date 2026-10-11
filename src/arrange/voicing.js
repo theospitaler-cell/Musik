@@ -139,6 +139,71 @@ export function enforceContraryMotion(arr, report) {
   }
 }
 
+// Spielbare Sprünge: zwischen zwei aufeinanderfolgenden Tönen einer Stimme höchstens eine Oktave
+// (max Halbtöne), solange weniger als restGap Ticks Pause dazwischen liegen (Standard: ein Takt –
+// nach einer längeren Pause beginnt eine neue Phrase, dort ist jede Lage erlaubt).
+// Korrektur durch Oktavversetzung einzelner Töne oder eines Phrasenstücks: dynamische Programmierung
+// über die Oktavlage jedes Tons (−24 … +24) mit möglichst wenig versetzten Tönen und Lagewechseln;
+// die Kontur der Stimme bleibt, nur im Umfang des Instruments. Gibt die Zahl der versetzten Töne zurück.
+export function capLeaps(events, inst, { max = 12, restGap = 96 } = {}) {
+  const evs = events.filter((e) => e.pitches && e.pitches.length && !e.drum && e.role !== 'rest').sort((a, b) => a.start - b.start);
+  if (evs.length < 2) return 0;
+  const OFFS = [0, -12, 12, -24, 24];
+  const [rlo, rhi] = inst.range;
+  const ok = (e, o) => Math.min(...e.pitches) + o >= rlo && Math.max(...e.pitches) + o <= rhi;
+  // nur nötig, wenn es überhaupt einen zu großen Sprung gibt
+  let any = false;
+  for (let i = 1; i < evs.length && !any; i++) {
+    const gap = evs[i].start - (evs[i - 1].start + evs[i - 1].dur);
+    if (gap < restGap && Math.abs(evs[i].pitches[0] - evs[i - 1].pitches[evs[i - 1].pitches.length - 1]) > max) any = true;
+  }
+  if (!any) return 0;
+  const INF = 1e9;
+  const n = evs.length;
+  const cost = Array.from({ length: n }, () => new Float64Array(OFFS.length).fill(INF));
+  const back = Array.from({ length: n }, () => new Int8Array(OFFS.length).fill(-1));
+  for (let s = 0; s < OFFS.length; s++) if (ok(evs[0], OFFS[s]) || OFFS[s] === 0) cost[0][s] = OFFS[s] === 0 ? 0 : 1;
+  for (let i = 1; i < n; i++) {
+    const a = evs[i - 1];
+    const e = evs[i];
+    const free = e.start - (a.start + a.dur) >= restGap;
+    const pa = a.pitches[a.pitches.length - 1];
+    for (let s = 0; s < OFFS.length; s++) {
+      const o = OFFS[s];
+      if (o !== 0 && !ok(e, o)) continue;
+      const own = o === 0 ? 0 : 1;
+      for (let t = 0; t < OFFS.length; t++) {
+        if (cost[i - 1][t] >= INF) continue;
+        let c = cost[i - 1][t] + own;
+        if (!free) {
+          const leap = Math.abs(e.pitches[0] + o - (pa + OFFS[t]));
+          if (leap > max) c += 100 + 2 * (leap - max);
+          if (o !== OFFS[t]) c += 2; // Lagewechsel: ein Sprung mehr oder weniger als im Original
+        }
+        if (c < cost[i][s]) {
+          cost[i][s] = c;
+          back[i][s] = t;
+        }
+      }
+    }
+  }
+  let s = 0;
+  for (let k = 1; k < OFFS.length; k++) if (cost[n - 1][k] < cost[n - 1][s]) s = k;
+  let moved = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    const o = OFFS[s];
+    if (o) {
+      const e = evs[i];
+      e.pitches = e.pitches.map((p) => p + o);
+      if (e.grace) e.grace = { ...e.grace, midi: e.grace.midi + o };
+      moved++;
+    }
+    s = back[i][s];
+    if (s < 0) break;
+  }
+  return moved;
+}
+
 // Hilfe für die Generatoren: Richtung des Basses zwischen zwei Zeitpunkten (-1/0/1)
 export function bassDirection(bassLine, t0, t1) {
   if (!bassLine || !bassLine.length) return 0;

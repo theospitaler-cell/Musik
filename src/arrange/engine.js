@@ -16,7 +16,7 @@ import { genDrumsSegment } from './gen/drums.js';
 import { fitOctave } from './instruments.js';
 import { levelFor, simplifyRhythm, limitLeaps, simplifyDrums } from './difficulty.js';
 import { arrangeSoloFree } from './solo-free.js';
-import { enforceContraryMotion, motionStats } from './voicing.js';
+import { enforceContraryMotion, motionStats, capLeaps } from './voicing.js';
 import { embellishLine } from './embellish.js';
 import { arrangePlayAlong, originalEnsembleParts } from './playalong.js';
 import { voiceSlots } from './planner.js';
@@ -466,6 +466,9 @@ export function arrange(songIn, options = {}) {
     drumEvents.push(...simple);
   }
   ensureMovement(arr, report);
+  // Spielbare Sprünge: höchstens eine Oktave innerhalb einer Stimme (Oktavversetzung) – vor der
+  // Stimmführung gegen den Bass, die auf diesen Lagen aufbaut
+  for (const v of voices) report.leapFixes = (report.leapFixes || 0) + capLeaps(v.events, v.inst, { restGap: 4 * beat });
   // Profi-Regeln: Vorhalte im Aufbau-Teil, Guide-Tones, Lead immer oben – danach Stimmführung
   // (Gegenbewegung zum Bass, keine Quint-/Oktavparallelen) und nochmals Lead oben
   addSuspensions(arr, report);

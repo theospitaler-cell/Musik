@@ -296,7 +296,15 @@ export function buildOriginalEnsemble(song, insts, slots) {
         for (const l of done) for (const n of l.filter(inBar)) add(n, 'fill');
         for (const n of melLine.filter(inBar)) add(n, 'fill');
       } else {
-        const hs = [...hits].filter((t) => t >= a && t < b).sort((x, y) => x - y);
+        let hs = [...hits].filter((t) => t >= a && t < b).sort((x, y) => x - y);
+        // Eigenständiger Rhythmus: die erste Mittelstimme spielt das Einwurf-Muster der Begleitung,
+        // die weiteren tragen es nicht mit, sondern halten – auf der Takthälfte (zweite Stimme)
+        // bzw. dem Taktanfang (dritte und weitere Stimmen). Akkordwechsel setzen sie neu an.
+        if (k >= 1 && hs.length >= 3) {
+          const half = mt % (2 * beat) === 0 ? mt / 2 : mt;
+          const keep = hs.filter((t) => (k === 1 ? (t - a) % half === 0 : t === a));
+          hs = keep.length ? keep : [hs[0]];
+        }
         // mindestens der Taktanfang, wenn im Takt überhaupt begleitet wird
         hs.forEach((t, i) => add({ start: t, dur: (i + 1 < hs.length ? hs[i + 1] : b) - t }, 'hit'));
         // Akkordwechsel ohne Einwurf: neu ansetzen (der Liegeton passt sonst nicht mehr)
@@ -358,5 +366,35 @@ export function buildOriginalEnsemble(song, insts, slots) {
     names[v] = guide ? `Begleitstimme ${k + 1}` : `Harmonie ${k + 1}`;
     done.push(line);
   });
+  // ---- Keine Stille mitten im Stück: Pausen, in denen ALLE Stimmen schweigen (ab einem Schlag),
+  // überbrückt der Bass – sein letzter Ton klingt weiter (gleicher Akkord) bzw. der Grundton des
+  // Akkords setzt ein. Am Anfang und Ende bleibt die Pause, ebenso Pausen unter einem Schlag.
+  if (slots.bass !== null && lines[slots.bass]) {
+    const covered = [...melLine, ...lines.flatMap((l) => l || [])].map((n) => [n.start, n.start + n.dur]).sort((x, y) => x[0] - y[0]);
+    const holes = [];
+    let cursor = Math.max(0, from);
+    let started = false;
+    for (const [s, e] of covered) {
+      if (s > cursor && started && s - cursor >= beat) holes.push([cursor, s]);
+      cursor = Math.max(cursor, e);
+      started = true;
+    }
+    const bass = lines[slots.bass];
+    for (const [a, b] of holes) {
+      if (b > total) continue;
+      const before = [...bass].reverse().find((n) => n.start < a);
+      if (before && before.start + before.dur >= a - 1 && before.start + before.dur < b) before.dur = b - before.start;
+      else {
+        const ch = chordAt(chords, a);
+        if (!ch) continue;
+        const root = ch.tones.find((t) => t.role === 'root') || ch.tones[0];
+        const ref = before ? before.midi : medianOf(bass.map((n) => n.midi));
+        let m = ref - 6;
+        while (mod(m, 12) !== (ch.bassPc ?? root.pc)) m++;
+        bass.push({ start: a, dur: b - a, midi: m, lof: ch.bassLof ?? root.lof });
+        bass.sort((x, y) => x.start - y.start);
+      }
+    }
+  }
   return { lines, names, melShift };
 }

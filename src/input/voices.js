@@ -67,20 +67,39 @@ function mono(notes) {
 
 // Rohnoten der KI (Sekunden) glätten, bevor sie in Stimmen zerlegt werden:
 //  - Fragmente unter minSec (120 ms) verwerfen – das sind Einschwing- und Abklingreste, keine Töne
+//    (schnelle Läufe/Wiederholungen holt withFastNotes danach zurück)
+//  - ein Splitter, dem derselbe Ton ohne neuen Anschlag folgt, ist der Beginn dieses Tons (die KI
+//    löst den Einsatz zweimal aus): ein Ton ab dem früheren Einsatz statt 80 ms zu spät
 //  - eine gehaltene Note (mind. 0,4 s), die nur kurz unterbrochen ist (Vibrato, Abriss von höchstens
-//    60 ms), bleibt eine Note. Schnelle Wiederholungen (Achtel, Sechzehntel) bleiben getrennt.
-export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4 } = {}) {
-  const long = (ai || []).filter((n) => n.end - n.start >= minSec);
+//    60 ms), bleibt eine Note – außer zwischen den Teilen liegt eine tiefe Lücke mit steilem Anstieg
+//    (strong): dann ist es ein neuer Ton.
+// attack(tPrev, tNext, midi) -> {ok, depth}: Anschlag-Erkennung aus dem Audio (fast.js); ohne sie
+// bleibt es bei den Zeit-Regeln.
+export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4, attack = null } = {}) {
   const byPitch = new Map();
-  for (const n of [...long].sort((a, b) => a.start - b.start)) {
+  for (const n of [...(ai || [])].sort((a, b) => a.start - b.start)) {
     if (!byPitch.has(n.midi)) byPitch.set(n.midi, []);
     byPitch.get(n.midi).push({ ...n });
   }
   const out = [];
   for (const list of byPitch.values()) {
+    // Splitter + folgender gleicher Ton ohne Anschlag
+    const seq = [];
+    for (let i = 0; i < list.length; i++) {
+      const n = list[i];
+      const nx = list[i + 1];
+      if (attack && nx && n.end - n.start < minSec && nx.start - n.end <= 0.03 && nx.start >= n.start && !attack(n.start, nx.start, n.midi).ok) {
+        nx.start = n.start;
+        nx.amp = Math.max(n.amp ?? 0, nx.amp ?? 0);
+        continue;
+      }
+      seq.push(n);
+    }
     let cur = null;
-    for (const n of list) {
-      if (cur && cur.end - cur.start >= holdSec && n.start - cur.end <= gapSec) {
+    for (const n of seq) {
+      if (n.end - n.start < minSec) continue;
+      const hold = cur && cur.end - cur.start >= holdSec && n.start - cur.end <= gapSec;
+      if (hold && !(attack && attack(cur.start, n.start, n.midi).strong)) {
         cur.end = Math.max(cur.end, n.end);
         cur.amp = Math.max(cur.amp ?? 0, n.amp ?? 0);
       } else {
@@ -91,6 +110,25 @@ export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4 } 
     if (cur) out.push(cur);
   }
   return out.filter((n) => n.end - n.start >= minSec).sort((a, b) => a.start - b.start || a.midi - b.midi);
+}
+
+// Schnelle Läufe und Tonwiederholungen (fast.js) zurückholen: Noten eines Musters bleiben auch unter
+// 120 ms (bis zu den 58 ms der KI) und tragen fast = 'run' | 'rep' und grid (Ticks je Stufe).
+// tidy: Ergebnis von tidyAiNotes, marks: Ergebnis von markFastNotes(rohe KI-Noten, …).
+export function withFastNotes(tidy, marks) {
+  if (!marks || !marks.size) return tidy;
+  const out = tidy.map((n) => ({ ...n }));
+  const by = new Map();
+  for (const n of out) {
+    if (!by.has(n.midi)) by.set(n.midi, []);
+    by.get(n.midi).push(n);
+  }
+  for (const [m, info] of marks) {
+    const hit = (by.get(m.midi) || []).find((t) => Math.abs(t.start - m.start) <= 0.05);
+    if (hit) Object.assign(hit, { fast: info.kind, grid: info.grid });
+    else out.push({ ...m, fast: info.kind, grid: info.grid });
+  }
+  return out.sort((a, b) => a.start - b.start || a.midi - b.midi);
 }
 
 // Skyline-Band für die Lead-Melodie: 300–2500 Hz (MIDI 63–94). Töne darin tragen die Melodie;
@@ -370,6 +408,14 @@ export function simplifyLine(line, { beat = DIV, allowPush = false, mergeRepeats
   const at = (t) => out.find((m) => m.start === t);
   for (let i = 0; i < src.length; i++) {
     const n = src[i];
+    // schnelle Läufe und Tonwiederholungen (fast.js): Einsatz bleibt auf seiner Rasterstufe
+    if (n.fast) {
+      const q = at(n.start);
+      if (q && q.fast) continue;
+      if (q) out.splice(out.indexOf(q), 1);
+      out.push({ ...n });
+      continue;
+    }
     const off = (((n.start % E) + E) % E);
     const next = src[i + 1];
     let t = n.start;
@@ -390,6 +436,7 @@ export function simplifyLine(line, { beat = DIV, allowPush = false, mergeRepeats
       }
     }
     const p = at(t);
+    if (p && p.fast) continue;
     if (p) {
       if (p.midi === n.midi || n.dur > p.dur) Object.assign(p, { midi: n.dur > p.dur ? n.midi : p.midi, dur: Math.max(p.dur, n.start + n.dur - t), amp: Math.max(p.amp ?? 0, n.amp ?? 0) });
       continue;
@@ -403,16 +450,18 @@ export function simplifyLine(line, { beat = DIV, allowPush = false, mergeRepeats
     const n = out[i];
     const nx = out[i + 1];
     const prev = res[res.length - 1];
-    if (prev && prev.midi === n.midi && (mergeRepeats ? n.start - (prev.start + prev.dur) <= S : n.start < prev.start + prev.dur)) {
+    if (!n.fast && !(prev && prev.fast) && prev && prev.midi === n.midi && (mergeRepeats ? n.start - (prev.start + prev.dur) <= S : n.start < prev.start + prev.dur)) {
       prev.dur = Math.max(prev.dur, n.start + n.dur - prev.start);
       continue;
     }
-    let end = n.start + Math.max(n.dur, E);
-    end = Math.ceil(end / S) * S;
-    if (nx && nx.midi !== n.midi) end = Math.min(end, nx.start);
+    // schnelle Noten behalten ihre Rasterstufe (16tel, Triole, 32tel) als Wert
+    const g = n.fast ? n.grid || S : null;
+    let end = n.start + Math.max(n.dur, g || E);
+    end = Math.ceil(end / (g || S)) * (g || S);
+    if (nx && (n.fast || nx.midi !== n.midi)) end = Math.min(end, nx.start);
     else if (nx && !mergeRepeats) end = Math.min(end, nx.start);
     if (prev && prev.start + prev.dur > n.start) prev.dur = n.start - prev.start;
-    res.push({ ...n, dur: Math.max(S, end - n.start) });
+    res.push({ ...n, dur: Math.max(g ? 1 : S, end - n.start) });
   }
   for (let i = 0; i < res.length - 1; i++) if (res[i].start + res[i].dur > res[i + 1].start) res[i].dur = res[i + 1].start - res[i].start;
   return res.filter((n) => n.dur > 0);

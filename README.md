@@ -80,12 +80,30 @@ Die Analyse läuft im Hintergrund.
   Taktanfang kommen aus diesen Noten (das Spektrum löst im Bass keine Halbtöne auf).
 - **Lesbar**: im mittleren Tempo stehen alle Stimmen im Achtel-Raster, nur echte Synkopen bleiben
   als Sechzehntel; schnelle, durchsynkopierte Stücke werden im doppelten Tempo mit Achteln notiert.
+- **Schnelle Läufe & Tonwiederholungen**: Folgen aus mindestens drei gleichmäßigen Tönen, die
+  genau auf dem Raster des Schlags liegen (Sechzehntel ab Tempo ~88, Achtel-Triolen, 16tel-Triolen,
+  32tel; Abstand höchstens 170 ms – Gesang in Balladen um Tempo 80 liegt bei 190 ms), bleiben als
+  eigene Noten erhalten – auch wenn die KI sie nur 60–120 ms kurz hört – und werden nicht ins
+  Achtel-Raster vereinfacht. Lautstärken sind relativ zum Lied gemeint (dichte Mischungen liegen bei
+  KI-Werten um 0,4, klare um 0,6); die Begleitung muss mehr als 1,6× lauter sein, um einem Lauf die
+  Führung zu nehmen. Eine Wiederholung
+  desselben Tons zählt nur mit **echtem Anschlag**: die Teiltöne dieses Tons brechen ein und
+  steigen wieder an (Transienten-Erkennung im Audio). Ein Splitter ohne Einbruch ist dagegen der
+  Beginn desselben Tons (die KI löst den Einsatz zweimal aus) – der Ton beginnt dann am früheren
+  Einsatz statt bis zu 80 ms zu spät. Das Raster hängt am Schlag, nicht an den Notenenden: kurze
+  Pausen zwischen Staccato-Noten verschieben nichts. Gesang, Vibrato und Gleiten bleiben wie
+  bisher vereinfacht (Muster müssen sehr genau und schnell sein); Mittelstimmen ebenso.
 - **Form**: Formteile aus Takt-Merkmalen (Harmonik, Melodie, Lautstärke, Dichte, Schlagzeug) –
   Wiederholungen bekommen denselben Buchstaben, jeder Teil seine Lautstärke (leise Strophe,
   lauter Refrain); Dynamik und Dichte des Arrangements folgen ihr.
 - **Von Hand korrigieren** (im Projekt unter der Analyse): *Taktanfang* einen Schlag früher/später,
   *Tempo ×2 / ÷2* (Achtel statt Sechzehntel bzw. umgekehrt), *Neu analysieren* für gespeicherte
   Aufnahmen aus älteren Versionen.
+- **Halbes Tempo erkannt?** Bei schnellen Liedern (ab ~150 BPM) wählt die Beat-Suche gern die Hälfte
+  (150 als 75). Mit den KI-Noten prüft NoteCode, ob bei diesem Tempo regelmäßige Ketten aus 32teln
+  (mindestens 5 % der Töne) vorkommen und Bass Drum/Snare auch zwischen den Schlägen liegen – dann
+  wird das Tempo verdoppelt (Hinweis in den Warnungen, mit *Tempo ÷2* umkehrbar). Echte langsame
+  Lieder mit Sechzehntel-Hi-Hat oder Gitarrenzupfen bleiben unberührt.
 - **Tempo**: der Schlag muss die Takt-Periode des Rhythmus-Musters ganzzahlig teilen (schließt
   Schein-Tempi durch Synkopen-Figuren aus, z. B. punktierte Achtel = 4/3 des Tempos); bei
   gleichmäßigem Tempo bleibt er am Raster. Tempokurve über das ganze Stück – auch **Tempowechsel**, **rit.** und **accel.**;
@@ -177,6 +195,13 @@ Stimme 1, die Basslinie der Vorlage in der tiefsten Stimme (Lücken: Grundton im
 Drum), die Mittelstimmen im Rhythmus der Begleitung: Parallelstimmen (Terzen/Sexten zur Melodie)
 laufen Ton für Ton mit, Akkord-Einwürfe von Gitarre/Klavier werden als sauber geführte Akkordtöne
 gesetzt. Form, Takte, Tempo und Lautstärken wie im Lied.
+
+**Spielbare Stimmen** (alle Arten von Arrangements): zwischen zwei Tönen einer Stimme liegt
+höchstens eine Oktave (zu große Sprünge werden mit möglichst wenigen Oktavversetzungen aufgelöst,
+nach einer Pause von mehr als einem Takt beginnt eine neue Phrase). Die weiteren Mittelstimmen
+tragen das Einwurf-Muster der Begleitung nicht mit, sondern halten (zweite Mittelstimme auf der
+Takthälfte, dritte und weitere auf dem Taktanfang): jede Stimme hat ihren eigenen Rhythmus. Pausen,
+in denen *alle* Stimmen länger als einen Schlag schweigen, überbrückt der Bass.
 
 **Neu arrangieren** (Standard) bleibt zu rund 90 % beim Original: Melodie, Bass, Begleitung und
 Groove der Vorlage stehen Takt für Takt wie im Lied. Verändert wird nur die Form, wie es ein
