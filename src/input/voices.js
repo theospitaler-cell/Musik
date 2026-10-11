@@ -121,14 +121,21 @@ function pickBass(notes, beat, mt, step) {
   }
   const mainOf = new Map();
   const side = new Map();
+  const under = new Map(); // Nebenton -> Haupttöne, neben denen er auftaucht
   for (const [b, ns] of bars) {
     const w = new Map();
     for (const n of ns) w.set(n.midi, (w.get(n.midi) || 0) + n.dur);
     const main = [...w.entries()].sort((x, y) => y[1] - x[1])[0][0];
     mainOf.set(b, main);
-    for (const m of new Set(ns.filter((n) => n.midi !== main && n.dur <= 2 * step).map((n) => n.midi))) side.set(m, (side.get(m) || 0) + 1);
+    for (const m of new Set(ns.filter((n) => n.midi !== main && n.dur <= 2 * step).map((n) => n.midi))) {
+      side.set(m, (side.get(m) || 0) + 1);
+      if (!under.has(m)) under.set(m, new Set());
+      under.get(m).add(main);
+    }
   }
-  const ghosts = new Set([...side.entries()].filter(([, c]) => bars.size >= 8 && c >= 0.3 * bars.size).map(([m]) => m));
+  // (unabhängig von der Harmonie heißt: neben mindestens drei verschiedenen Haupttönen – ein
+  // Grundton-Quint-Muster über gleichbleibender Harmonie ist dagegen echter Bass)
+  const ghosts = new Set([...side.entries()].filter(([m, c]) => bars.size >= 8 && c >= 0.3 * bars.size && under.get(m).size >= 3).map(([m]) => m));
   if (ghosts.size) line = line.filter((n) => !(ghosts.has(n.midi) && n.dur <= 2 * step && mainOf.get(Math.floor(n.start / mt)) !== n.midi));
   return { line: mono(line), top, center };
 }
@@ -251,6 +258,8 @@ function pickInner(rest, melAt) {
   const ps = rest.map((n) => n.midi).sort((a, b) => a - b);
   let lastUp = ps[Math.floor(ps.length * 0.7)];
   let lastLo = ps[Math.floor(ps.length * 0.3)];
+  // die dritte Stimme gibt es nur dort, wo zuletzt zwei Mittelstimmen-Töne zugleich erklangen
+  let lastPair = -Infinity;
   for (const g of onsetGroups(rest)) {
     const m = melAt(g.start);
     // Töne über der Melodie zählen eine Oktave tiefer (Oberstimmen-Zusätze), der Rest wie gehört
@@ -258,7 +267,8 @@ function pickInner(rest, melAt) {
     if (ns.length === 1) {
       const x = ns[0];
       // ein einzelner Ton gehört zur zweiten Stimme – außer er liegt klar in der Lage der dritten
-      if (x.p >= lastLo - 1 || Math.abs(x.p - lastUp) <= Math.abs(x.p - lastLo)) (up.push({ ...x.n, midi: x.p }), (lastUp = x.p));
+      const loActive = g.start - lastPair <= 8 * DIV;
+      if (!loActive || x.p >= lastLo - 1 || Math.abs(x.p - lastUp) <= Math.abs(x.p - lastLo)) (up.push({ ...x.n, midi: x.p }), (lastUp = x.p));
       else (lo.push({ ...x.n, midi: x.p }), (lastLo = x.p));
       continue;
     }
@@ -279,6 +289,7 @@ function pickInner(rest, melAt) {
     lo.push({ ...best.b.n, midi: best.b.p });
     lastUp = best.a.p;
     lastLo = best.b.p;
+    lastPair = g.start;
   }
   return [mono(up), mono(lo)];
 }
@@ -388,23 +399,24 @@ export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint
     };
   };
   const melAt = at(melody);
-  // Bass-Tonklasse der letzten zwei Schläge (kurze Basstöne klingen im Ohr weiter)
+  // Basston der letzten zwei Schläge (kurze Basstöne klingen im Ohr weiter)
   let bi = 0;
-  const bassPcAt = (t) => {
+  const bassNear = (t) => {
     while (bi < b.line.length - 1 && b.line[bi + 1].start <= t) bi++;
     while (bi > 0 && b.line[bi].start > t) bi--;
     const m = b.line[bi];
-    return m && m.start <= t && t - m.start <= 2 * beat ? ((m.midi % 12) + 12) % 12 : null;
+    return m && m.start <= t && t - m.start <= 2 * beat ? m.midi : null;
   };
   // Mittelstimmen: was übrig bleibt – ohne Oktav-Dopplungen von Melodie und Bass, ohne Reste
   // in der Lücke direkt über dem Bass
   const rest = notes.filter((n) => {
     if (isBass(n) || melSet.has(keyOf(n))) return false;
-    if (n.midi < b.top + 5 && !parallel.has(keyOf(n))) return false;
+    if (n.midi < b.top + 3 && !parallel.has(keyOf(n))) return false;
     const m = melAt(n.start);
     if (m !== null && n.midi !== m && (n.midi - m) % 12 === 0) return false;
-    const pc = bassPcAt(n.start);
-    if (pc !== null && ((n.midi % 12) + 12) % 12 === pc && n.midi <= b.top + 14) return false;
+    // genau eine Oktave über dem Basston: Oktav-Dopplung des Basses (bzw. sein Oberton)
+    const bm = bassNear(n.start);
+    if (bm !== null && n.midi - bm === 12 && n.midi <= b.top + 14) return false;
     return true;
   });
   const inner = pickInner(rest, at(melody));
