@@ -22,8 +22,10 @@ Die Installer werden bei jeder Änderung automatisch von GitHub gebaut
 1. **Song laden**: MP3, WAV, M4A, FLAC, OGG, MuseScore-Datei (MusicXML/MXL), MIDI oder ABC.
    Eine Fortschrittsanzeige zeigt jeden Schritt (Lesen, Dekodieren, Analyse, Noten setzen, Export).
 2. **Besetzung**: *Mehrere* (2–8 Instrumente + optional Schlagzeug), *Solo* oder *Schlagzeug*.
-3. **Stil & Optionen**: Brass Band Funk (Standard), Second Line, Swing, Ballade, Klassik,
-   Polka/Marsch; Hauptsolist, Schwierigkeit, Form, Tempo, Tonart.
+3. **Stil & Optionen**: Brass Band Funk (Standard), Second Line, Swing, Ballade, Klassik, Polka,
+   Pop, Rock, Soul/R&B, Latin, Reggae/Ska, Disco, Blues/Shuffle, Marsch, Walzer – oder
+   **Automatisch** (wählt aus allen nach Tempo, Taktart, Swing, Sechzehntel-Gefühl, Bass-Drum-Muster
+   und Titel); Hauptsolist, Schwierigkeit, Form, Tempo, Tonart.
 4. **Erstellen** → Noten ansehen, abspielen, exportieren.
 
 Arrangements haben immer ungefähr die **Länge des Originals** (jeder Formteil einmal,
@@ -70,10 +72,23 @@ Die Analyse läuft im Hintergrund.
 
 - **Lokale KI**: [Basic Pitch](https://github.com/spotify/basic-pitch-ts) (Spotify, Apache-2.0)
   hört die Noten mehrstimmig – direkt im Gerät mit TensorFlow.js, ohne Server, ohne Kosten. Sie
-  korrigiert Oktavfehler, trennt Tonwiederholungen und liefert Bass & Begleitung als eigene
-  Spuren; die Signalanalyse prüft jeden KI-Ton (z. B. ob ein „Neuanschlag“ nur ein Schlagzeug-
-  Transient war).
-- **Tempo**: Tempokurve über das ganze Stück – auch **Tempowechsel**, **rit.** und **accel.**;
+  rechnet im Hauptfenster auf der Grafikkarte (ein ganzes Lied in Sekunden; im Web-Worker bleibt
+  WebGL in manchen Umgebungen hängen), sonst im Worker auf dem Prozessor.
+- **Stimmen**: aus den KI-Noten werden **Melodie** (führende Stimme – die Gesangslinie der
+  Signalanalyse dient als Hinweis, bei Parallelstimmen führt die obere), **Bass** (tiefste Stimme,
+  ohne Bass-Drum-Geister) und bis zu **zwei Mittelstimmen** getrennt. Tonart, Akkorde, Taktart und
+  Taktanfang kommen aus diesen Noten (das Spektrum löst im Bass keine Halbtöne auf).
+- **Lesbar**: im mittleren Tempo stehen alle Stimmen im Achtel-Raster, nur echte Synkopen bleiben
+  als Sechzehntel; schnelle, durchsynkopierte Stücke werden im doppelten Tempo mit Achteln notiert.
+- **Form**: Formteile aus Takt-Merkmalen (Harmonik, Melodie, Lautstärke, Dichte, Schlagzeug) –
+  Wiederholungen bekommen denselben Buchstaben, jeder Teil seine Lautstärke (leise Strophe,
+  lauter Refrain); Dynamik und Dichte des Arrangements folgen ihr.
+- **Von Hand korrigieren** (im Projekt unter der Analyse): *Taktanfang* einen Schlag früher/später,
+  *Tempo ×2 / ÷2* (Achtel statt Sechzehntel bzw. umgekehrt), *Neu analysieren* für gespeicherte
+  Aufnahmen aus älteren Versionen.
+- **Tempo**: der Schlag muss die Takt-Periode des Rhythmus-Musters ganzzahlig teilen (schließt
+  Schein-Tempi durch Synkopen-Figuren aus, z. B. punktierte Achtel = 4/3 des Tempos); bei
+  gleichmäßigem Tempo bleibt er am Raster. Tempokurve über das ganze Stück – auch **Tempowechsel**, **rit.** und **accel.**;
   in den Noten stehen neue Metronomangaben, „rit.“ und „a tempo“, die Wiedergabe folgt genau der
   Aufnahme. Shuffles werden im 12/8-Takt notiert (♩. = …).
 - **Schlagzeug**: Harmonisch/Perkussiv-Trennung, dann NMF-Zerlegung in Bass Drum, Snare,
@@ -112,9 +127,17 @@ letzter Refrain als Shout Chorus · Schlussakkord.
 - **Notenbild**: 4 Takte pro System, Probebuchstaben an Formteilen, Synkopen über die Taktmitte
   gebunden, Taktzahlen an jedem System.
 
-**Original übernehmen** (Mehrere): Melodie 1:1 in Stimme 1, die Bass-Spur der Vorlage (bei MP3
-von der KI gehört oder die Grundtöne im Rhythmus der Bass Drum) in der tiefsten Stimme, weitere
-Original-Spuren nach Lage, fehlende Stimmen aus der Harmonik – Form, Takte und Tempo wie im Lied.
+**Original übernehmen** (Mehrere): voller Satz wie in gedruckten Ausgaben – Melodie 1:1 in
+Stimme 1, die Basslinie der Vorlage in der tiefsten Stimme (Lücken: Grundton im Rhythmus der Bass
+Drum), die Mittelstimmen im Rhythmus der Begleitung: Parallelstimmen (Terzen/Sexten zur Melodie)
+laufen Ton für Ton mit, Akkord-Einwürfe von Gitarre/Klavier werden als sauber geführte Akkordtöne
+gesetzt. Form, Takte, Tempo und Lautstärken wie im Lied.
+
+**Neu arrangieren** behält, was das Lied ausmacht: Tempo, Formablauf, Basslinie und Begleit-
+Rhythmus der Vorlage (nur bei Anpassung „frei“ schreibt der Stil eigene Muster). Dazu kommt das
+Arrangement: Melodie-Solos für andere Stimmen (wiederholte bzw. ruhige Teile), Antworten in den
+Melodiepausen, im Refrain die zweite Stimme in Terzen/Sexten, Shout Chorus am lautesten Teil, ein
+Solo als ausgezierte Melodie, kurzer Schluss. Aufnahmen bringen ihr eigenes Intro mit.
 
 **Satztechnik**
 - Kein Parallel-Block-Satz: Gegenstimmen bewegen sich, wenn die Melodie hält oder pausiert
@@ -203,7 +226,7 @@ Speichern und alle 60 Sekunden; bei Konflikten gewinnt der neueste Stand. Der �
 
 ```bash
 npm test          # automatische Tests (Import inkl. Audio, Notensatz, Engine, Playback, Export, Sync)
-npm run serve     # als Web-App im Browser: http://localhost:8000
+npm run serve     # als Web-App im Browser: http://localhost:8000 (Node, kein Python nötig)
 npm install       # einmalig für die Desktop-App
 npm run desktop   # Desktop-App starten (Electron)
 npm run dist      # Installer bauen (dist/)
