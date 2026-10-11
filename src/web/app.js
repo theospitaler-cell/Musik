@@ -3,7 +3,7 @@ import { INSTRUMENTS, PRESETS, FAMILIES, writtenRangeChoices } from '../arrange/
 import { DIFFICULTY_LEVELS } from '../arrange/difficulty.js';
 import { STYLE_LIST } from '../arrange/styles.js';
 import { loadSong, detectFormat } from '../input/index.js';
-import { arrange } from '../arrange/engine.js';
+import { arrange, usesFaithful } from '../arrange/engine.js';
 import { playAlongSources, defaultPlayParts } from '../arrange/playalong.js';
 import { decodeAudio, analyzeAudio } from './audio-import.js';
 import { platform, localVersion, checkUpdate, applyUpdate } from './updater.js';
@@ -1015,7 +1015,7 @@ function setOriginal(on) {
   });
   $('#arr-mode-info').textContent = on
     ? 'Groove und Melodie werden 1:1 aus der Vorlage auf die Instrumente verteilt – gleiche Form, gleiche Länge.'
-    : 'Eigenes Arrangement im gewählten Stil: Intro, Melodie mit Gegenstimmen, Solo und Schluss.';
+    : 'Nah am Original (ca. 90 %): Melodie, Bass und Begleitung bleiben, dazu ein kurzer Vorspann, bei vielen gleichen Strophen fallen einzelne weg, am Ende ein kurzer Anhang. Unter „Erweitert“ → „Frei“ schreibt NoteCode den ganzen Satz im gewählten Stil neu.';
   updateModeVisibility();
 }
 
@@ -1914,7 +1914,8 @@ async function generate({ silent = false, effort = null, cfgPatch = null, label 
   const cfg = { ...effortOf(level).arrange, ...(cfgPatch || {}) };
   const pb = opts.ensemble === 'solo' && opts.playback;
   // Variantensuche nur für frei geschriebene Mehrstimmen-Arrangements
-  const search = opts.ensemble === 'quartet' && !opts.original && cfg.seeds > 1;
+  // (nah am Original gibt es nur eine Fassung – dort gibt es nichts zu vergleichen)
+  const search = opts.ensemble === 'quartet' && !opts.original && cfg.seeds > 1 && !usesFaithful(S.song, opts);
   const bars = S.song.measureCount || 32;
   const tasks = [
     {

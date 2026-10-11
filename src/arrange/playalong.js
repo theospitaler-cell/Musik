@@ -213,15 +213,23 @@ export function arrangePlayAlong(song, opts) {
   const nVoices = melodicParts.length;
   const blocks = [];
   if (leadBars) blocks.push({ type: 'intro', name: 'Auftakt', heading: '', measures: leadBars, startBar: 0, rehearsal: null, dyn: style.dyn.theme, intensity: 0.5, key, keyShift: 0 });
-  sections.forEach((sec, i) => {
+  // Probenbuchstaben der Reihe nach (A, B, C …); ein Vorspann bekommt keinen. Kehrt ein Formteil
+  // wieder, steht „wie X“ mit dem Buchstaben seines ersten Auftretens.
+  const firstLetter = new Map();
+  let letterNo = 0;
+  sections.forEach((sec) => {
+    const intro = sec.label === 'Intro';
+    const letter = intro ? null : letterOf(letterNo++);
+    const repeat = !intro && firstLetter.has(sec.label);
+    if (!intro && !repeat) firstLetter.set(sec.label, letter);
     blocks.push({
       type: 'theme',
-      name: `Teil ${sec.label}`,
-      heading: sec.label !== letterOf(i) ? `wie ${sec.label}` : '',
+      name: intro ? 'Intro' : `Teil ${sec.label}`,
+      heading: repeat ? `wie ${firstLetter.get(sec.label)}` : '',
       label: sec.label,
       measures: sec.length,
       startBar: leadBars + sec.start,
-      rehearsal: letterOf(i),
+      rehearsal: letter,
       // Aufnahme: Lautstärke des Formteils wie im Original
       dyn: typeof sec.energy === 'number' ? dynFromEnergy(sec.energy) : style.dyn.theme,
       intensity: 0.6,
@@ -404,7 +412,8 @@ export function arrangePlayAlong(song, opts) {
 // Original zum Mitspielen: Aufnahme (synchron über song.timing) oder Noten aller Spuren.
 // Die übernommenen Stimmen bekommen eigene Kanäle (zum Stummschalten), der Rest ist "Band".
 function playAlongBacking(song, off, parts, srcName) {
-  if (song.source === 'audio') return { kind: 'audio', channels: [{ key: 'orig', name: 'Original-Aufnahme' }] };
+  // (nach Form-Änderungen – Vorspann, weggelassene Teile – läuft die Aufnahme nicht mehr im Gleichschritt)
+  if (song.source === 'audio' && !song.formEdited) return { kind: 'audio', channels: [{ key: 'orig', name: 'Original-Aufnahme' }] };
   const shift = (ns) => ns.map((n) => ({ start: n.start + off, dur: n.dur, midi: n.midi, vel: n.vel ?? 80 }));
   const chosen = new Set(parts.map((p) => p.source));
   const channels = [];

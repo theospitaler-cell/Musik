@@ -178,11 +178,17 @@ Drum), die Mittelstimmen im Rhythmus der Begleitung: Parallelstimmen (Terzen/Sex
 laufen Ton für Ton mit, Akkord-Einwürfe von Gitarre/Klavier werden als sauber geführte Akkordtöne
 gesetzt. Form, Takte, Tempo und Lautstärken wie im Lied.
 
-**Neu arrangieren** behält, was das Lied ausmacht: Tempo, Formablauf, Basslinie und Begleit-
-Rhythmus der Vorlage (nur bei Anpassung „frei“ schreibt der Stil eigene Muster). Dazu kommt das
-Arrangement: Melodie-Solos für andere Stimmen (wiederholte bzw. ruhige Teile), Antworten in den
-Melodiepausen, im Refrain die zweite Stimme in Terzen/Sexten, Shout Chorus am lautesten Teil, ein
-Solo als ausgezierte Melodie, kurzer Schluss. Aufnahmen bringen ihr eigenes Intro mit.
+**Neu arrangieren** (Standard) bleibt zu rund 90 % beim Original: Melodie, Bass, Begleitung und
+Groove der Vorlage stehen Takt für Takt wie im Lied. Verändert wird nur die Form, wie es ein
+Arrangeur an einem bestehenden Stück tut:
+- **Vorspann** (2–4 Takte nur mit der Begleitung), wenn das Lied sofort mit der Melodie beginnt,
+- bei **vielen gleichen Strophen/Teilen** fallen einzelne Wiederholungen weg (der erste und der
+  letzte Teil bleiben, höchstens ein Viertel der Takte),
+- ein kurzer **Anhang** (die letzten 2 Takte noch einmal) als Schluss.
+Das steht im Prüfbericht. Mit der Anpassung „Frei“ (Erweitert) schreibt NoteCode den ganzen Satz im
+gewählten Stil neu: Melodie-Solos für andere Stimmen, Antworten in den Melodiepausen, im Refrain
+die zweite Stimme in Terzen/Sexten, Shout Chorus am lautesten Teil, Solo als ausgezierte Melodie.
+Lieder ohne Begleit-Vorlage (nur Melodie und Akkorde, z. B. ABC) werden ebenfalls frei gesetzt.
 
 **Satztechnik**
 - Kein Parallel-Block-Satz: Gegenstimmen bewegen sich, wenn die Melodie hält oder pausiert

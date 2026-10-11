@@ -24,6 +24,7 @@ import { getInstrument } from './instruments.js';
 import { voiceBelow } from './gen/tutti.js';
 import { keepLeadOnTop, ensureGuideTones, addSuspensions, reduceSyllableRepeats } from './rules.js';
 import { hasMeterChanges } from '../model/song.js';
+import { reformSong } from '../model/reform.js';
 import {
   enforceRange,
   ensureMovement,
@@ -109,6 +110,10 @@ export function arrange(songIn, options = {}) {
     a.originalEnsemble = true;
     return a;
   }
+  // Neu arrangieren (Standard): 90 % bleiben wie im Original – nur Vorspann, weggelassene
+  // Wiederholungen und ein Anhang. „Frei“ (adapt 2) und Lieder ohne Begleit-Vorlage (nur Melodie
+  // und Akkorde) schreiben dagegen den ganzen Satz selbst.
+  if (usesFaithful(songIn, opts)) return arrangeFaithful(songIn, opts);
   const plan = planArrangement(songIn, opts);
   const { blocks, song, style, insts, mt, slots } = plan;
   const N = insts.length;
@@ -695,6 +700,31 @@ function cleanDrums(events) {
     out.push(e);
   }
   return out;
+}
+
+// Hat die Vorlage Bass/Begleitung (Aufnahme, MIDI, MusicXML) und ist nicht „Frei“ gewählt?
+export function usesFaithful(song, opts) {
+  if (opts.original || opts.ensemble === 'solo' || opts.ensemble === 'drums') return false;
+  if (Number(opts.adapt ?? 1) >= 2 || opts.faithful === false) return false;
+  const src = sourceLinesOf(song);
+  return !!(src.bass || src.guides.length);
+}
+
+function arrangeFaithful(songIn, opts) {
+  const { song, notes } = reformSong(songIn);
+  const insts = opts.voices.map((id) => getInstrument(id));
+  const parts = originalEnsembleParts(song, opts.voices, voiceSlots(insts));
+  if (opts.drums) parts.push({ source: 'drums', inst: 'drums' });
+  const a = arrangePlayAlong(song, { ...opts, playParts: parts });
+  a.meta.subtitle = `${ENSEMBLE_NAMES[opts.voices.length] || ''} – nah am Original`.replace(/^ – /, '');
+  a.report.notes = [
+    ...(a.report.notes || []),
+    'Neu arrangiert nah am Original: Melodie, Bass, Begleitung und Groove bleiben wie in der Vorlage.',
+    ...notes,
+  ];
+  a.originalEnsemble = true;
+  a.faithful = true;
+  return a;
 }
 
 export { adaptMelody };
