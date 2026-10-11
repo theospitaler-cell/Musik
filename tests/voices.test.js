@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanPoly, separateVoices, simplifyLine } from '../src/input/voices.js';
+import { cleanPoly, separateVoices, simplifyLine, tidyAiNotes } from '../src/input/voices.js';
 import { repairBeats, dominantPeriod } from '../src/input/audio.js';
 import { audioSections, barFeatures } from '../src/input/form.js';
 import { buildOriginalEnsemble, movesTogether } from '../src/arrange/original.js';
@@ -252,4 +252,36 @@ test('Akkordtöne ohne Doppel-Vorzeichen (Ges-Moll: A statt Heses)', () => {
   const gbm = buildChord(-6, 'minor');
   assert.ok(gbm.tones.every((t) => t.lof > -9 && t.lof < 13));
   assert.equal(gbm.tones.find((t) => t.role === 'third').pc, 9);
+});
+
+test('KI-Rohnoten: Fragmente unter 120 ms fallen weg, Vibrato-Abrisse werden eine gehaltene Note', () => {
+  const ai = [
+    { start: 1.0, end: 1.05, midi: 70, amp: 0.6 }, // Abklingrest – weg
+    { start: 2.0, end: 2.5, midi: 72, amp: 0.7 },
+    { start: 2.55, end: 3.0, midi: 72, amp: 0.65 }, // Vibrato-Abriss 50 ms – eine Note mit 2.0–3.0
+    { start: 3.5, end: 4.0, midi: 72, amp: 0.6 }, // Pause 500 ms – eigene Note
+  ];
+  const out = tidyAiNotes(ai);
+  assert.equal(out.length, 2, JSON.stringify(out));
+  assert.equal(out[0].start, 2.0);
+  assert.equal(out[0].end, 3.0);
+  assert.equal(out[1].start, 3.5);
+  assert.ok(out.every((n) => n.end - n.start >= 0.12));
+});
+
+test('Lead-Melodie: im Band 300–2500 Hz gewinnt die Oberstimme, Bass zählt nicht', () => {
+  // Gesang (MIDI 72, im Band) und eine höhere Obertonspur (MIDI 96, darüber) gleichzeitig,
+  // dazu ein tiefer Bass – die Melodie bleibt im Band
+  const notes = [];
+  for (let b = 0; b < 6; b++) {
+    for (let k = 0; k < 8; k++) {
+      const start = b * 96 + k * 12;
+      notes.push({ start, dur: 12, midi: 72 + (k % 3), amp: 0.6 });
+      notes.push({ start, dur: 12, midi: 40 + (k % 2) * 7, amp: 0.7 });
+    }
+  }
+  const vs = separateVoices(cleanPoly(notes), { beat: 24, mt: 96 });
+  assert.ok(vs.melody.length >= 40);
+  assert.ok(vs.melody.every((n) => n.midi >= 63 && n.midi <= 94), 'Melodie liegt im Band');
+  assert.ok(vs.bass.every((n) => n.midi <= 55));
 });

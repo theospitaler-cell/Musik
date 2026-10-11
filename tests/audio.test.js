@@ -242,7 +242,7 @@ test('Lokale KI + Signalanalyse: Tonwiederholungen werden getrennt, Schlagzeug-T
 
 test('Lokale KI (Basic Pitch) läuft lokal und liefert Melodie, Bass & Begleitung', async () => {
   const { runBasicPitch, aiNotes } = await import('../src/input/ai-pitch.js');
-  const s = synthSong({ groove: 'rock8', bars: 4, bpm: 120, seed: 2 });
+  const s = synthSong({ groove: 'rock8', bars: 8, bpm: 120, seed: 2 }) // 8 Takte: nach dem 120-ms-Filter bleiben genug Bass- und Melodietöne;
   const notes = aiNotes(await runBasicPitch(s.audio));
   // jede Melodienote wird gehört (Einsatz ±70 ms, gleiche Tonhöhe)
   const hit = s.melody.filter((t) => notes.some((n) => Math.abs(n.start - t.sec) < 0.07 && n.midi === t.midi)).length;

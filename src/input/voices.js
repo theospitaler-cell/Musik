@@ -65,6 +65,42 @@ function mono(notes) {
   return out.filter((n) => n.dur > 0);
 }
 
+// Rohnoten der KI (Sekunden) glätten, bevor sie in Stimmen zerlegt werden:
+//  - Fragmente unter minSec (120 ms) verwerfen – das sind Einschwing- und Abklingreste, keine Töne
+//  - eine gehaltene Note (mind. 0,4 s), die nur kurz unterbrochen ist (Vibrato, Abriss von höchstens
+//    60 ms), bleibt eine Note. Schnelle Wiederholungen (Achtel, Sechzehntel) bleiben getrennt.
+export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4 } = {}) {
+  const long = (ai || []).filter((n) => n.end - n.start >= minSec);
+  const byPitch = new Map();
+  for (const n of [...long].sort((a, b) => a.start - b.start)) {
+    if (!byPitch.has(n.midi)) byPitch.set(n.midi, []);
+    byPitch.get(n.midi).push({ ...n });
+  }
+  const out = [];
+  for (const list of byPitch.values()) {
+    let cur = null;
+    for (const n of list) {
+      if (cur && cur.end - cur.start >= holdSec && n.start - cur.end <= gapSec) {
+        cur.end = Math.max(cur.end, n.end);
+        cur.amp = Math.max(cur.amp ?? 0, n.amp ?? 0);
+      } else {
+        if (cur) out.push(cur);
+        cur = n;
+      }
+    }
+    if (cur) out.push(cur);
+  }
+  return out.filter((n) => n.end - n.start >= minSec).sort((a, b) => a.start - b.start || a.midi - b.midi);
+}
+
+// Skyline-Band für die Lead-Melodie: 300–2500 Hz (MIDI 63–94). Töne darin tragen die Melodie;
+// sehr tiefe Töne (Bass, Bass Drum) tragen sie nicht.
+export const LEAD_BAND = [63, 94];
+export function leadBandScore(midi) {
+  if (midi >= LEAD_BAND[0] && midi <= LEAD_BAND[1]) return 0.25;
+  return midi < 55 ? -0.3 : 0;
+}
+
 // Gruppen gleichzeitiger Anschläge (Töne absteigend)
 function onsetGroups(notes) {
   const groups = [];
@@ -176,6 +212,7 @@ function pickMelody(notes, beat, hint, step) {
     let s = 0.5 * Math.min(1.5, n.amp / ampRef) + 0.2 * Math.min(1, n.dur / beat);
     s += (k === 0 ? 0.45 : k === 1 ? 0.15 : 0) * (dense ? 0.3 : 1);
     s -= 0.05 * Math.max(0, Math.abs(n.midi - center) - 10);
+    s += leadBandScore(n.midi);
     // Töne, die auch im Seitensignal (L−R) stehen, sind seitlich verteilte Gitarren/Streicher/Synths –
     // Gesang und Lead stehen in der Mitte. Kein Ausschluss, aber der Ton muss sich mehr beweisen.
     // (Nur im Vergleich innerhalb einer Gruppe: gibt es keinen Ton aus der Mitte, bleibt alles wie es war.)

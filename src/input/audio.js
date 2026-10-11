@@ -13,7 +13,7 @@ import { detectKey } from '../theory/keys.js';
 import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
 import { fuseMelody } from './ai-pitch.js';
-import { cleanPoly, separateVoices, simplifyLine } from './voices.js';
+import { cleanPoly, separateVoices, simplifyLine, tidyAiNotes } from './voices.js';
 import { barFeatures, audioSections } from './form.js';
 
 const SR = 22050;
@@ -1377,7 +1377,9 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
 export const ANALYSIS_VERSION = 3;
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
-export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai = null, debug = null } = {}) {
+export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null } = {}) {
+  // KI-Rohnoten: Fragmente unter 120 ms weg, Vibrato/kurze Abrisse zu gehaltenen Tönen
+  const ai = aiRaw && aiRaw.length ? tidyAiNotes(aiRaw) : aiRaw;
   onProgress('Spektrum wird analysiert', 0);
   const feat = analyzeFrames(mono, onProgress);
   onProgress('Tempo & Beats werden erkannt', 0.46);
