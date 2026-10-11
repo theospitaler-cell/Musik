@@ -1655,7 +1655,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
           const g = n.fast ? n.grid || 6 : GRID;
           const s0 = toTick(n.start, g);
           const d = Math.max(n.fast ? g : unit, toTick(n.end, g) - s0);
-          return { start: s0, dur: d, midi: n.midi, amp: n.amp ?? 0.5, ...(n.fast ? { fast: true, grid: g } : {}) };
+          return { start: s0, dur: d, midi: n.midi, amp: n.amp ?? 0.5, ...(n.stem ? { stem: n.stem } : {}), ...(n.fast ? { fast: true, grid: g } : {}) };
         })
         .filter((n) => n.start >= -mt + BT && n.start < measureCount * mt),
       { step: unit },

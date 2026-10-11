@@ -80,8 +80,9 @@ export const isNewAttack = (r) => !!r && (r.depth >= 0.6 || r.rise >= 3);
 export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4, attack = null, joinGap = 0.12, joinFirstMax = 0.12 } = {}) {
   const byPitch = new Map();
   for (const n of [...(ai || [])].sort((a, b) => a.start - b.start)) {
-    if (!byPitch.has(n.midi)) byPitch.set(n.midi, []);
-    byPitch.get(n.midi).push({ ...n });
+    const key = n.stem ? `${n.stem}:${n.midi}` : n.midi;
+    if (!byPitch.has(key)) byPitch.set(key, []);
+    byPitch.get(key).push({ ...n });
   }
   const out = [];
   for (const list of byPitch.values()) {
@@ -245,6 +246,10 @@ function pickMelody(notes, beat, hint, step) {
     s += (k === 0 ? 0.45 : k === 1 ? 0.15 : 0) * (dense ? 0.3 : 1);
     s -= 0.05 * Math.max(0, Math.abs(n.midi - center) - 10);
     s += leadBandScore(n.midi);
+    // Spurentrennung: der Gesangs-Stem trägt die Melodie, der Bass-Stem nie
+    // (nach Lautstärke gewichtet: leise Reste im Gesangs-Stem sind Durchsprechen, keine Melodie)
+    if (n.stem === 'vocals') s += 1.2 * Math.min(1, n.amp / ampRef);
+    else if (n.stem === 'bass') s -= 1;
     // Töne, die auch im Seitensignal (L−R) stehen, sind seitlich verteilte Gitarren/Streicher/Synths –
     // Gesang und Lead stehen in der Mitte. Kein Ausschluss, aber der Ton muss sich mehr beweisen.
     // (Nur im Vergleich innerhalb einer Gruppe: gibt es keinen Ton aus der Mitte, bleibt alles wie es war.)
@@ -464,11 +469,14 @@ export function simplifyLine(line, { beat = DIV, allowPush = false, mergeRepeats
 // notes: gereinigte Noten (cleanPoly). hint: Melodie der Signalanalyse (optional, gleiche Ticks)
 export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint = null } = {}) {
   if (!notes.length) return { melody: [], bass: [], inner: [[], []], bassTop: 0 };
-  const b = pickBass(notes, beat, mt, step);
+  // Spurentrennung (Demucs): ist ein Bass-Stem da, kommt der Bass nur von dort
+  const bassStem = notes.filter((n) => n.stem === 'bass');
+  const stemmed = bassStem.length >= 8;
+  const b = pickBass(stemmed ? bassStem : notes, beat, mt, step);
   const bassSet = new Set(b.line.map(keyOf));
   const isBass = (n) => bassSet.has(keyOf(n));
-  // alles über der Basslage
-  let upper = notes.filter((n) => !isBass(n) && n.midi > b.top);
+  // alles über der Basslage (mit Bass-Stem: alles, was nicht aus dem Bass-Stem kommt)
+  let upper = notes.filter((n) => !isBass(n) && (stemmed ? n.stem !== 'bass' : n.midi > b.top));
   // Stücke ohne eigene Oberstimme (nur Bass + Akkorde): dann ist alles über dem Bass Kandidat
   if (upper.length < 0.15 * notes.length) upper = notes.filter((n) => !isBass(n));
   let melody = legato(pickMelody(upper, beat, hint, step), step);
@@ -514,7 +522,8 @@ export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint
   // in der Lücke direkt über dem Bass
   const rest = notes.filter((n) => {
     if (isBass(n) || melSet.has(keyOf(n))) return false;
-    if (n.midi < b.top + 3 && !parallel.has(keyOf(n))) return false;
+    if (stemmed && n.stem === 'bass') return false;
+    if (!stemmed && n.midi < b.top + 3 && !parallel.has(keyOf(n))) return false;
     const m = melAt(n.start);
     if (m !== null && n.midi !== m && (n.midi - m) % 12 === 0) return false;
     // genau eine Oktave über dem Basston: Oktav-Dopplung des Basses (bzw. sein Oberton)

@@ -22,10 +22,10 @@ Die Installer werden bei jeder Änderung automatisch von GitHub gebaut
 1. **Song laden**: MP3, WAV, M4A, FLAC, OGG, MuseScore-Datei (MusicXML/MXL), MIDI oder ABC.
    Eine Fortschrittsanzeige zeigt jeden Schritt (Lesen, Dekodieren, Analyse, Noten setzen, Export).
 2. **Besetzung**: *Mehrere* (2–8 Instrumente + optional Schlagzeug), *Solo* oder *Schlagzeug*.
-3. **Stil & Optionen**: Brass Band Funk (Standard), Second Line, Swing, Ballade, Klassik, Polka,
-   Pop, Rock, Soul/R&B, Latin, Reggae/Ska, Disco, Blues/Shuffle, Marsch, Walzer – oder
-   **Automatisch** (wählt aus allen nach Tempo, Taktart, Swing, Sechzehntel-Gefühl, Bass-Drum-Muster
-   und Titel); Hauptsolist, Schwierigkeit, Form, Tempo, Tonart.
+3. **Optionen**: Hauptsolist, Schwierigkeit, Form, Tempo, Tonart. Der **Stil** wird immer automatisch
+   gewählt (aus Funk, Second Line, Swing, Ballade, Klassik, Polka, Pop, Rock, Soul/R&B, Latin,
+   Reggae/Ska, Disco, Blues/Shuffle, Marsch, Walzer – nach Tempo, Taktart, Swing,
+   Sechzehntel-Gefühl, Bass-Drum-Muster und Titel); es gibt dafür kein Feld mehr.
 4. **Erstellen** → Noten ansehen, abspielen, exportieren.
 
 Arrangements haben immer ungefähr die **Länge des Originals** (jeder Formteil einmal,
@@ -117,18 +117,53 @@ Die Analyse läuft im Hintergrund.
 - **Geprüft an vielen Liedern, nicht an einem**: eine Testsammlung mit Rock, Halftime, Shuffle,
   Walzer, Funk, Ride, Ritardando, Tempowechsel und reinem Schlagzeug misst Tempo, Beats,
   Taktanfänge, Schlagzeug-Trefferquote und Melodie bei jeder Änderung.
+### Spurentrennung mit Demucs (Desktop-App, optional)
+
+In den Einstellungen unter **Audio-Vorverarbeitung (Stem-Separation)**: Demucs v4 trennt eine Aufnahme
+lokal in Gesang, Begleitung/Bläser, Bass und Schlagzeug (`htdemucs`). Die KI (Basic Pitch) hört dann
+jede Spur für sich – der Gesang trägt die Melodie, der Bass-Stem liefert den Bass, **das Schlagzeug
+liefert keine Töne mehr** (keine Geisternoten durch Bass Drum, Snare, Hi-Hat).
+
+| Einstellung | Verhalten |
+|---|---|
+| **Automatisch** *(Standard)* | Demucs auf der **Grafikkarte** (NVIDIA/CUDA), falls vorhanden; ohne GPU läuft die bisherige direkte Analyse (mit Hinweis) |
+| **Erzwingen** | Demucs immer, auch auf dem Prozessor (deutlich langsamer) |
+| **Deaktiviert** | direkte Analyse ohne Spurentrennung |
+
+Die Einstellungen zeigen den erkannten Zustand („GPU erkannt: NVIDIA … – CUDA aktiv“, „Nur CPU
+verfügbar“, „Demucs nicht installiert“). Der Hauptprozess der Desktop-App (`electron/stems.cjs`)
+startet Demucs über Python und liefert die Stems zurück; schlägt CUDA fehl (z. B. zu wenig
+Grafikspeicher), läuft derselbe Aufruf auf dem Prozessor, bei jedem anderen Fehler die direkte
+Analyse. Im Browser und auf dem Handy gibt es keine Spurentrennung (Python/PyTorch).
+
+**Einrichten** (einmalig, lädt mehrere GB):
+
+```bash
+node scripts/setup-demucs.mjs            # legt ~/.notecode/demucs an, wählt den passenden CUDA-Index
+node scripts/setup-demucs.mjs --dry-run  # nur anzeigen, was passieren würde
+node scripts/setup-demucs.mjs --cuda cu124   # PyTorch-Index von Hand wählen (cu128 | cu126 | cu124 | cu121 | cpu)
+```
+
+Das Skript installiert PyTorch **mit CUDA** vom passenden Index
+(`pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu1xx` – RTX 50xx
+(Blackwell) braucht `cu128`, ältere Karten `cu124`), danach `demucs`, und prüft nicht nur
+`torch.cuda.is_available()`, sondern rechnet wirklich auf der Grafikkarte (sonst fiele ein
+falscher Build erst beim ersten Lauf mit „no kernel image“ auf). Zum Schluss lädt es das Modell und
+trennt 2 Sekunden Probeton.
+
 ### Aufwand: von „Schnell“ bis „Ultra“
 
-Ein Schieberegler mit fünf Stufen (wie der Aufwand-Regler in Claude) steht bei der Aufnahme, bei
-*Arrangement erstellen* und in den Einstellungen. Mehr Aufwand = mehr Zeit = bessere Noten:
+Ein Schieberegler mit fünf Stufen (wie der Aufwand-Regler in Claude) steht **nur in den Einstellungen**
+(*Standard für neue Arrangements*); im Arbeitsbereich gibt es ihn nicht mehr, es gilt immer die dort
+gewählte Stufe – ohne eigene Wahl das Maximum (**Ultra**). Mehr Aufwand = mehr Zeit = bessere Noten:
 
 | Stufe | Analyse einer Aufnahme | Arrangieren | Dauer (ca.) |
 |---|---|---|---|
 | Schnell | 1 KI-Durchgang | 1 Fassung | Sekunden |
 | Ausgewogen | 2 KI-Ansichten (Original, ohne Schlagzeug) | wenige Varianten | 1–2 Min. |
-| Gründlich *(Standard)* | 4 Durchgänge, Gesang/Begleitung getrennt, Seitensignal | viele Varianten je Abschnitt | 3–6 Min. |
+| Gründlich | 4 Durchgänge, Gesang/Begleitung getrennt, Seitensignal | viele Varianten je Abschnitt | 3–6 Min. |
 | Sehr gründlich | 8 Durchgänge | + Parametersuche, Nachbessern | 10–15 Min. |
-| Ultra | 12 Durchgänge | große Suche, wiederholtes Nachbessern | bis ca. 30 Min. |
+| Ultra *(Standard)* | 12 Durchgänge | große Suche, wiederholtes Nachbessern | bis ca. 30 Min. |
 
 Die Zeiten sind Obergrenzen: Die Arbeit hört früher auf, wenn nichts mehr besser wird.
 Beim Arrangieren schreibt NoteCode mehrere Fassungen mit verschiedenen Einstellungen, bewertet sie

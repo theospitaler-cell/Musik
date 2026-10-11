@@ -4,6 +4,7 @@ const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain } = require('ele
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
+const stems = require('./stems.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const REPO = 'theospitaler-cell/Musik';
@@ -132,6 +133,36 @@ app.whenReady().then(() => {
     }
     send('Fertig', 1);
     return { ok: true, version: info.version };
+  });
+  // ---- Spurentrennung (Demucs v4): Zustand der Hardware/Python-Umgebung und der Lauf selbst
+  let stemStatus = null;
+  let stemStatusAt = 0;
+  ipcMain.handle('stems:status', async (_e, { refresh = false } = {}) => {
+    if (!refresh && stemStatus && Date.now() - stemStatusAt < 60000) return stemStatus;
+    stemStatus = await stems.status();
+    stemStatusAt = Date.now();
+    return stemStatus;
+  });
+  let stemJob = null;
+  ipcMain.handle('stems:separate', async (e, { wav, device = 'cpu' }) => {
+    if (stemJob) throw new Error('Die Spurentrennung läuft bereits');
+    const ctl = new AbortController();
+    stemJob = ctl;
+    try {
+      const st = stemStatus || (stemStatus = await stems.status());
+      return await stems.separate(new Uint8Array(wav), {
+        device,
+        python: st.pythonCmd,
+        signal: ctl.signal,
+        onProgress: (frac, text) => e.sender.send('stems:progress', { frac, text }),
+      });
+    } finally {
+      stemJob = null;
+    }
+  });
+  ipcMain.handle('stems:cancel', () => {
+    if (stemJob) stemJob.abort();
+    return true;
   });
   if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
   createWindow();

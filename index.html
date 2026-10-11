@@ -68,7 +68,6 @@
                 <textarea id="abc-input" spellcheck="false" rows="9" placeholder="X:1&#10;T:Mein Song&#10;M:4/4&#10;L:1/8&#10;K:Bb&#10;&quot;Bb7&quot;B2 d2 f2 d2|..."></textarea>
                 <div class="row-end"><button class="btn ghost small" id="abc-load">Übernehmen</button></div>
               </div>
-              <div class="effort compact" id="effort-src"></div>
               <div class="analysis hidden" id="analysis"></div>
             </section>
 
@@ -148,9 +147,8 @@
 
             <!-- 3 Stil & Tempo -->
             <section class="card step" id="step-style">
-              <div class="step-head"><span class="step-num">3</span><div class="step-title"><h2>Stil &amp; Tempo</h2><p>Charakter, Tempo und Tonart</p></div></div>
-              <div class="style-grid" id="style-grid"></div>
-              <p class="muted small hint playback-only hidden">Playback: Tempo, Tonart, Länge und Ablauf kommen 1:1 aus der Datei. Der Stil bestimmt nur die Tempo-Bezeichnung und – falls die Datei kein Schlagzeug hat – den Groove.</p>
+              <div class="step-head"><span class="step-num">3</span><div class="step-title"><h2>Tempo &amp; Tonart</h2><p>Der Stil wird automatisch passend zum Lied gewählt</p></div></div>
+              <p class="muted small hint playback-only hidden">Playback: Tempo, Tonart, Länge und Ablauf kommen 1:1 aus der Datei. Der automatisch gewählte Stil bestimmt nur die Tempo-Bezeichnung und – falls die Datei kein Schlagzeug hat – den Groove.</p>
               <div class="field-grid free-only">
                 <label class="field"><span>Tempo (BPM)</span>
                   <span class="input-btn"><input type="number" id="opt-tempo" min="40" max="260" placeholder="Automatisch" /><button type="button" class="chip small" id="tempo-auto" title="Tempo wieder automatisch">Auto</button></span>
@@ -187,7 +185,6 @@
               </div>
             </details>
 
-            <div class="effort" id="effort-gen"></div>
             <button class="btn primary big" id="generate" disabled><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
           </aside>
 
@@ -324,7 +321,6 @@
             </div>
             <div class="voice-grid" id="set-voices"></div>
             <div class="field-grid">
-              <label class="field"><span>Stil</span><select id="set-style"></select></label>
               <label class="field"><span>Hauptsolo</span><select id="set-solo"></select></label>
               <label class="field"><span>Schwierigkeit</span><select id="set-difficulty"></select></label>
               <label class="field"><span>Form</span><select id="set-form"><option value="compact">Kompakt (Wdh., D.S. al Coda)</option><option value="full">Ausgeschrieben</option></select></label>
@@ -332,6 +328,12 @@
             <label class="toggle-row"><span><strong>Schlagzeug standardmäßig</strong><small>Drum-Stimme automatisch dazu</small></span><input type="checkbox" class="switch" id="set-drums" /></label>
             <label class="toggle-row"><span><strong>Bläserfreundliche Tonart</strong><small>automatisch transponieren (z. B. E → Es)</small></span><input type="checkbox" class="switch" id="set-transpose" /></label>
             <div class="effort" id="effort-set"></div>
+            <div class="card-sub" id="stems-card">
+              <label class="field"><span>Audio-Vorverarbeitung (Stem-Separation)</span><select id="set-stems"></select></label>
+              <p class="stems-status muted small" id="stems-status">Hardware wird geprüft …</p>
+              <p class="muted small">Demucs v4 trennt die Aufnahme lokal in Gesang, Begleitung/Bläser, Bass und Schlagzeug. Die KI hört dann jede Spur für sich; das Schlagzeug liefert keine Geisternoten mehr. Nur in der Desktop-App (Windows), mit Grafikkarte (NVIDIA/CUDA) in Minuten, auf dem Prozessor deutlich langsamer.</p>
+              <div class="row-end"><button class="btn small" id="stems-recheck" type="button">Hardware erneut prüfen</button></div>
+            </div>
             <label class="field"><span>KI-Assistent beim Überarbeiten (optional)</span><input type="password" id="set-assistant" autocomplete="off" placeholder="Anthropic-API-Schlüssel – leer = nur die eingebaute Auswertung" /></label>
             <p class="muted small">Ohne Schlüssel wertet NoteCode deine Rückmeldung selbst aus (auf dem Gerät, ohne Server). Mit Schlüssel hilft Claude zusätzlich, freien Text in Änderungen zu übersetzen; dafür werden dein Text und eine kurze Beschreibung des Stücks (Titel, Tonart, Tempo, Besetzung) an Anthropic gesendet. Der Schlüssel bleibt auf diesem Gerät.</p>
             <label class="toggle-row"><span><strong>Automatisch speichern</strong><small>jedes erstellte Arrangement in der Bibliothek ablegen</small></span><input type="checkbox" class="switch" id="set-autosave" /></label>

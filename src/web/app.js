@@ -1,7 +1,6 @@
 // NoteCode – App-Steuerung (Oberfläche).
 import { INSTRUMENTS, PRESETS, FAMILIES, writtenRangeChoices } from '../arrange/instruments.js';
 import { DIFFICULTY_LEVELS } from '../arrange/difficulty.js';
-import { STYLE_LIST } from '../arrange/styles.js';
 import { loadSong, detectFormat } from '../input/index.js';
 import { arrange, usesFaithful } from '../arrange/engine.js';
 import { playAlongSources, defaultPlayParts } from '../arrange/playalong.js';
@@ -26,30 +25,13 @@ import { openAudioExport } from './audio-dialog.js';
 import { renderPages, responsiveSvg, pagesToPngs, xmlsToPdf, loadVerovio } from './render.js';
 import { LocalStore, Library } from './store.js';
 import { loadSettings, saveSettings } from './settings.js';
+import { STEM_MODES, normalizeStemMode, describeHardware, resolveStemPlan } from '../input/stems.js';
 import { MIN_VOICES, MAX_VOICES, voiceRole, ensembleName, resizeVoices, presetVoices, matchingPreset, carryPerVoice } from './voices.js';
 import { groupLibrary, mergeFolders, sameFolders, songTitleOf, uniqueFolderName } from './folders.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const VOICE_COLORS = ['#1f3a5f', '#4f6d8f', '#8a6a2f', '#5b5f66', '#2f7d4f', '#7a4a5c', '#3f6f73', '#6a5f8f'];
-const STYLE_TAG = {
-  auto: 'Passend zum Song',
-  funk: 'Funk',
-  secondline: 'New Orleans',
-  swing: 'Jazz',
-  ballad: 'Ruhig',
-  classical: 'Klassik',
-  polka: 'Blasmusik',
-  pop: 'Pop',
-  rock: 'Rock',
-  soul: 'Soul',
-  latin: 'Latin',
-  reggae: 'Offbeat',
-  disco: 'Dance',
-  blues: 'Blues',
-  march: 'Blasmusik',
-  waltz: '3/4',
-};
 
 const S = {
   settings: null,
@@ -417,7 +399,7 @@ function defaultOpts() {
   const st = S.settings;
   return {
     voices: [...st.defaultVoices],
-    style: st.defaultStyle,
+    style: 'auto', // der Stil wird immer automatisch passend zum Lied gewählt
     drums: st.defaultDrums,
     solo: st.defaultSolo,
     length: st.defaultLength,
@@ -750,7 +732,6 @@ function useOrchestra() {
   S.opts.voiceDifficulty = carryPerVoice(S.opts.voices, next, S.opts.voiceDifficulty);
   S.opts.ranges = carryPerVoice(S.opts.voices, next, S.opts.ranges);
   S.opts.voices = next;
-  S.opts.style = p.style;
   applyOptsToUi(readOptsKeepVoices());
   toast(`Besetzung: ${p.name.replace(/\s*\(.*\)/, '')} · ${next.length} Stimmen`);
 }
@@ -1003,7 +984,6 @@ function renderBand() {
   markPreset();
   renderFineList();
   renderCountChooser();
-  mountEffort($('#effort-gen'));
 }
 
 function setOriginal(on) {
@@ -1269,7 +1249,7 @@ function readOpts() {
   const tr = $('#opt-transpose').value;
   return {
     voices: [...S.opts.voices],
-    style: S.opts.style,
+    style: 'auto',
     drums: $('#opt-drums').checked,
     solo: solo === 'rotate' || solo === 'none' ? solo : Number(solo),
     length: 'normal', // immer ca. Originallänge
@@ -1319,7 +1299,6 @@ function applyOptsToUi(o) {
   $('#opt-seed').value = o.seed || 1;
   fillTransposeSelect();
   if (o.transpose !== undefined) $('#opt-transpose').value = String(o.transpose);
-  renderStyles();
   markPreset();
   setEnsemble(S.opts.ensemble || 'quartet');
   if (S.opts.ensemble === 'solo') $('#opt-solo').value = o.solo === 'none' ? 'none' : '0';
@@ -1340,7 +1319,6 @@ function renderPresets() {
       S.opts.voiceDifficulty = carryPerVoice(S.opts.voices, next, S.opts.voiceDifficulty);
       S.opts.ranges = carryPerVoice(S.opts.voices, next, S.opts.ranges);
       S.opts.voices = next;
-      S.opts.style = p.style;
       applyOptsToUi(readOptsKeepVoices());
       toast(`Besetzung: ${p.name.replace(/\s*\(.*\)/, '')} · ${ensembleName(next.length)}`);
     });
@@ -1350,28 +1328,13 @@ function renderPresets() {
 function readOptsKeepVoices() {
   const o = readOpts();
   o.voices = [...S.opts.voices];
-  o.style = S.opts.style;
+  o.style = 'auto';
   return o;
 }
 function markPreset() {
   // Vorlage in der aktuellen Anzahl Stimmen; passen mehrere, wird die erste markiert
   const hit = matchingPreset(S.opts.voices);
   $$('#preset-chips .chip').forEach((c) => c.classList.toggle('active', !!hit && c.dataset.preset === hit.id));
-}
-
-function renderStyles() {
-  const box = $('#style-grid');
-  box.innerHTML = '';
-  for (const s of [{ id: 'auto', name: 'Automatisch' }, ...STYLE_LIST]) {
-    const b = document.createElement('button');
-    b.className = 'style-card' + (S.opts.style === s.id ? ' active' : '');
-    b.innerHTML = `<span class="tag">${STYLE_TAG[s.id] || ''}</span><strong>${s.name}</strong>`;
-    b.addEventListener('click', () => {
-      S.opts.style = s.id;
-      $$('.style-card', box).forEach((x) => x.classList.toggle('active', x === b));
-    });
-    box.appendChild(b);
-  }
 }
 
 // ---------------------------------------------------------------- Vorlage
@@ -1500,21 +1463,10 @@ function mountEffort(el, { compact = false } = {}) {
     <div class="effort-ticks">${EFFORT.map((x) => `<span class="${x.level === lv ? 'on' : ''}" data-lv="${x.level}">${x.short}</span>`).join('')}</div>
     <p class="effort-text muted small">${e.text}</p>`;
   void compact;
-  // Ultra: die Konzertpartitur gibt es mit Orchester-Besetzung
-  if (el.id === 'effort-gen' && lv === 5 && S.opts && S.opts.ensemble === 'quartet' && S.opts.voices.length <= 8) {
-    const hint = document.createElement('div');
-    hint.className = 'effort-hint small';
-    hint.innerHTML = '<span>Für eine richtige Konzertpartitur: Besetzung als Orchester setzen (Holz, Blech, Streicher).</span> <button type="button" class="btn small">Orchester wählen</button>';
-    hint.querySelector('button').addEventListener('click', () => {
-      useOrchestra();
-      mountAllEffort();
-    });
-    el.appendChild(hint);
-  }
   const set = (v) => {
     v = effortOf(v).level;
     if (v === effortLevel()) return;
-    update({ effort: v });
+    update({ effort: v, effortChosen: true });
     mountAllEffort();
   };
   el.querySelector('.effort-range').addEventListener('input', (ev) => {
@@ -1529,8 +1481,6 @@ function mountEffort(el, { compact = false } = {}) {
   el.querySelectorAll('.effort-ticks span').forEach((t) => t.addEventListener('click', () => set(Number(t.dataset.lv))));
 }
 function mountAllEffort() {
-  mountEffort($('#effort-gen'));
-  mountEffort($('#effort-src'), { compact: true });
   mountEffort($('#effort-set'));
 }
 
@@ -1542,16 +1492,22 @@ function estimateDuration(size, name = '') {
   return Math.max(10, Math.min(1800, size / (lossless ? 150000 : 16000)));
 }
 
-function analysisTasks(dur, level, { read = false } = {}) {
+// Wird die Aufnahme in Spuren getrennt (Demucs, nur Desktop-App)?
+function stemsPlanned() {
+  return resolveStemPlan(S.settings.stemsMode, S.stemsStatus).use;
+}
+
+function analysisTasks(dur, level, { read = false, stems = false } = {}) {
   const cfg = effortOf(level).analysis;
-  const th = cfg.hpss;
+  const th = cfg.hpss && !stems;
   const t = [];
   if (read) t.push({ id: 'read', label: 'Datei lesen', expect: 300 + dur * 6 });
   t.push({ id: 'decode', label: 'Aufnahme dekodieren', expect: 700 + dur * speedOf('decode', 40) });
+  if (stems) t.push({ id: 'stems', label: 'Spuren trennen (Demucs: Gesang, Begleitung, Bass)', expect: 4000 + dur * speedOf('stems', S.stemsStatus && S.stemsStatus.cuda ? 120 : 1500) });
   if (th) t.push({ id: 'prep', label: 'Gesang und Begleitung trennen', expect: 500 + dur * speedOf('prep', 70) });
   t.push({ id: 'ai', label: cfg.passes > 1 ? `Lokale KI hört die Noten (bis zu ${cfg.passes} Durchgänge)` : 'Lokale KI hört die Noten', expect: 1500 + dur * speedOf(`ai${level}`, 70 * cfg.passes) });
   // Nach den KI-Durchgängen folgen eigene Schritte – jeder mit eigenem Balken und eigener Zeit
-  if (cfg.side) t.push({ id: 'side', label: 'Seitensignal hören (Begleitung erkennen)', expect: 800 + dur * speedOf('side', 30) });
+  if (cfg.side && !stems) t.push({ id: 'side', label: 'Seitensignal hören (Begleitung erkennen)', expect: 800 + dur * speedOf('side', 30) });
   if (cfg.passes > 0) t.push({ id: 'conv', label: 'Noten aus den KI-Daten lesen', expect: 400 + dur * speedOf('conv2', cfg.side ? 8 : 5) });
   t.push({ id: 'spec', label: 'Klang, Tempo & Takt erkennen', expect: 1000 + dur * speedOf('spec', 110) });
   t.push({ id: 'melody', label: 'Melodie, Bass & Akkorde erkennen', expect: 800 + dur * speedOf('melody', 70) });
@@ -1563,7 +1519,7 @@ function analysisTasks(dur, level, { read = false } = {}) {
 
 // Meldungen der Analyse (Stufe, Anteil, Text) -> Aufgaben; abgeschlossene Aufgaben lernen ihre Dauer
 function stageRunner(pg, dur, level) {
-  const order = ['read', 'decode', 'prep', 'ai', 'side', 'conv', 'spec', 'melody', 'grid', 'drums', 'save'].filter((id) => pg.list.get(id));
+  const order = ['read', 'decode', 'stems', 'prep', 'ai', 'side', 'conv', 'spec', 'melody', 'grid', 'drums', 'save'].filter((id) => pg.list.get(id));
   const t0 = {};
   const finish = (id) => {
     const t = pg.list.get(id);
@@ -1637,14 +1593,14 @@ async function reanalyze({ auto = false, effort = null, regenerate = true } = {}
   renderTabBar();
   const level = effort ?? (auto ? Math.min(3, effortLevel()) : effortLevel());
   const dur = S.song?.duration || estimateDuration(blob.size, src.name);
-  const pg = progress(auto ? 'Bessere Erkennung: Song wird neu analysiert' : 'Song wird neu analysiert', { tasks: analysisTasks(dur, level) });
+  const pg = progress(auto ? 'Bessere Erkennung: Song wird neu analysiert' : 'Song wird neu analysiert', { tasks: analysisTasks(dur, level, { stems: stemsPlanned() }) });
   const run = stageRunner(pg, dur, level);
   try {
     run.enter('decode');
     await nextFrame();
     const decoded = await decodeAudio(new Uint8Array(await blob.arrayBuffer()));
     run.finish('decode');
-    const song = await analyzeAudio(decoded, { title: S.song?.title || src.name.replace(/\.[^.]+$/, ''), effort: level, signal: jobSignal(), onStage: (st, f, t) => run.stage(st, f, t) });
+    const song = await analyzeAudio(decoded, { title: S.song?.title || src.name.replace(/\.[^.]+$/, ''), effort: level, signal: jobSignal(), stemsMode: S.settings.stemsMode, stemsStatus: S.stemsStatus, onStage: (st, f, t) => run.stage(st, f, t) });
     lockJob();
     const had = !!S.arr;
     const id = S.currentId;
@@ -1839,7 +1795,7 @@ async function handleFile(file, { replace = false } = {}) {
   const level = effortLevel();
   const estDur = estimateDuration(file.size, file.name);
   const pg = looksAudio
-    ? progress(`„${file.name}“ wird analysiert`, { tasks: analysisTasks(estDur, level, { read: true }) })
+    ? progress(`„${file.name}“ wird analysiert`, { tasks: analysisTasks(estDur, level, { read: true, stems: stemsPlanned() }) })
     : progress(`„${file.name}“ wird geladen`);
   const run = looksAudio ? stageRunner(pg, estDur, level) : null;
   try {
@@ -1855,7 +1811,7 @@ async function handleFile(file, { replace = false } = {}) {
       run.finish('decode');
       const dur = decoded.duration || estDur;
       const title = file.name.replace(/\.[^.]+$/, '');
-      const song = await analyzeAudio(decoded, { title, effort: level, signal: jobSignal(), onStage: (st, f, t) => run.stage(st, f, t) });
+      const song = await analyzeAudio(decoded, { title, effort: level, signal: jobSignal(), stemsMode: S.settings.stemsMode, stemsStatus: S.stemsStatus, onStage: (st, f, t) => run.stage(st, f, t) });
       lockJob();
       run.enter('save');
       const audioId = uuid();
@@ -2794,9 +2750,6 @@ function renderSettings() {
     update({ defaultVoices: [...v] });
     fillSoloSelect($('#set-solo'), v, $('#set-solo').value);
   });
-  const ss = $('#set-style');
-  ss.innerHTML = [{ id: 'auto', name: 'Automatisch (passend zum Song)' }, ...STYLE_LIST].map((s) => `<option value="${s.id}">${s.name}</option>`).join('');
-  ss.value = st.defaultStyle;
   fillSoloSelect($('#set-solo'), st.defaultVoices, st.defaultSolo);
   difficultyOptions($('#set-difficulty'), st.defaultDifficulty ?? 'auto');
   $('#set-form').value = st.form;
@@ -2804,6 +2757,7 @@ function renderSettings() {
   $('#set-transpose').checked = st.transposeAuto;
   $('#set-autosave').checked = st.autoSave;
   mountEffort($('#effort-set'));
+  renderStemsSettings();
   $('#set-assistant').value = st.assistantKey || '';
   $('#set-paper').value = st.paper;
   $('#set-zoom').value = String(st.notesZoom);
@@ -2816,6 +2770,46 @@ function renderSettings() {
   renderAccountStatus();
 }
 
+// ---- Spurentrennung (Demucs): Modus wählen, erkannte Hardware anzeigen
+async function refreshStemsStatus(refresh = false) {
+  const d = typeof window !== 'undefined' ? window.notecodeDesktop : null;
+  if (!d || !d.stemsStatus) {
+    S.stemsStatus = { desktop: false };
+    return S.stemsStatus;
+  }
+  try {
+    S.stemsStatus = await d.stemsStatus(refresh);
+  } catch (e) {
+    S.stemsStatus = { desktop: true, gpu: null, python: null, demucs: null, cuda: false, error: String(e.message || e) };
+  }
+  return S.stemsStatus;
+}
+
+function renderStemsStatusText() {
+  const el = $('#stems-status');
+  if (!el) return;
+  const h = describeHardware(S.stemsStatus);
+  el.textContent = h.text;
+  el.dataset.level = h.level;
+  const plan = resolveStemPlan(S.settings.stemsMode, S.stemsStatus);
+  if (S.stemsStatus && S.stemsStatus.desktop) {
+    el.textContent += plan.use
+      ? ` Aktuell: Demucs wird für neue Analysen genutzt (${plan.device === 'cuda' ? 'Grafikkarte' : 'Prozessor'}).`
+      : plan.reason
+        ? ` Aktuell: ${plan.reason}`
+        : ' Aktuell: Spurentrennung ist deaktiviert – direkte Analyse ohne Spurentrennung.';
+  }
+}
+
+function renderStemsSettings() {
+  const sel = $('#set-stems');
+  if (!sel) return;
+  sel.innerHTML = STEM_MODES.map((m) => `<option value="${m.id}">${m.name}</option>`).join('');
+  sel.value = normalizeStemMode(S.settings.stemsMode);
+  renderStemsStatusText();
+  if (!S.stemsStatus) refreshStemsStatus().then(renderStemsStatusText);
+}
+
 async function update(patch, { rerender = false } = {}) {
   Object.assign(S.settings, patch);
   await saveSettings(S.local, S.settings, S.library.cloud);
@@ -2825,7 +2819,6 @@ async function update(patch, { rerender = false } = {}) {
 
 function bindSettings() {
   const on = (id, fn, ev = 'change') => $(id).addEventListener(ev, fn);
-  on('#set-style', (e) => update({ defaultStyle: e.target.value }));
   on('#set-solo', (e) => update({ defaultSolo: /\d/.test(e.target.value) ? Number(e.target.value) : e.target.value }));
   on('#set-difficulty', (e) => update({ defaultDifficulty: e.target.value === 'auto' ? 'auto' : Number(e.target.value) }));
   on('#set-form', (e) => update({ form: e.target.value }));
@@ -2833,6 +2826,15 @@ function bindSettings() {
   on('#set-transpose', (e) => update({ transposeAuto: e.target.checked }));
   on('#set-autosave', (e) => update({ autoSave: e.target.checked }));
   on('#set-assistant', (e) => update({ assistantKey: e.target.value.trim() }));
+  on('#set-stems', (e) => {
+    update({ stemsMode: normalizeStemMode(e.target.value) });
+    renderStemsStatusText();
+  });
+  on('#stems-recheck', async () => {
+    $('#stems-status').textContent = 'Hardware wird geprüft …';
+    await refreshStemsStatus(true);
+    renderStemsStatusText();
+  }, 'click');
   on('#set-paper', (e) => update({ paper: e.target.value }, { rerender: true }));
   on('#set-zoom', (e) => update({ notesZoom: Number(e.target.value) }, { rerender: true }));
   on('#set-concert', (e) => update({ concertScore: e.target.value === 'true' }, { rerender: true }));
@@ -3020,6 +3022,8 @@ async function main() {
   S.local = await new LocalStore().open();
   S.settings = await loadSettings(S.local);
   applyTheme();
+  // Spurentrennung: Hardware beim Start prüfen (nur Desktop-App; läuft im Hintergrund)
+  refreshStemsStatus().then(renderStemsStatusText);
   S.library = new Library(S.local);
   S.follower = new ScoreFollower($('#pages'));
   await S.library.init(S.settings);

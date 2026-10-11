@@ -12,6 +12,7 @@
 // Fortschritt: { type: 'progress', stage, frac, text } – stage: prep | ai | spec | melody | grid | drums
 import { resampleMono, transcribe } from '../input/audio.js';
 import { effortOf } from '../core/effort.js';
+import { mergeStemNotes, TONAL_STEMS } from '../input/stems.js';
 
 const post = (stage, frac, text = '') => self.postMessage({ type: 'progress', stage, frac, text });
 
@@ -68,8 +69,39 @@ async function prepare({ channels, sampleRate, hpss = true }) {
   self.postMessage({ type: 'prepared', mid, harm, side }, transfer);
 }
 
-async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes = null, aiActs = null, aiSideActs = null, aiMeta = null, aiBackend = null, effort = 3 }) {
+async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes = null, aiActs = null, aiSideActs = null, aiMeta = null, aiBackend = null, effort = 3, stemActs = null, stemAudio = null, stemNote = null }) {
   const cfg = effortOf(effort).analysis;
+  // Spurentrennung: Noten je Stem (Gesang, Begleitung/Bläser, Bass) – die Schlagzeug-Spur zählt nicht
+  if (stemActs && !aiNotes) {
+    post('conv', 0, 'Noten werden gelesen');
+    const m = await import('../input/ai-pitch.js');
+    const parts = {};
+    for (const n of TONAL_STEMS) if (stemActs[n]) parts[n] = m.activationsToNotes(stemActs[n]);
+    aiNotes = mergeStemNotes(parts);
+    post('conv', 1, '');
+  }
+  if (stemAudio && !aiNotes && useAi) {
+    try {
+      post('ai', 0, 'Lokale KI wird geladen');
+      const m = await import('../input/ai-pitch.js');
+      await m.loadAi(aiBackend);
+      const parts = {};
+      const names = TONAL_STEMS.filter((n) => stemAudio[n]);
+      for (let k = 0; k < names.length; k++) {
+        const n = names[k];
+        const out = await m.runEnsemble([{ audio: stemAudio[n], name: n }], {
+          budgetMs: Math.max(cfg.budgetMs, 60000) / names.length,
+          passes: Math.min(cfg.passes || 1, 2),
+          onProgress: (f) => post('ai', (k + f) / names.length, `Spur „${n}“ wird gehört (${k + 1} von ${names.length})`),
+        });
+        parts[n] = out.notes;
+      }
+      aiNotes = mergeStemNotes(parts);
+    } catch (err) {
+      post('ai', 1, 'KI nicht verfügbar – Analyse ohne KI');
+      void err;
+    }
+  }
   // Die KI hat im Hauptfenster nur Aktivierungen geliefert: die (langsame) Umrechnung in Noten
   // passiert hier, damit die Oberfläche bedienbar bleibt
   if (aiActs && !aiNotes) {
@@ -128,6 +160,8 @@ async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes 
   post('ai', 1, '');
   const song = transcribe(mono, { title, ai, onProgress: reportTranscribe });
   song.analysisEffort = effort;
+  if (stemNote) song.warnings = [...(song.warnings || []), stemNote];
+  if (aiMeta && aiMeta.stems && ai) song.warnings = [...(song.warnings || []), `Spurentrennung (Demucs v4, ${aiMeta.device === 'cuda' ? 'Grafikkarte' : 'Prozessor'}): Gesang, Begleitung und Bass wurden getrennt gehört, das Schlagzeug ohne Töne.`];
   song.analysisQuality = cfg.passes > 1 ? 'thorough' : 'fast';
   if (meta) song.aiMeta = meta;
   self.postMessage({ type: 'done', song });

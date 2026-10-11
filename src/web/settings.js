@@ -3,7 +3,7 @@ import { effortOf, effortFromLegacy } from '../core/effort.js';
 
 export const DEFAULT_SETTINGS = {
   defaultVoices: ['trumpet', 'trumpet', 'trombone', 'sousaphone'], // 2–8 Stimmen
-  defaultStyle: 'funk',
+  defaultStyle: 'auto', // der Stil wird immer automatisch passend zum Lied gewählt (kein Feld mehr)
   defaultDrums: false,
   defaultSolo: 0,
   defaultLength: 'normal',
@@ -18,7 +18,9 @@ export const DEFAULT_SETTINGS = {
   transposeAuto: true,
   theme: 'light', // light | auto
   autoSave: true,
-  effort: 3, // Aufwand 1–5: Schnell … Ultra (mehr Zeit = bessere Noten)
+  effort: 5, // Aufwand 1–5: Schnell … Ultra – Standard ist das Maximum, änderbar nur in den Einstellungen
+  effortChosen: false, // true, sobald der Aufwand in den Einstellungen bewusst gewählt wurde
+  stemsMode: 'auto', // Audio-Vorverarbeitung (Demucs): auto | force | off – nur Desktop-App
   folders: [], // eigene Ordner der Bibliothek: { id, name, createdAt, updatedAt, deleted? }
   supabaseUrl: '',
   supabaseKey: '',
@@ -32,6 +34,9 @@ export async function loadSettings(local) {
   // ältere Einstellung „Genauigkeit“ (quality) -> Aufwand-Stufe
   if (saved.effort === undefined && saved.quality) s.effort = effortFromLegacy(saved.quality);
   s.effort = effortOf(s.effort).level;
+  // Der Aufwand-Regler im Arbeitsbereich ist weg: ohne bewusste Wahl in den Einstellungen gilt immer das Maximum
+  if (!saved.effortChosen) s.effort = 5;
+  s.defaultStyle = 'auto';
   if (!s.supabaseUrl && cfg.supabaseUrl) s.supabaseUrl = cfg.supabaseUrl;
   if (!s.supabaseKey && cfg.supabaseKey) s.supabaseKey = cfg.supabaseKey;
   return s;

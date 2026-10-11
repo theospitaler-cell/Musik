@@ -1,5 +1,6 @@
 // Genauigkeit der Notenerkennung an bekannter Wahrheit messen (Rundreise):
-//   node scripts/eval-roundtrip.mjs [Lied] [Stil] [--original] [--reverb] [--nodrums] [--noai]
+//   node scripts/eval-roundtrip.mjs [Lied] [Stil] [--original] [--reverb] [--nodrums] [--noai] [--passes=N] [--pitch=M]
+//   --passes/--pitch: mehrere KI-Durchgänge (Fensterversatz) bzw. Tonhöhen-Ansichten, Aktivierungen gemittelt
 //   Lieder: saints | ode | grace | groove (Demo-Lieder), Stile: funk | swing | ballad | …
 // Ablauf: Demo-Lied -> Quartett-Partitur (Wahrheit) -> Audio (Blechbläser-Klänge + Schlagzeug) ->
 // lokale KI (Basic Pitch) + komplette Erkennung -> Note für Note vergleichen (gleiche Tonhöhe,
@@ -79,12 +80,16 @@ let ai = null;
 if (!flags.includes('--noai')) {
   const dir = join(tmpdir(), 'notecode-eval');
   mkdirSync(dir, { recursive: true });
-  const cache = join(dir, `${demo}_${style}${flags.includes('--nodrums') ? '_nd' : ''}${flags.includes('--reverb') ? '_rv' : ''}${flags.includes('--original') ? '_or' : ''}.ai.json`);
+  const flagNum = (k, d) => Number((flags.find((f) => f.startsWith(`--${k}=`)) || `--${k}=${d}`).split('=')[1]);
+  const passes = flagNum('passes', 1);
+  const pitch = flagNum('pitch', 0);
+  const cache = join(dir, `${demo}_${style}${flags.includes('--nodrums') ? '_nd' : ''}${flags.includes('--reverb') ? '_rv' : ''}${flags.includes('--original') ? '_or' : ''}${passes > 1 ? `_p${passes}_${pitch}` : ''}.ai.json`);
   if (existsSync(cache)) ai = JSON.parse(readFileSync(cache, 'utf8'));
   else {
-    const { runBasicPitch, aiNotes, loadAi } = await imp('src/input/ai-pitch.js');
+    const { runBasicPitch, aiNotes, loadAi, runEnsemble } = await imp('src/input/ai-pitch.js');
     await loadAi();
-    ai = aiNotes(await runBasicPitch(x));
+    if (passes > 1) ai = (await runEnsemble([{ audio: x, name: 'orig' }], { passes, pitchViews: pitch, budgetMs: 0, minPasses: passes })).notes;
+    else ai = aiNotes(await runBasicPitch(x));
     writeFileSync(cache, JSON.stringify(ai));
   }
 }

@@ -9,4 +9,13 @@ contextBridge.exposeInMainWorld('notecodeDesktop', {
     ipcRenderer.on('update:progress', fn);
     return () => ipcRenderer.removeListener('update:progress', fn);
   },
+  // Spurentrennung (Demucs): Hardware-/Python-Zustand, Trennen, Abbrechen, Fortschritt
+  stemsStatus: (refresh = false) => ipcRenderer.invoke('stems:status', { refresh }),
+  separateStems: (wav, device) => ipcRenderer.invoke('stems:separate', { wav, device }),
+  cancelStems: () => ipcRenderer.invoke('stems:cancel'),
+  onStemsProgress: (cb) => {
+    const fn = (_e, p) => cb(p);
+    ipcRenderer.on('stems:progress', fn);
+    return () => ipcRenderer.removeListener('stems:progress', fn);
+  },
 });
