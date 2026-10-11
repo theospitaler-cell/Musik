@@ -120,7 +120,7 @@ verglichen wurde.
 
 **Fortschritt**: jede Aufgabe (Dekodieren, Stimmen trennen, KI-Durchgänge, Takt/Form, Noten
 setzen …) hat einen eigenen Balken mit eigener, weich nachgeführter Restzeit; die Zeitschätzung
-lernt aus früheren Läufen auf dem Gerät.
+lernt aus früheren Läufen auf dem Gerät. Jeder Vorgang hat einen **Abbrechen**-Knopf (nach ca. 0,5 s beendet, der bisherige Stand bleibt); Tab schließen, Bibliothek und Einstellungen funktionieren während der Arbeit immer. Die rechenintensiven Schritte laufen so, dass die Oberfläche bedienbar bleibt (KI in kleinen Schritten, Noten-Auswertung im Hintergrund-Worker).
 
 ### Überarbeiten (Rückmeldung)
 

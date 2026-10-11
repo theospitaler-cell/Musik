@@ -152,3 +152,46 @@ test('Gründlich arrangieren: mehrere Fassungen, beste gewählt, Bericht vorhand
   assert.ok(a.report.search.score >= Math.round(base * 10) / 10 - 0.05, `${a.report.search.score} vs ${base}`);
   assert.ok(a.voices.every((v) => v.events.length > 0));
 });
+
+test('Arrangieren lässt sich abbrechen: AbortError, nichts halb fertig', async () => {
+  const song = demoSong('saints');
+  const ctl = new AbortController();
+  let calls = 0;
+  const p = arrangeBest(song, { style: 'funk', seed: 1 }, { seeds: 8, search: 3, budgetMs: 20000, sweep: false, polish: 0 }, {
+    signal: ctl.signal,
+    onProgress: () => {
+      if (++calls >= 2) ctl.abort();
+    },
+  });
+  await assert.rejects(p, (e) => e.name === 'AbortError');
+  // bereits abgebrochenes Signal bricht sofort ab
+  await assert.rejects(arrangeBest(song, { style: 'funk' }, { seeds: 3, search: 2, budgetMs: 5000 }, { signal: AbortSignal.abort() }), (e) => e.name === 'AbortError');
+});
+
+test('Noten aus KI-Aktivierungen: gepflanzte Töne werden gefunden, 4 Minuten in unter 3 s', async () => {
+  const { activationsToNotes } = await import('../src/input/ai-pitch.js');
+  const nOut = 240 * 86;
+  const frames = new Float32Array(nOut * 88);
+  const onsets = new Float32Array(nOut * 88);
+  const planted = [];
+  for (let k = 0; k < 400; k++) {
+    const t = 40 + k * 50;
+    const p = 20 + ((k * 7) % 50);
+    const len = 20 + (k % 5) * 6;
+    onsets[t * 88 + p] = 0.95;
+    for (let i = 0; i < len; i++) frames[(t + i) * 88 + p] = 0.8;
+    planted.push({ t, p, len });
+  }
+  const t0 = Date.now();
+  const notes = activationsToNotes({ frames, onsets, nOut, multi: true });
+  assert.ok(Date.now() - t0 < 3000, `Umrechnung dauerte ${Date.now() - t0} ms`);
+  // gepflanzte Töne (Frames × 256 / 22050 s)
+  let found = 0;
+  for (const q of planted) {
+    // Modell-Frame -> Sekunden wie in Basic Pitch (Fenster-Versatz je 2-s-Fenster)
+    const offset = (256 / 22050) * (172 - (22050 * 2 - 256) / 256) + 0.0018;
+    const start = (q.t * 256) / 22050 - offset * Math.floor(q.t / 172);
+    if (notes.some((n) => n.midi === q.p + 21 && Math.abs(n.start - start) < 0.05)) found++;
+  }
+  assert.ok(found >= 390, `${found} von 400 gefunden`);
+});

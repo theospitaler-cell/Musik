@@ -3094,6 +3094,23 @@ body.lib-dragging .folder-card:not(.auto) {
   flex: 1 1 200px;
 }
 
+/* Abbrechen im Fortschritt */
+.pg-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+.pg-foot .pg-text {
+  flex: 1;
+  min-height: 1em;
+}
+#pg-cancel.hidden,
+.progress-dock.single #pg-cancel.hidden {
+  display: none;
+}
+
 /* Fortschritt in Aufgaben: eine Zeile mit eigenem Balken je Schritt */
 .progress-dock {
   width: min(520px, calc(100% - 24px));

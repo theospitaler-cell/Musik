@@ -133,7 +133,7 @@ function rememberSpeed(key, ms, units) {
 }
 
 // tasks: [{ id, label, expect (ms) }]; ohne Liste eine einzelne Aufgabe mit dem Titel
-function progress(title, { tasks = null } = {}) {
+function progress(title, { tasks = null, cancellable = true } = {}) {
   const id = ++progressJob;
   const box = $('#progress');
   const list = new TaskList(tasks && tasks.length ? tasks : [{ id: 'main', label: title, expect: 8000 }]);
@@ -141,6 +141,11 @@ function progress(title, { tasks = null } = {}) {
   $('#pg-title').textContent = title;
   $('#pg-text').textContent = '';
   $('#pg-total').textContent = '';
+  const cb = $('#pg-cancel');
+  if (S.job) S.job.locked = false;
+  cb.disabled = false;
+  cb.classList.toggle('hidden', !(cancellable && S.job));
+  cb.onclick = () => cancelJob();
   box.classList.remove('hidden', 'stalled');
   box.classList.toggle('single', single);
   const host = $('#pg-tasks');
@@ -352,7 +357,60 @@ function showView(name) {
 // Jeder Tab hat seinen eigenen Zustand: Vorlage, Optionen, Arrangement, Ansicht,
 // gesetzte Notenseiten und Mischpult. Ein Wechsel rechnet nichts neu.
 const TABS_KEY = 'notecode:tabs';
-const BUSY_MSG = 'Einen Moment – der aktuelle Vorgang läuft noch.';
+const BUSY_MSG = 'Ein Vorgang läuft noch.';
+
+// ---- Laufender Vorgang: abbrechbar; Knöpfe sperren nie ohne Ausweg
+// busyStart/busyEnd klammern jeden langen Vorgang (auch verschachtelt, z. B. Überarbeiten =
+// Analyse + Arrangieren). Abbrechen setzt das AbortSignal; die Arbeit bricht an der nächsten
+// Stelle ab (zwischen KI-Fenstern, Fassungen, Durchgängen) und verändert nichts am bisherigen Stand.
+function busyStart() {
+  if (!S.busy) S.job = { ctl: new AbortController(), locked: false };
+  S.busy++;
+}
+function busyEnd() {
+  S.busy = Math.max(0, S.busy - 1);
+  if (!S.busy) S.job = null;
+}
+const jobSignal = () => S.job?.ctl.signal ?? null;
+const isAbort = (e) => !!e && e.name === 'AbortError';
+function cancelJob() {
+  if (!S.job || S.job.locked) return;
+  S.job.ctl.abort();
+  $('#pg-text').textContent = 'Wird abgebrochen …';
+  const btn = $('#pg-cancel');
+  if (btn) btn.disabled = true;
+}
+// ab hier ist der Vorgang im Endspurt (Noten werden gesetzt) und nicht mehr abbrechbar
+function lockJob() {
+  if (S.job) S.job.locked = true;
+  $('#pg-cancel')?.classList.add('hidden');
+}
+// abbrechen und warten, bis alles zur Ruhe gekommen ist (höchstens ~20 s)
+function cancelAndWait() {
+  if (!S.busy) return Promise.resolve();
+  if (S.job && !S.job.locked) S.job.ctl.abort();
+  toast('Vorgang wird abgebrochen …');
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (!S.busy || Date.now() - t0 > 20000) {
+        clearInterval(iv);
+        resolve();
+      }
+    }, 100);
+  });
+}
+// statt „bitte warten“: der Nutzer kann den laufenden Vorgang abbrechen (und dann weitermachen)
+function busyToast(then = null) {
+  toast(BUSY_MSG, '', {
+    label: then ? 'Abbrechen & weiter' : 'Abbrechen',
+    run: async () => {
+      if (!then) return cancelJob();
+      await cancelAndWait();
+      then();
+    },
+  });
+}
 let tabSeq = 0;
 
 function defaultOpts() {
@@ -562,7 +620,7 @@ async function showTab() {
 
 async function activateTab(t) {
   if (!t || t === S.tab) return;
-  if (S.busy) return toast(BUSY_MSG);
+  if (S.busy) return busyToast(() => activateTab(t));
   stashTab();
   S.tab = t;
   await showTab();
@@ -573,11 +631,16 @@ async function openTab(t) {
   await activateTab(t);
 }
 
-function closeTab(t) {
-  const idx = S.tabs.indexOf(t);
+async function closeTab(t) {
+  let idx = S.tabs.indexOf(t);
   if (idx < 0) return;
   const active = t === S.tab;
-  if (active && S.busy) return toast(BUSY_MSG);
+  // läuft im aktiven Tab gerade ein Vorgang, wird er abgebrochen – Schließen geht immer
+  if (active && S.busy) {
+    await cancelAndWait();
+    idx = S.tabs.indexOf(t);
+    if (idx < 0) return;
+  }
   if (active) stashTab();
   S.tabs.splice(idx, 1);
   let blank = null;
@@ -627,7 +690,7 @@ async function startNew({ folder = null, force = false } = {}) {
     setTimeout(() => $('#count-chooser').classList.remove('pulse'), 900);
     return;
   }
-  if (S.busy) return toast(BUSY_MSG);
+  if (S.busy) return busyToast(() => startNew({ folder, force }));
   const t = makeTab();
   t.folder = folder;
   await openTab(t);
@@ -709,7 +772,7 @@ function pickCount(k) {
 async function loadPending(t) {
   if (t.loading) return;
   t.loading = true;
-  S.busy++;
+  busyStart();
   renderTabBar();
   try {
     const it = await S.library.get(t.pendingId);
@@ -726,7 +789,7 @@ async function loadPending(t) {
     S.currentId = it.id;
     // ältere Analyse einer Aufnahme: einmalig mit der aktuellen Erkennung neu berechnen
     // (nur bei älterem Stand – lief die Analyse hier ohne KI, bleibt es beim Knopf „Neu analysieren“)
-    const renewed = S.song?.source === 'audio' && (S.song.analysisVersion || 1) < ANALYSIS_VERSION && S.source?.audioId ? await reanalyze({ auto: true }) : false;
+    const renewed = S.song?.source === 'audio' && (S.song.analysisVersion || 1) < ANALYSIS_VERSION && S.source?.audioId && !noAutoRenew(S.source.audioId) ? await reanalyze({ auto: true }) : false;
     if (renewed) {
       applyOptsToUi(it.options || {});
       S.currentId = it.id;
@@ -735,7 +798,7 @@ async function loadPending(t) {
     if (renewed && S.arr) await saveCurrent(true);
   } finally {
     t.loading = false;
-    S.busy--;
+    busyEnd();
     if (S.tab === t) refreshEmptyState();
     renderTabBar();
     persistTabs();
@@ -1400,7 +1463,7 @@ function renderAnalysis() {
 // Aufnahme: Taktanfang verschieben, Notenwerte verdoppeln/halbieren oder neu analysieren –
 // danach wird ein vorhandenes Arrangement sofort neu geschrieben
 async function retimeSong(action) {
-  if (S.busy) return toast(BUSY_MSG);
+  if (S.busy) return busyToast();
   if (!S.song || S.source?.format !== 'audio') return;
   const [kind, val] = action.split(':');
   let song = null;
@@ -1487,6 +1550,9 @@ function analysisTasks(dur, level, { read = false } = {}) {
   t.push({ id: 'decode', label: 'Aufnahme dekodieren', expect: 700 + dur * speedOf('decode', 40) });
   if (th) t.push({ id: 'prep', label: 'Gesang und Begleitung trennen', expect: 500 + dur * speedOf('prep', 70) });
   t.push({ id: 'ai', label: cfg.passes > 1 ? `Lokale KI hört die Noten (bis zu ${cfg.passes} Durchgänge)` : 'Lokale KI hört die Noten', expect: 1500 + dur * speedOf(`ai${level}`, 70 * cfg.passes) });
+  // Nach den KI-Durchgängen folgen eigene Schritte – jeder mit eigenem Balken und eigener Zeit
+  if (cfg.side) t.push({ id: 'side', label: 'Seitensignal hören (Begleitung erkennen)', expect: 800 + dur * speedOf('side', 30) });
+  if (cfg.passes > 0) t.push({ id: 'conv', label: 'Noten aus den KI-Daten lesen', expect: 400 + dur * speedOf('conv2', cfg.side ? 8 : 5) });
   t.push({ id: 'spec', label: 'Klang, Tempo & Takt erkennen', expect: 1000 + dur * speedOf('spec', 110) });
   t.push({ id: 'melody', label: 'Melodie, Bass & Akkorde erkennen', expect: 800 + dur * speedOf('melody', 70) });
   t.push({ id: 'grid', label: 'Noten ins Raster setzen & Form bestimmen', expect: 500 + dur * speedOf('grid', 25) });
@@ -1497,13 +1563,13 @@ function analysisTasks(dur, level, { read = false } = {}) {
 
 // Meldungen der Analyse (Stufe, Anteil, Text) -> Aufgaben; abgeschlossene Aufgaben lernen ihre Dauer
 function stageRunner(pg, dur, level) {
-  const order = ['read', 'decode', 'prep', 'ai', 'spec', 'melody', 'grid', 'drums', 'save'].filter((id) => pg.list.get(id));
+  const order = ['read', 'decode', 'prep', 'ai', 'side', 'conv', 'spec', 'melody', 'grid', 'drums', 'save'].filter((id) => pg.list.get(id));
   const t0 = {};
   const finish = (id) => {
     const t = pg.list.get(id);
     if (!t || t.state === 'done') return;
     pg.done(id);
-    if (t0[id] && id !== 'read' && id !== 'save') rememberSpeed(id === 'ai' ? `ai${level}` : id, Date.now() - t0[id], dur);
+    if (t0[id] && id !== 'read' && id !== 'save') rememberSpeed(id === 'ai' ? `ai${level}` : id === 'conv' ? 'conv2' : id, Date.now() - t0[id], dur);
   };
   const begin = (id) => {
     const t = pg.list.get(id);
@@ -1534,6 +1600,24 @@ function stageRunner(pg, dur, level) {
   };
 }
 
+// Aufnahmen, deren automatische Neu-Analyse der Nutzer abgebrochen hat (bleibt der Knopf „Neu analysieren“)
+const NOAUTO_KEY = 'notecode:noauto';
+function noAutoRenew(id) {
+  try {
+    return (JSON.parse(localStorage.getItem(NOAUTO_KEY) || '[]') || []).includes(id);
+  } catch {
+    return false;
+  }
+}
+function rememberNoAuto(id) {
+  try {
+    const l = JSON.parse(localStorage.getItem(NOAUTO_KEY) || '[]') || [];
+    if (!l.includes(id)) localStorage.setItem(NOAUTO_KEY, JSON.stringify([...l, id].slice(-50)));
+  } catch {
+    /* kein Speicher */
+  }
+}
+
 // Gespeicherte Aufnahme mit der aktuellen Erkennung neu analysieren.
 // auto: beim Öffnen eines älteren Projekts – still überspringen, wenn die Aufnahme hier fehlt
 async function reanalyze({ auto = false, effort = null, regenerate = true } = {}) {
@@ -1549,9 +1633,9 @@ async function reanalyze({ auto = false, effort = null, regenerate = true } = {}
     return false;
   }
   let done = false;
-  S.busy++;
+  busyStart();
   renderTabBar();
-  const level = effort ?? effortLevel();
+  const level = effort ?? (auto ? Math.min(3, effortLevel()) : effortLevel());
   const dur = S.song?.duration || estimateDuration(blob.size, src.name);
   const pg = progress(auto ? 'Bessere Erkennung: Song wird neu analysiert' : 'Song wird neu analysiert', { tasks: analysisTasks(dur, level) });
   const run = stageRunner(pg, dur, level);
@@ -1560,7 +1644,8 @@ async function reanalyze({ auto = false, effort = null, regenerate = true } = {}
     await nextFrame();
     const decoded = await decodeAudio(new Uint8Array(await blob.arrayBuffer()));
     run.finish('decode');
-    const song = await analyzeAudio(decoded, { title: S.song?.title || src.name.replace(/\.[^.]+$/, ''), effort: level, onStage: (st, f, t) => run.stage(st, f, t) });
+    const song = await analyzeAudio(decoded, { title: S.song?.title || src.name.replace(/\.[^.]+$/, ''), effort: level, signal: jobSignal(), onStage: (st, f, t) => run.stage(st, f, t) });
+    lockJob();
     const had = !!S.arr;
     const id = S.currentId;
     run.enter('save');
@@ -1574,10 +1659,16 @@ async function reanalyze({ auto = false, effort = null, regenerate = true } = {}
       }
     }
   } catch (e) {
-    console.error(e);
-    toast('Analyse fehlgeschlagen: ' + e.message, 'error');
+    if (isAbort(e)) {
+      toast('Analyse abgebrochen – es bleibt bei der bisherigen.');
+      // beim Öffnen eines älteren Projekts nicht bei jedem Öffnen neu anbieten
+      if (auto && src.audioId) rememberNoAuto(src.audioId);
+    } else {
+      console.error(e);
+      toast('Analyse fehlgeschlagen: ' + e.message, 'error');
+    }
   } finally {
-    S.busy--;
+    busyEnd();
     renderTabBar();
     setTimeout(() => pg.done(), 300);
   }
@@ -1648,7 +1739,7 @@ function renderReviseLog() {
 }
 
 async function revise() {
-  if (S.busy) return toast(BUSY_MSG);
+  if (S.busy) return busyToast();
   if (!S.arr || !S.song) return toast('Zuerst ein Arrangement erstellen.', 'error');
   const text = $('#revise-text').value.trim();
   const isAudio = S.song.source === 'audio' && !!S.source?.audioId;
@@ -1676,6 +1767,7 @@ async function revise() {
   const tab = S.tab;
   tab.revBackup = { opts: JSON.parse(JSON.stringify(S.opts)), source: S.source };
   $('#revise-note').textContent = '';
+  busyStart();
   try {
     // 1) die Aufnahme selbst korrigieren
     if (isAudio) {
@@ -1690,7 +1782,13 @@ async function revise() {
         changed = true;
       }
       if (changed) await setSource({ ...S.source, song });
-      if (tweaks.reanalyze || tweaks.general) await reanalyze({ effort: level, regenerate: false });
+      if (tweaks.reanalyze || tweaks.general) {
+        const re = await reanalyze({ effort: level, regenerate: false });
+        if (!re && jobSignal()?.aborted) {
+          if (tab.revBackup.source !== S.source) await setSource(tab.revBackup.source);
+          return;
+        }
+      }
     }
     // 2) Einstellungen anpassen und länger arrangieren
     const next = applyTweaks(S.opts, tweaks, { tempo: S.song.tempo, instruments: INSTRUMENTS });
@@ -1698,11 +1796,16 @@ async function revise() {
     next.seed = (Number(S.opts.seed) || 1) + 101;
     applyOptsToUi(next);
     const base = effortOf(level).arrange;
-    await generate({
+    const made = await generate({
       effort: level,
       cfgPatch: { sweep: true, seeds: Math.max(base.seeds, 32), search: Math.max(base.search, 12), polish: Math.max(base.polish, 8), budgetMs: Math.max(base.budgetMs, 4 * 60000) },
       label: 'Arrangement wird überarbeitet',
     });
+    if (!made) {
+      // abgebrochen oder fehlgeschlagen: Einstellungen wie vorher
+      applyOptsToUi(tab.revBackup.opts);
+      return;
+    }
     renderReviseLog();
     $('#revise-text').value = '';
     $('#revise-note').textContent = notes.join(' ');
@@ -1720,14 +1823,17 @@ async function revise() {
   } catch (e) {
     console.error(e);
     toast('Überarbeiten fehlgeschlagen: ' + e.message, 'error');
+  } finally {
+    busyEnd();
+    renderTabBar();
   }
 }
 
 // replace: im aktiven Tab ersetzen; sonst öffnet ein weiteres Lied einen neuen Tab
 async function handleFile(file, { replace = false } = {}) {
-  if (S.busy) return toast(BUSY_MSG);
+  if (S.busy) return busyToast(() => handleFile(file, { replace }));
   if (!replace && tabInUse(S.tab)) await openTab(makeTab(inheritOpts()));
-  S.busy++;
+  busyStart();
   renderTabBar();
   const looksAudio = detectFormat(file.name) === 'audio';
   const level = effortLevel();
@@ -1749,7 +1855,8 @@ async function handleFile(file, { replace = false } = {}) {
       run.finish('decode');
       const dur = decoded.duration || estDur;
       const title = file.name.replace(/\.[^.]+$/, '');
-      const song = await analyzeAudio(decoded, { title, effort: level, onStage: (st, f, t) => run.stage(st, f, t) });
+      const song = await analyzeAudio(decoded, { title, effort: level, signal: jobSignal(), onStage: (st, f, t) => run.stage(st, f, t) });
+      lockJob();
       run.enter('save');
       const audioId = uuid();
       const blob = new Blob([buf], { type: file.type || 'audio/mpeg' });
@@ -1772,10 +1879,13 @@ async function handleFile(file, { replace = false } = {}) {
     }
     if (ok) toast(`„${S.song?.title || file.name}“ geladen`, 'ok');
   } catch (e) {
-    console.error(e);
-    toast('Datei konnte nicht geladen werden: ' + e.message, 'error');
+    if (isAbort(e)) toast(`„${file.name}“ – Analyse abgebrochen`);
+    else {
+      console.error(e);
+      toast('Datei konnte nicht geladen werden: ' + e.message, 'error');
+    }
   } finally {
-    S.busy--;
+    busyEnd();
     renderTabBar();
     persistTabs();
     setTimeout(() => pg.done(), 300);
@@ -1797,7 +1907,7 @@ async function generate({ silent = false, effort = null, cfgPatch = null, label 
   const btnLabel = btn.querySelector('span').textContent;
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Wird erstellt …';
-  S.busy++; // kein Tab-Wechsel, solange arrangiert wird
+  busyStart();
   renderTabBar();
   const opts = readOpts();
   const level = effort ?? effortLevel();
@@ -1817,15 +1927,17 @@ async function generate({ silent = false, effort = null, cfgPatch = null, label 
   const pg = progress(label || (pb ? 'Playback-Noten werden erstellt' : 'Arrangement wird erstellt'), { tasks });
   await nextFrame();
   let tNotes = 0;
+  let ok = false;
   try {
     S.opts = { ...S.opts, ...opts };
     const t0 = performance.now();
     if (search) {
-      S.arr = await arrangeBest(S.song, opts, cfg, { onProgress: (f, text) => pg.set('arr', f, text) });
+      S.arr = await arrangeBest(S.song, opts, cfg, { onProgress: (f, text) => pg.set('arr', f, text), signal: jobSignal() });
     } else {
       S.arr = arrange(S.song, opts);
     }
     pg.done('arr');
+    lockJob();
     console.info(`Arrangement in ${Math.round(performance.now() - t0)} ms (Aufwand ${level})`);
     await nextFrame();
     S.printed = printedMeasures(S.arr);
@@ -1836,11 +1948,15 @@ async function generate({ silent = false, effort = null, cfgPatch = null, label 
     pg.done('notes');
     rememberSpeed('notes', Date.now() - tNotes, bars);
     if (S.settings.autoSave && !silent) await saveCurrent(true);
+    ok = true;
   } catch (e) {
-    console.error(e);
-    toast('Fehler beim Arrangieren: ' + e.message, 'error');
+    if (isAbort(e)) toast('Abgebrochen – das bisherige Arrangement bleibt.');
+    else {
+      console.error(e);
+      toast('Fehler beim Arrangieren: ' + e.message, 'error');
+    }
   } finally {
-    S.busy--;
+    busyEnd();
     btn.disabled = false;
     btn.querySelector('span').textContent = btnLabel;
     refreshEmptyState();
@@ -1848,6 +1964,7 @@ async function generate({ silent = false, effort = null, cfgPatch = null, label 
     persistTabs();
     setTimeout(() => pg.done(), 250);
   }
+  return ok;
 }
 
 // restore: Tab-Wechsel – Notenseiten und Mischpult des Tabs wiederverwenden
@@ -2628,7 +2745,7 @@ async function runUpdateCheck({ silent = false } = {}) {
 }
 
 async function installUpdate() {
-  const pg = progress('NoteCode wird aktualisiert');
+  const pg = progress('NoteCode wird aktualisiert', { cancellable: false });
   try {
     await applyUpdate((t, f) => pg.set(t, f));
   } catch (e) {
@@ -2641,11 +2758,11 @@ async function installUpdate() {
 async function openItem(id) {
   const open = S.tabs.find((t) => t.currentId === id || t.pendingId === id);
   if (open) {
-    if (open !== S.tab && S.busy) return toast(BUSY_MSG);
+    if (open !== S.tab && S.busy) return busyToast();
     showView('arrange');
     return activateTab(open);
   }
-  if (S.busy) return toast(BUSY_MSG);
+  if (S.busy) return busyToast();
   const it = await S.library.get(id);
   if (!it) return;
   const fresh = !tabInUse(S.tab);
@@ -2952,7 +3069,7 @@ async function main() {
   $('#abc-load').addEventListener('click', async () => {
     const text = $('#abc-input').value.trim();
     if (!text) return toast('Bitte zuerst ABC-Noten eingeben.', 'error');
-    if (S.busy) return toast(BUSY_MSG);
+    if (S.busy) return busyToast();
     // eigener Text wird im selben Tab aktualisiert, ein neues Lied bekommt einen neuen Tab
     if (S.source?.name !== 'eingabe.abc' && tabInUse(S.tab)) {
       const t = makeTab(inheritOpts());
@@ -3015,10 +3132,12 @@ async function main() {
 
   // Erzeugen
   $('#generate').addEventListener('click', () => {
+    if (S.busy) return busyToast(() => $('#generate').click());
     S.currentId = null;
     generate();
   });
   $('#dice').addEventListener('click', () => {
+    if (S.busy) return busyToast(() => $('#dice').click());
     $('#opt-seed').value = Math.floor(Math.random() * 9999) + 1;
     if (S.arr) generate();
   });

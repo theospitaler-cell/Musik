@@ -32,9 +32,12 @@ function spawn() {
 }
 
 // task-Nachricht an einen frischen Worker; onStage(stage, frac, text); Ergebnis der Nachricht
-function callWorker(msg, { onStage, transfer = [], stall = AI_STALL_MS, watchAi = false } = {}) {
+const aborted = () => Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+
+function callWorker(msg, { onStage, transfer = [], stall = AI_STALL_MS, watchAi = false, signal = null } = {}) {
   return new Promise((resolve, reject) => {
     let worker;
+    if (signal?.aborted) return reject(aborted());
     try {
       worker = spawn();
     } catch (e) {
@@ -42,6 +45,12 @@ function callWorker(msg, { onStage, transfer = [], stall = AI_STALL_MS, watchAi 
       return;
     }
     let last = Date.now();
+    const onAbort = () => {
+      clearInterval(timer);
+      worker.terminate();
+      reject(aborted());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setInterval(() => {
       // hängt die KI im Worker ohne Meldung, wird abgebrochen (dann läuft die Analyse ohne KI weiter)
       if (watchAi && Date.now() - last > stall) {
@@ -52,6 +61,7 @@ function callWorker(msg, { onStage, transfer = [], stall = AI_STALL_MS, watchAi 
     }, 1000);
     const end = () => {
       clearInterval(timer);
+      signal?.removeEventListener('abort', onAbort);
       worker.terminate();
     };
     worker.onmessage = (e) => {
@@ -76,57 +86,68 @@ function callWorker(msg, { onStage, transfer = [], stall = AI_STALL_MS, watchAi 
 }
 
 // KI im Hauptfenster (Grafikkarte): Ansichten mid + harm (+ Seite)
-async function aiOnMainThread(prepared, cfg, onStage) {
+async function aiOnMainThread(prepared, cfg, onStage, signal) {
   const ai = await import('../input/ai-pitch.js');
   onStage('ai', 0, 'Lokale KI wird geladen');
   const backend = await ai.loadAi();
   if (backend !== 'webgl') throw new Error('keine Grafikbeschleunigung');
   const sources = [{ audio: prepared.mid, name: 'mid' }];
   if (prepared.harm) sources.push({ audio: prepared.harm, name: 'harm' });
-  const out = await ai.runEnsemble(sources, {
+  // nur Aktivierungen: die Umrechnung in Noten ist langsam und läuft im Worker
+  const out = await ai.runEnsembleActivations(sources, {
     budgetMs: cfg.budgetMs,
     passes: cfg.passes,
     pitchViews: cfg.shifts || 0,
+    signal,
     onProgress: (f, k, n) => onStage('ai', f, n > 1 ? `Durchgang ${k} von ${n}` : 'Lokale KI hört die Noten'),
   });
-  let side = false;
+  onStage('ai', 1, '');
+  let sideActs = null;
   if (cfg.side && prepared.side) {
-    onStage('ai', 0.97, 'Seitensignal wird gehört');
-    const sd = await ai.runEnsemble([{ audio: prepared.side }], { maxPasses: 1, budgetMs: 0 });
-    ai.flagSideNotes(out.notes, sd.notes);
-    side = sd.notes.length > 0;
+    onStage('side', 0, 'Seitensignal wird gehört');
+    sideActs = await ai.runEnsembleActivations([{ audio: prepared.side }], {
+      maxPasses: 1,
+      budgetMs: 0,
+      signal,
+      onProgress: (f) => onStage('side', f, 'Seitensignal wird gehört'),
+    });
+    onStage('side', 1, '');
   }
-  return { notes: out.notes, meta: { passes: out.passes, ms: out.ms, views: sources.length, side } };
+  return { acts: out, sideActs, meta: { passes: out.passes, ms: out.ms, views: sources.length, side: !!sideActs } };
 }
 
 // Ergebnis: Song. onStage(stage, frac 0..1, text) – stage: prep | ai | spec | melody | grid | drums
-export async function analyzeAudio(data, { title, effort = 3, onStage = () => {} } = {}) {
+export async function analyzeAudio(data, { title, effort = 3, onStage = () => {}, signal = null } = {}) {
   const cfg = effortOf(effort).analysis;
   const base = { channels: data.channels, sampleRate: data.sampleRate, title, effort };
-  let aiNotes = null;
-  let aiMeta = null;
+  let acts = null;
   // 1) Vorbereiten (Trennen) und KI im Hauptfenster
   try {
-    const prepared = await callWorker({ task: 'prepare', channels: data.channels, sampleRate: data.sampleRate, hpss: cfg.hpss }, { onStage });
-    const r = await aiOnMainThread(prepared, cfg, onStage);
-    aiNotes = r.notes;
-    aiMeta = r.meta;
+    const prepared = await callWorker({ task: 'prepare', channels: data.channels, sampleRate: data.sampleRate, hpss: cfg.hpss }, { onStage, signal });
+    acts = await aiOnMainThread(prepared, cfg, onStage, signal);
   } catch (e) {
+    if (e.name === 'AbortError') throw e;
     console.info('KI im Hauptfenster nicht nutzbar:', e.message);
   }
-  if (aiNotes && aiNotes.length) {
-    onStage('ai', 1, '');
-    return (await callWorker({ ...base, task: 'analyze', ai: false, aiNotes, aiMeta }, { onStage })).song;
+  if (acts && acts.acts.nOut > 0) {
+    const transfer = [acts.acts.frames.buffer, acts.acts.onsets.buffer];
+    const aiActs = { frames: acts.acts.frames, onsets: acts.acts.onsets, nOut: acts.acts.nOut, multi: acts.acts.multi };
+    let aiSideActs = null;
+    if (acts.sideActs) {
+      aiSideActs = { frames: acts.sideActs.frames, onsets: acts.sideActs.onsets, nOut: acts.sideActs.nOut, multi: false };
+      transfer.push(aiSideActs.frames.buffer, aiSideActs.onsets.buffer);
+    }
+    return (await callWorker({ ...base, task: 'analyze', ai: false, aiActs, aiSideActs, aiMeta: acts.meta }, { onStage, transfer, signal })).song;
   }
   // 2) KI im Worker auf dem Prozessor
   try {
     onStage('ai', 0, 'Lokale KI rechnet auf dem Prozessor (dauert länger)');
-    return (await callWorker({ ...base, task: 'analyze', ai: true, aiBackend: 'cpu' }, { onStage, watchAi: true })).song;
+    return (await callWorker({ ...base, task: 'analyze', ai: true, aiBackend: 'cpu' }, { onStage, watchAi: true, signal })).song;
   } catch (e) {
     if (!e.aiStall) throw e;
     // 3) ohne KI
     onStage('ai', 1, 'KI reagiert nicht – Analyse ohne KI');
-    const song = (await callWorker({ ...base, task: 'analyze', ai: false }, { onStage })).song;
+    const song = (await callWorker({ ...base, task: 'analyze', ai: false }, { onStage, signal })).song;
     song.warnings = [...(song.warnings || []), 'Die lokale KI konnte auf diesem Gerät nicht rechnen – die Noten wurden ohne KI erkannt und sind ungenauer.'];
     return song;
   }

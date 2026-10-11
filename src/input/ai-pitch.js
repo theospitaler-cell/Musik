@@ -218,7 +218,9 @@ export function aiBassAndHarmony(ai, melody) {
 const SHIFTS = [0, 70 * 256 + 128, 35 * 256 + 64, 105 * 256 + 192, 52 * 256 + 32, 17 * 256 + 160];
 
 // Aktivierungen (Frames, Onsets) für ein Signal; shift: Samples, um die das Raster versetzt ist
-async function inferActivations(audio, shift, onProgress, { tf, model }) {
+const abortError = () => Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+
+async function inferActivations(audio, shift, onProgress, { tf, model, signal }) {
   const shiftFrames = Math.floor(shift / FFT_HOP);
   const sub = shift - shiftFrames * FFT_HOP;
   const lead = OVERLAP_SAMPLES / 2 + shiftFrames * FFT_HOP + sub;
@@ -250,7 +252,8 @@ async function inferActivations(audio, shift, onProgress, { tf, model }) {
       onsets.set(oa.subarray(r * 88, r * 88 + 88), o * 88);
     }
     if (onProgress) onProgress((w + 1) / nWin);
-    if (w % 2 === 1) await yieldNow();
+    if (signal?.aborted) throw abortError();
+    await yieldNow(); // nach jedem Fenster der Oberfläche Luft lassen (Knöpfe bleiben bedienbar)
   }
   return { frames, onsets, nOut };
 }
@@ -292,11 +295,14 @@ const PITCH_VIEWS = [1, -1, 2, -2];
 // sources: [{ audio: Float32Array (22050 Hz mono), name }] – die erste ist die Hauptansicht
 // passes: Durchgänge insgesamt (höchstens); pitchViews: davon mit verschobener Tonhöhe
 // Ergebnis: { notes: [{start, end, midi, amp}], passes, ms }
-export async function runEnsemble(sources, { budgetMs = 300000, maxPasses = 6, passes = null, pitchViews = 0, minPasses = 1, onProgress = () => {}, onsetThresh = null, frameThresh = null } = {}) {
+// Aktivierungen (gemittelt über alle Durchgänge) als flache Matrizen. Das ist der rechenintensive
+// Teil auf der Grafikkarte; die Umrechnung in Noten (activationsToNotes) ist reine CPU-Arbeit und
+// läuft im Worker.
+export async function runEnsembleActivations(sources, { budgetMs = 300000, maxPasses = 6, passes = null, pitchViews = 0, minPasses = 1, onProgress = () => {}, signal = null } = {}) {
   const total = Math.max(1, passes ?? maxPasses);
   const tf = await getTf();
   const model = await getModel();
-  const handles = { tf, model };
+  const handles = { tf, model, signal };
   const t0 = Date.now();
   // Plan: erst Fensterraster-Verschiebungen aller Ansichten (wichtigste zuerst), dann Tonhöhen-Ansichten
   const nPitch = Math.min(pitchViews, Math.max(0, total - sources.length));
@@ -308,6 +314,7 @@ export async function runEnsemble(sources, { budgetMs = 300000, maxPasses = 6, p
   let nOut = 0;
   let planned = plan.length;
   for (let p = 0; p < planned; p++) {
+    if (signal?.aborted) throw abortError();
     const step = plan[p];
     const prog = (fr) => onProgress((p + fr) / planned, p + 1, planned);
     const pass = step.semis ? await inferPitchShifted(step.src.audio, step.semis, prog, handles) : await inferActivations(step.src.audio, step.shift, prog, handles);
@@ -326,22 +333,32 @@ export async function runEnsemble(sources, { budgetMs = 300000, maxPasses = 6, p
       planned = Math.max(minPasses, Math.min(plan.length, Math.floor(budgetMs / per)));
     }
     onProgress(weight / planned, weight, planned);
+    await yieldNow();
   }
-  const rowsF = [];
-  const rowsO = [];
+  for (let i = 0; i < sum.frames.length; i++) {
+    sum.frames[i] /= weight;
+    sum.onsets[i] /= weight;
+  }
+  return { frames: sum.frames, onsets: sum.onsets, nOut, passes: weight, ms: Date.now() - t0, multi: weight > 1 };
+}
+
+// Noten aus gemittelten Aktivierungen (Float32Array nOut × 88). Dauert bei 4 Minuten Musik
+// einige Sekunden – nicht im Hauptfenster aufrufen.
+export function activationsToNotes(acts, { onsetThresh = null, frameThresh = null } = {}) {
+  const { frames, onsets, nOut, multi } = acts;
+  const rowsF = new Array(nOut);
+  const rowsO = new Array(nOut);
   for (let i = 0; i < nOut; i++) {
-    const fr = new Array(88);
-    const on = new Array(88);
-    for (let k = 0; k < 88; k++) {
-      fr[k] = sum.frames[i * 88 + k] / weight;
-      on[k] = sum.onsets[i * 88 + k] / weight;
-    }
-    rowsF.push(fr);
-    rowsO.push(on);
+    rowsF[i] = Array.from(frames.subarray(i * 88, i * 88 + 88));
+    rowsO[i] = Array.from(onsets.subarray(i * 88, i * 88 + 88));
   }
-  const multi = weight > 1;
-  const notes = aiNotes({ frames: rowsF, onsets: rowsO }, { onsetThresh: onsetThresh ?? (multi ? 0.45 : 0.5), frameThresh: frameThresh ?? (multi ? 0.28 : 0.3) });
-  return { notes, passes: weight, ms: Date.now() - t0 };
+  return aiNotes({ frames: rowsF, onsets: rowsO }, { onsetThresh: onsetThresh ?? (multi ? 0.45 : 0.5), frameThresh: frameThresh ?? (multi ? 0.28 : 0.3) });
+}
+
+export async function runEnsemble(sources, opts = {}) {
+  const acts = await runEnsembleActivations(sources, opts);
+  const notes = activationsToNotes(acts, { onsetThresh: opts.onsetThresh ?? null, frameThresh: opts.frameThresh ?? null });
+  return { notes, passes: acts.passes, ms: acts.ms };
 }
 
 // Markiert Noten der Hauptansicht, die auch im „Seiten“-Signal ((L−R)/2) vorkommen: Die Mitte

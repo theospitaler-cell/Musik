@@ -36,7 +36,10 @@ function sweepSets(opts) {
 }
 
 // cfg: { seeds, search, budgetMs, sweep, polish } (EFFORT[..].arrange); onProgress(frac, text)
-export async function arrangeBest(song, opts = {}, cfg = {}, { onProgress = () => {}, now = () => Date.now() } = {}) {
+export async function arrangeBest(song, opts = {}, cfg = {}, { onProgress = () => {}, now = () => Date.now(), signal = null } = {}) {
+  const check = () => {
+    if (signal?.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+  };
   const c = { seeds: 8, search: 6, budgetMs: 20000, sweep: false, polish: 1, ...cfg };
   const base = Number(opts.seed) || 1;
   const t0 = now();
@@ -72,6 +75,7 @@ export async function arrangeBest(song, opts = {}, cfg = {}, { onProgress = () =
       if (!best || sc > best.sc) best = { a, sc, o, label: s.label };
       onProgress(Math.min(0.25, 0.25 * (++k / sets.length)), `Parameter: ${s.label}`);
       await yieldNow();
+      check();
       if (now() - t0 > budget * 0.25) break;
     }
     usedOpts = { ...best.o };
@@ -97,6 +101,7 @@ export async function arrangeBest(song, opts = {}, cfg = {}, { onProgress = () =
     onProgress(startFrac + (0.6 - startFrac) * Math.max(frac(), n / c.seeds), `Fassung ${n} von ${c.seeds} · beste Wertung ${best.sc.toFixed(1)}`);
     if (n >= 2 && now() - t0 >= budget * 0.6) break;
     await yieldNow();
+    check();
   }
 
   // 3) Nachbessern der schwächsten Abschnitte
@@ -111,6 +116,7 @@ export async function arrangeBest(song, opts = {}, cfg = {}, { onProgress = () =
     if (improved) polished++;
     onProgress(0.6 + 0.38 * ((round + 1) / c.polish), `Nachbessern ${round + 1} von ${c.polish}`);
     await yieldNow();
+    check();
     if (!improved && round >= 1) break;
   }
 

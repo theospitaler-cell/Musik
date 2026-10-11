@@ -4,7 +4,7 @@
 //  { task: 'prepare', channels, sampleRate, hpss }
 //      -> { type: 'prepared', mid, harm, side }  (22,05 kHz mono; harm = ohne Schlagzeug-Transienten,
 //         side = (L−R)/2 oder null bei Mono-Aufnahmen)
-//  { task: 'analyze', channels, sampleRate, title, ai, aiNotes, aiMeta, aiBackend, effort }
+//  { task: 'analyze', channels, sampleRate, title, ai, aiNotes | aiActs (+aiSideActs), aiMeta, aiBackend, effort }
 //      -> { type: 'done', song }
 //      aiNotes: die KI hat schon im Hauptfenster gehört (schnell, Grafikkarte). Sonst hört mit
 //      ai !== false die lokale KI (Basic Pitch) hier – aiBackend 'cpu' = Prozessor.
@@ -68,8 +68,20 @@ async function prepare({ channels, sampleRate, hpss = true }) {
   self.postMessage({ type: 'prepared', mid, harm, side }, transfer);
 }
 
-async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes = null, aiMeta = null, aiBackend = null, effort = 3 }) {
+async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes = null, aiActs = null, aiSideActs = null, aiMeta = null, aiBackend = null, effort = 3 }) {
   const cfg = effortOf(effort).analysis;
+  // Die KI hat im Hauptfenster nur Aktivierungen geliefert: die (langsame) Umrechnung in Noten
+  // passiert hier, damit die Oberfläche bedienbar bleibt
+  if (aiActs && !aiNotes) {
+    post('conv', 0, 'Noten werden gelesen');
+    const m = await import('../input/ai-pitch.js');
+    aiNotes = m.activationsToNotes(aiActs);
+    if (aiSideActs) {
+      post('conv', 0.6, 'Seitensignal wird ausgewertet');
+      m.flagSideNotes(aiNotes, m.activationsToNotes(aiSideActs));
+    }
+    post('conv', 1, '');
+  }
   post('spec', 0, 'Audio wird vorbereitet');
   const mono = resampleMono(channels, sampleRate);
   let ai = aiNotes && aiNotes.length ? aiNotes : null;
