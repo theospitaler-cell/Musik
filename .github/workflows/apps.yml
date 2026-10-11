@@ -105,12 +105,20 @@ jobs:
       - name: Release veröffentlichen
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: NoteCode 1.0.${{ github.run_number }}
+          tag_name: v1.1.${{ github.run_number }}
+          name: NoteCode 1.1.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           make_latest: true
           files: out/*
           body: |
+            ## Neu in 1.1
+
+            - **Schnelle Läufe & Tonwiederholungen** aus Aufnahmen: Sechzehntel, Triolen und 32tel bleiben erhalten, einzelne Sechzehntel werden erkannt, Halbtempo-Fehler bei schnellen Liedern werden korrigiert.
+            - **Spielbare Quartett-Stimmen**: höchstens Oktavsprünge, eigenständiger Rhythmus der Mittelstimmen, keine Stille mitten im Stück.
+            - **Spurentrennung mit Demucs** (Desktop-App, optional): Gesang, Begleitung und Bass werden getrennt gehört, das Schlagzeug liefert keine Geisternoten. Einrichtung: `node scripts/setup-demucs.mjs`.
+            - **Aufwand immer Ultra** (änderbar nur in den Einstellungen), **Stil immer automatisch**.
+            - Gespeicherte Aufnahmen werden beim Öffnen einmalig mit der neuen Erkennung neu berechnet.
+
             ## NoteCode installieren
 
             | Gerät | Datei |
