@@ -176,11 +176,17 @@ export function kindText(c) {
   return (KINDS[c.kind] || KINDS.major).text;
 }
 
-export function transposeChord(c, semis) {
+// center: Quintenlage der Zieltonart – der Grundton wird so geschrieben, wie er dort üblich ist
+// (in C-Dur As statt Gis), sonst nur nicht in exotischer Schreibweise (Eis-Moll -> F-Moll)
+export function transposeChord(c, semis, center = null) {
   if (!c || semis === 0) return c;
   let d = semisToLofDelta(semis);
-  // Grundton nach der Transposition nicht in exotischer Schreibweise (Eis-Moll -> F-Moll)
-  if (c.rootLof + d > 9) d -= 12;
+  if (center !== null) {
+    // bei Gleichstand: Dur-Akkorde mit b (As statt Gis), Moll-Akkorde mit # (gis-Moll)
+    const far = c.rootLof + d - center;
+    if (far > 6 || (far === 6 && !isMinorish(c))) d -= 12;
+    else if (far < -6) d += 12;
+  } else if (c.rootLof + d > 9) d -= 12;
   else if (c.rootLof + d < -8) d += 12;
   return buildChord(c.rootLof + d, c.kind, c.tensions, c.bassLof === null ? null : c.bassLof + d);
 }

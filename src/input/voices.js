@@ -194,7 +194,9 @@ function pickMelody(notes, beat, hint, step) {
     const d = Math.abs(a.midi - b.midi);
     // nach einer Pause sind Sprünge normal (neue Phrase)
     const w = gap >= 2 * beat ? 0.3 : 1;
-    return -w * (0.05 * Math.max(0, d - 4) + (d >= 10 ? 0.5 : 0));
+    // Sprünge kosten: eine Melodie bleibt in ihrer Linie – das Hin und Her zu tiefen Akkordtönen
+    // der Begleitung (Quinte abwärts und zurück) lohnt sich nur für deutlich gehörte Töne
+    return -w * (0.09 * Math.max(0, d - 3) + (d >= 10 ? 0.5 : 0));
   };
   let prev = [{ score: 0, note: null, back: undefined, last: null }];
   for (const g of groups) {
@@ -236,6 +238,22 @@ function pickMelody(notes, beat, hint, step) {
     const x = out[i + 1];
     if (n.dur > 2 * step || n.start - p.start > 2 * beat || x.start - n.start > 2 * beat) continue;
     if (p.midi - n.midi >= 7 && x.midi - n.midi >= 7) out.splice(i--, 1);
+  }
+  // … ebenso ein kurzer Abstecher von ein bis zwei Tönen (höchstens ein Schlag), nach dem die
+  // Linie auf derselben Höhe weitergeht: der obere Ton wird in Wahrheit gehalten oder wiederholt
+  for (let i = 1; i < out.length - 1; i++) {
+    const p = out[i - 1];
+    for (const len of [2, 1]) {
+      const x = out[i + len];
+      if (!x) continue;
+      const run = out.slice(i, i + len);
+      if (Math.abs(p.midi - x.midi) > 2 || x.start - run[0].start > beat) continue;
+      if (run.every((n) => p.midi - n.midi >= 5 && x.midi - n.midi >= 5)) {
+        out.splice(i, len);
+        i--;
+        break;
+      }
+    }
   }
   return mono(out);
 }

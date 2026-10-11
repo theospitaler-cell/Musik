@@ -506,6 +506,16 @@ export function noteBeatChroma(ai, beatPos, nBeats) {
       else out[k].c[pc] += w;
     }
   }
+  // Gewicht des Basses auf jedem Schlag: tiefe, lange Töne genau auf dem Schlag (die Grundtöne
+  // der Harmonie) – sie markieren den Taktanfang, auch ohne Schlagzeug
+  const root = new Float32Array(nBeats);
+  for (const n of span) {
+    if (n.midi > bassTop) continue;
+    const k = Math.round(n.a);
+    if (k < 0 || k >= nBeats || Math.abs(n.a - k) > 0.2) continue;
+    root[k] += (0.3 + n.amp) * Math.min(2, Math.max(0.25, n.z - n.a)) * (1 + Math.max(0, bassTop - n.midi) / 12);
+  }
+  out.low = Array.from(root);
   for (const x of out) {
     const mc = Math.max(...x.c) || 1;
     const mb = Math.max(...x.b) || 1;
@@ -728,6 +738,7 @@ export function findMeter(bc, cues = {}) {
   const onset = cues.onset || new Array(n).fill(0);
   const crash = cues.crash || new Array(n).fill(0); // Becken-Akzent auf dem Schlag
   const fillPre = cues.fillPre || new Array(n).fill(0); // dichte Schläge im Schlag davor (Fill)
+  const lowBass = cues.lowBass || new Array(n).fill(0); // tiefe, lange Basstöne auf dem Schlag
   const some = (a) => a.some((v) => v > 0);
   // Basswechsel nur, wo auf beiden Schlägen ein Bass klingt (Pausen sind kein Harmoniewechsel)
   const bassChange = bc.map((x, i) => (i && some(x.b) && some(bc[i - 1].b) ? 1 - cosine(x.b, bc[i - 1].b) : 0));
@@ -761,6 +772,7 @@ export function findMeter(bc, cues = {}) {
         onset: avgOn(onset),
         crash: avgOn(crash),
         fill: avgOn(fillPre),
+        root: avgOn(lowBass),
         nov,
       });
     }
@@ -801,7 +813,7 @@ export function findMeter(bc, cues = {}) {
   // Taktart aus den Grundmerkmalen; die Lage der "1" zusätzlich mit Crash & Fills
   // (nur wenn diese deutlich und mehrfach vorkommen – sonst sind sie Rauschen)
   // Crash & Fill nur als schwacher Zusatz-Hinweis (in dichten Mixen sind sie unzuverlässig)
-  const withAcc = { ...base, crash: 0.4, fill: 0.3 };
+  const withAcc = { ...base, crash: 0.4, fill: 0.3, root: 1 };
   const m4 = evalMeter(4, base);
   const m3 = evalMeter(3, base);
   let beatsPer = m3.score > m4.score * 1.35 && m3.score > 0.05 ? 3 : 4;
@@ -817,7 +829,7 @@ export function findMeter(bc, cues = {}) {
     if (sp && sp.phases.length === 1) return { beats: 4, phase: sp.phases[0], snare: sp.type };
     if (sp) {
       // Backbeat: nur zwei Lagen möglich – davon die mit mehr Bass-Drum/Harmoniewechsel auf der "1"
-      const keys = { kick: 1.2, bass: 1, nov: 1.2, crash: 0.4, fill: 0.3 };
+      const keys = { kick: 1.2, bass: 1, nov: 1.2, crash: 0.4, fill: 0.3, root: 1.5 };
       const all = evalMeter(4, keys);
       const scores = all.all;
       const best = sp.phases.reduce((a, b) => (scores[b] > scores[a] ? b : a));
@@ -1475,6 +1487,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     }),
     // Takt-Periode des Rhythmus-Musters in Schlägen (4 oder 8 -> gerader Takt, 3 oder 6 -> Dreiertakt)
     barBeats: barLag ? barLag / medianIbi(beats) : null,
+    lowBass: bc.low || null,
     debug,
   });
   const m = meterInfo.beats;

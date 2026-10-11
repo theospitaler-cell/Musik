@@ -624,7 +624,15 @@ async function loadPending(t) {
     if (!ok) return;
     applyOptsToUi(it.options || {});
     S.currentId = it.id;
+    // ältere Analyse einer Aufnahme: einmalig mit der aktuellen Erkennung neu berechnen
+    // (nur bei älterem Stand – lief die Analyse hier ohne KI, bleibt es beim Knopf „Neu analysieren“)
+    const renewed = S.song?.source === 'audio' && (S.song.analysisVersion || 1) < ANALYSIS_VERSION && S.source?.audioId ? await reanalyze({ auto: true }) : false;
+    if (renewed) {
+      applyOptsToUi(it.options || {});
+      S.currentId = it.id;
+    }
     await generate({ silent: true });
+    if (renewed && S.arr) await saveCurrent(true);
   } finally {
     t.loading = false;
     S.busy--;
@@ -1259,7 +1267,7 @@ function renderAnalysis() {
   if (s.tracks && s.tracks.length > 1) extra.push(`${s.tracks.length} Spuren`);
   // Aufnahme: Taktraster von Hand korrigieren & ältere Analysen neu berechnen
   const audio = s.source === 'audio';
-  const old = audio && ((s.analysisVersion || 1) < ANALYSIS_VERSION || s.aiUsed === false);
+  const old = analysisOutdated(s);
   const retime = audio
     ? `<div class="retime">
         <span class="rt-label" title="Liegt die „1“ in den Noten falsch? Hier rückt der Taktstrich um einen Schlag.">Taktanfang</span>
@@ -1296,7 +1304,7 @@ async function retimeSong(action) {
     if (f === 2 && S.song.tempo > 150) return toast('Schneller geht es nicht sinnvoll – das Tempo liegt schon über 150.');
     if (f === 0.5 && S.song.tempo < 80) return toast('Langsamer geht es nicht sinnvoll – das Tempo liegt schon unter 80.');
     song = scaleNoteValues(S.song, f);
-  } else if (kind === 'again') return reanalyze();
+  } else if (kind === 'again') return void (await reanalyze());
   if (!song) return;
   const had = !!S.arr;
   const id = S.currentId;
@@ -1308,8 +1316,12 @@ async function retimeSong(action) {
   }
 }
 
-// Gespeicherte Aufnahme mit der aktuellen Erkennung neu analysieren
-async function reanalyze() {
+// Stammt die Analyse einer Aufnahme aus einer älteren Version (oder lief sie ohne KI)?
+const analysisOutdated = (song) => !!song && song.source === 'audio' && ((song.analysisVersion || 1) < ANALYSIS_VERSION || song.aiUsed === false);
+
+// Gespeicherte Aufnahme mit der aktuellen Erkennung neu analysieren.
+// auto: beim Öffnen eines älteren Projekts – still überspringen, wenn die Aufnahme hier fehlt
+async function reanalyze({ auto = false } = {}) {
   const src = S.source;
   let blob = null;
   try {
@@ -1317,10 +1329,14 @@ async function reanalyze() {
   } catch {
     /* kein lokaler Speicher */
   }
-  if (!(blob instanceof Blob)) return toast('Die Aufnahme liegt nicht auf diesem Gerät – bitte die Datei noch einmal laden.', 'error');
+  if (!(blob instanceof Blob)) {
+    if (!auto) toast('Die Aufnahme liegt nicht auf diesem Gerät – bitte die Datei noch einmal laden.', 'error');
+    return false;
+  }
+  let done = false;
   S.busy++;
   renderTabBar();
-  const pg = progress('Song wird neu analysiert');
+  const pg = progress(auto ? 'Bessere Erkennung: Song wird neu analysiert' : 'Song wird neu analysiert');
   try {
     pg.set('Audio wird dekodiert', null);
     await nextFrame();
@@ -1330,7 +1346,8 @@ async function reanalyze() {
     const id = S.currentId;
     pg.set('Fertig', 1);
     if (await setSource({ ...src, song })) {
-      toast('Neu analysiert', 'ok');
+      done = true;
+      toast(auto ? 'Mit der verbesserten Erkennung neu analysiert' : 'Neu analysiert', 'ok');
       if (had) {
         S.currentId = id;
         await generate();
@@ -1344,6 +1361,7 @@ async function reanalyze() {
     renderTabBar();
     setTimeout(() => pg.done(), 300);
   }
+  return done;
 }
 
 // replace: im aktiven Tab ersetzen; sonst öffnet ein weiteres Lied einen neuen Tab

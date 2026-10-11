@@ -159,23 +159,28 @@ export function pickupNotes(song) {
   return song.melody.filter((n) => n.start < 0);
 }
 
-export function transposeEvents(notes, semis) {
+// center: Quintenlage der Zieltonart – Töne, die dort weit außen lägen (Gis in C-Dur, His …),
+// werden enharmonisch einfach geschrieben
+export function transposeEvents(notes, semis, center = null) {
   if (!semis) return notes.map((n) => ({ ...n }));
   const d = semisToLofDelta(semis);
-  return notes.map((n) => ({ ...n, midi: n.midi + semis, lof: n.lof === undefined || n.lof === null ? n.lof : n.lof + d }));
+  const fix = (l) => (center === null ? l : l - center > 7 ? l - 12 : l - center < -7 ? l + 12 : l);
+  return notes.map((n) => ({ ...n, midi: n.midi + semis, lof: n.lof === undefined || n.lof === null ? n.lof : fix(n.lof + d) }));
 }
 
-export function transposeChordList(chords, semis) {
-  return chords.map((c) => ({ ...c, chord: transposeChord(c.chord, semis) }));
+export function transposeChordList(chords, semis, center = null) {
+  return chords.map((c) => ({ ...c, chord: transposeChord(c.chord, semis, center) }));
 }
 
 export function transposeSong(song, semis) {
   if (!semis) return song;
+  const key = transposeKey(song.key, semis);
+  const center = keyCenter(key);
   return {
     ...song,
-    key: transposeKey(song.key, semis),
-    melody: transposeEvents(song.melody, semis),
-    chords: transposeChordList(song.chords, semis),
+    key,
+    melody: transposeEvents(song.melody, semis, center),
+    chords: transposeChordList(song.chords, semis, center),
   };
 }
 

@@ -265,7 +265,8 @@ export function arrangePlayAlong(song, opts) {
     else if (p.source === 'melody') src = song.melody;
     else if (p.source.startsWith('chords:')) src = chordLine(song, p.source.slice(7), inst);
     else {
-      const t = (song.tracks || []).find((x) => x.id === p.source);
+      // (ältere Projekte kennen die Begleitung noch als eine Spur „ai-harmony“)
+      const t = (song.tracks || []).find((x) => x.id === p.source) || (p.source === 'ai-harmony' ? (song.tracks || []).find((x) => x.id === 'ai-inner1') : null);
       const low = inst.family === 'bass' || ['tuba', 'sousaphone', 'ebass', 'contrabass', 'bassTrombone', 'bassClarinet', 'bassoon', 'bariSax'].includes(inst.id);
       src = t ? monoLine(t.notes, low) : [];
     }
