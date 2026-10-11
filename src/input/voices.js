@@ -176,6 +176,11 @@ function pickMelody(notes, beat, hint, step) {
     let s = 0.5 * Math.min(1.5, n.amp / ampRef) + 0.2 * Math.min(1, n.dur / beat);
     s += (k === 0 ? 0.45 : k === 1 ? 0.15 : 0) * (dense ? 0.3 : 1);
     s -= 0.05 * Math.max(0, Math.abs(n.midi - center) - 10);
+    // Töne, die auch im Seitensignal (L−R) stehen, sind seitlich verteilte Gitarren/Streicher/Synths –
+    // Gesang und Lead stehen in der Mitte. Kein Ausschluss, aber der Ton muss sich mehr beweisen.
+    // (Nur im Vergleich innerhalb einer Gruppe: gibt es keinen Ton aus der Mitte, bleibt alles wie es war.)
+    if (n.side && g.notes.some((m) => m !== n && !m.side)) s -= 0.3;
+    else if (!n.side && g.notes.some((m) => m !== n && m.side)) s += 0.3;
     if (h !== null) {
       const d = n.midi - h;
       // die Signalanalyse irrt sich oft um eine Oktave – die Oktavlage entscheidet die Linie

@@ -27,6 +27,26 @@ function threeVoices(bars = 8) {
   return notes;
 }
 
+test('Melodie: seitlich verteilte Töne (Seitensignal) verlieren gegen die Mitte', () => {
+  // Gesang (Mitte) und eine lautere Gitarre (seitlich markiert) schlagen gleichzeitig an
+  const notes = [];
+  for (let b = 0; b < 6; b++) {
+    for (let k = 0; k < 8; k++) {
+      const start = b * 96 + k * 12;
+      notes.push({ start, dur: 12, midi: 69 + (k % 3), amp: 0.55 });
+      notes.push({ start, dur: 12, midi: 76 + (k % 4), amp: 0.62, side: true });
+      if (k % 2 === 0) notes.push({ start, dur: 12, midi: 40 + (k % 4), amp: 0.7 });
+    }
+  }
+  const vs = separateVoices(cleanPoly(notes), { beat: 24, mt: 96 });
+  const gesang = vs.melody.filter((n) => n.midi < 73).length;
+  assert.ok(vs.melody.length > 0 && gesang / vs.melody.length >= 0.8, `Gesang führt: ${gesang} von ${vs.melody.length}`);
+  // sind alle Kandidaten seitlich (z. B. Stereo-Hall auf dem Gesang), bleibt die Melodie erhalten
+  const allSide = notes.filter((n) => n.midi > 60).map((n) => ({ ...n, side: true }));
+  const vs2 = separateVoices(cleanPoly(allSide), { beat: 24, mt: 96 });
+  assert.ok(vs2.melody.length >= 40, `Melodie bleibt: ${vs2.melody.length}`);
+});
+
 test('Stimmen aus KI-Noten: Melodie oben, Parallelstimme in der Mitte, Bass unten', () => {
   const poly = cleanPoly(threeVoices());
   const vs = separateVoices(poly, { beat: 24, mt: 96 });
