@@ -225,7 +225,9 @@ function densityRoles(density, style) {
   // dünn heißt nicht leer: Melodie, ein Liegeklang darunter, Antworten in den Pausen, Bass
   if (density === 'thin') return ['melody', 'fill', 'pad', 'bass'];
   if (density === 'build') return ['melody', 'pad', 'counter', 'bass'];
-  return ['melody', harm, harm === 'pad' ? 'pad' : 'comp', 'bass'];
+  // voll (Refrain): die zweite Stimme geht in Terzen/Sexten mit der Melodie mit – der typische
+  // Bläser-Refrain –, die dritte hält die Harmonie, dazu der Bass
+  return ['melody', 'double', harm, 'bass'];
 }
 
 // ---- Hauptfunktion -----------------------------------------------------

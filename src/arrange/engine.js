@@ -296,7 +296,7 @@ export function arrange(songIn, options = {}) {
       }
       // Verdopplung der Melodie (große Besetzung im Refrain): Oktave tiefer bzw. Terz darunter
       for (const v of groupOf('double')) {
-        if (ctx.melodyLine && ctx.melodyLine.length) lines[v] = doubleMelody(ctx, v, ctx.melodyLine);
+        if (ctx.melodyLine && ctx.melodyLine.length) lines[v] = doubleMelody(ctx, v, ctx.melodyLine, { harmony: v === slots.upper });
       }
 
       // 5) Begleitung
@@ -608,11 +608,12 @@ function sourceTempoMap(song, blocks, mt, tempo) {
 
 // Melodie-Verdopplung für große Besetzungen: Oktave tiefer, wenn bequem spielbar, sonst eine
 // Terz (nächster Akkord-/Skalenton) darunter – bleibt immer unter der Melodie
-function doubleMelody(ctx, v, melLine) {
+function doubleMelody(ctx, v, melLine, { harmony = false } = {}) {
   const inst = ctx.inst[v];
   const ps = melLine.map((e) => e.pitches[0] - 12);
   const inComfort = ps.filter((m) => m >= inst.comfort[0] - 2 && m <= inst.comfort[1] + 1).length;
-  const octave = ps.length && inComfort / ps.length >= 0.85;
+  // harmony: Parallelstimme in Terzen/Sexten (Akkordtöne) statt Oktav-Verdopplung
+  const octave = !harmony && ps.length && inComfort / ps.length >= 0.85;
   const out = [];
   for (const e of melLine) {
     const top = e.pitches[0];
