@@ -103,6 +103,8 @@ jobs:
           node -e "const v=require('./version.json'); require('fs').writeFileSync('out/web-version.json', JSON.stringify({...v, zip:'notecode-web.zip'}))"
           cat out/web-version.json
       - name: Release veröffentlichen
+        id: rel
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.1.${{ github.run_number }}
@@ -118,6 +120,40 @@ jobs:
             - **Spurentrennung mit Demucs** (Desktop-App, optional): Gesang, Begleitung und Bass werden getrennt gehört, das Schlagzeug liefert keine Geisternoten. Einrichtung: `node scripts/setup-demucs.mjs`.
             - **Aufwand immer Ultra** (änderbar nur in den Einstellungen), **Stil immer automatisch**.
             - Gespeicherte Aufnahmen werden beim Öffnen einmalig mit der neuen Erkennung neu berechnet.
+            - **Orchestrierung für 1–15 Stimmen** mit Ensemble-Vorlagen, Stimmen-Zeilen (Instrument, Rolle, Schlüssel, Transposition) und Notenausgabe als MusicXML 4.0.
+            - **Führung & Stimmendynamik**: „Dynamisch & Polyphon“ (Einwürfe in Melodielücken, Gegenmelodien, Mini-Soli, synkopierte Begleitung) oder „Klassischer Solo-Lead“, dazu ein Regler für die Aktivität der Nebenstimmen (1–5).
+            - **Werktreue bei „Automatisch“**: jeder erkannte Melodieton bleibt erhalten (kein Atem-Schnitt in der Lead-Stimme, keine zusammengefassten Wiederholungen); kurze Töne mit klarem Anschlag werden erkannt. „Neu analysieren“ wendet das auf gespeicherte Aufnahmen an.
+
+            ## NoteCode installieren
+
+            | Gerät | Datei |
+            |---|---|
+            | **Windows** | `NoteCode-Setup-….exe` herunterladen und starten (bei „Der Computer wurde durch Windows geschützt“: *Weitere Informationen → Trotzdem ausführen*) |
+            | **Android** | `NoteCode-…-Android.apk` auf dem Handy herunterladen, öffnen und installieren (beim ersten Mal „Installation aus dieser Quelle erlauben“) |
+
+            **Schon installiert?** Ab dieser Version aktualisiert sich NoteCode selbst: Einstellungen → *App & Updates* → *Nach Updates suchen* (wird auch beim Start geprüft). `notecode-web.zip` und `web-version.json` sind dieses Update-Paket.
+
+            Stand: ${{ github.sha }}
+      - name: Release veröffentlichen (zweiter Versuch)
+        if: steps.rel.outcome == 'failure'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.1.${{ github.run_number }}
+          name: NoteCode 1.1.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: out/*
+          body: |
+            ## Neu in 1.1
+
+            - **Schnelle Läufe & Tonwiederholungen** aus Aufnahmen: Sechzehntel, Triolen und 32tel bleiben erhalten, einzelne Sechzehntel werden erkannt, Halbtempo-Fehler bei schnellen Liedern werden korrigiert.
+            - **Spielbare Quartett-Stimmen**: höchstens Oktavsprünge, eigenständiger Rhythmus der Mittelstimmen, keine Stille mitten im Stück.
+            - **Spurentrennung mit Demucs** (Desktop-App, optional): Gesang, Begleitung und Bass werden getrennt gehört, das Schlagzeug liefert keine Geisternoten. Einrichtung: `node scripts/setup-demucs.mjs`.
+            - **Aufwand immer Ultra** (änderbar nur in den Einstellungen), **Stil immer automatisch**.
+            - Gespeicherte Aufnahmen werden beim Öffnen einmalig mit der neuen Erkennung neu berechnet.
+            - **Orchestrierung für 1–15 Stimmen** mit Ensemble-Vorlagen, Stimmen-Zeilen (Instrument, Rolle, Schlüssel, Transposition) und Notenausgabe als MusicXML 4.0.
+            - **Führung & Stimmendynamik**: „Dynamisch & Polyphon“ (Einwürfe in Melodielücken, Gegenmelodien, Mini-Soli, synkopierte Begleitung) oder „Klassischer Solo-Lead“, dazu ein Regler für die Aktivität der Nebenstimmen (1–5).
+            - **Werktreue bei „Automatisch“**: jeder erkannte Melodieton bleibt erhalten (kein Atem-Schnitt in der Lead-Stimme, keine zusammengefassten Wiederholungen); kurze Töne mit klarem Anschlag werden erkannt. „Neu analysieren“ wendet das auf gespeicherte Aufnahmen an.
 
             ## NoteCode installieren
 
