@@ -1385,7 +1385,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // denn, zwischen den Teilen liegt ein echter Anschlag (Transient auf den Teiltönen dieses Tons)
   const detector = aiRaw && aiRaw.length ? makeAttackDetector(mono, SR) : null;
   const attack = detector ? detector.reattack : null;
-  const ai = aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack }) : aiRaw;
+  const ai = aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack, rise: detector ? detector.onsetRise : null }) : aiRaw;
   onProgress('Spektrum wird analysiert', 0);
   const feat = analyzeFrames(mono, onProgress);
   onProgress('Tempo & Beats werden erkannt', 0.46);

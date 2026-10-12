@@ -302,8 +302,10 @@ test('Comping: Dichte je Takt entscheidet über Einwürfe oder gehaltene Klänge
   assert.ok(allStabs.includes(36) && allStabs.includes(84), 'Synkopen auf 2+ und 4+');
   for (const v of inner) {
     // (gehaltene Töne, die beim Atem der Nachbarstimme einspringen, sind keine Einwürfe)
-    const stabs = v.events.filter((e) => bar(e) >= 4 && bar(e) < 8 && e.role === 'stabs');
-    assert.ok(stabs.length >= 8);
+    // (im dynamischen Modus übernehmen Einwürfe/Antworten in den Melodielücken einzelne Nachschläge)
+    const win = v.events.filter((e) => bar(e) >= 4 && bar(e) < 8);
+    const stabs = win.filter((e) => e.role === 'stabs');
+    assert.ok(stabs.length >= 6 && stabs.length + win.filter((e) => e.role === 'answer').length >= 8, `${stabs.length} Nachschläge`);
     assert.ok(stabs.every((e) => e.dur <= 12), 'Einwürfe sind höchstens Achtel lang');
     assert.ok(stabs.every((e) => e.art.includes('staccato')), 'Staccato');
     assert.ok(stabs.some((e) => e.start % 24 === 12), 'Synkopen auf Offbeat-Achteln');
@@ -537,7 +539,10 @@ test('N = 8: Drop-2- und Drop-2/4-Voicings, Spannungen innen, keine Sekunden unt
   assert.ok(isFriction(41, 43) && !isFriction(50, 52) && !isFriction(41, 44) && C3 === 48);
   // Terzen/Septimen nicht im Keller: in den Sätzen liegt die tiefste Innenstimme meist ≥ G2
   const lowest = rec.map((x) => Math.min(...x.pitches));
-  assert.ok(lowest.filter((p) => p >= 43).length / lowest.length > 0.7);
+  // (der dynamische Modus setzt mehr Anschläge – dort liegt der Anteil knapp darunter)
+  assert.ok(lowest.filter((p) => p >= 43).length / lowest.length > 0.6);
+  const classic = orchestrate(material, { voices: 8, mode: 'classic' }).arr.engine.report.voicings.map((x) => Math.min(...x.pitches));
+  assert.ok(classic.filter((p) => p >= 43).length / classic.length > 0.7, 'klassisch: meist ≥ G2');
 });
 
 test('N = 15: vier Register-Schichten, Oktavverdopplungen, keine Cluster', () => {
@@ -798,8 +803,15 @@ test('MusicXML: Artikulation, Atemzeichen und Dynamik', () => {
   assert.ok(sc.parts.reduce((s, p) => s + p.breathMarks, 0) >= 3);
   // Staccato nur auf kurzen Tönen; Akzente nur auf synkopierten Einsätzen (nicht auf dem Schlag)
   for (const n of all) if (n.arts.includes('staccato')) assert.ok(n.dur <= 24);
-  for (const e of r.arr.voices.flatMap((v) => v.events)) {
-    if (e.art.includes('accent')) assert.ok(e.start % 24 !== 0, `Akzent auf dem Schlag bei ${e.start}`);
+  // (Ausnahme: der Einsatz der Melodie/Antwort nach einer Pause von mindestens einer Zählzeit – Fanfaren-Auftakt)
+  for (const v of r.arr.voices) {
+    const evs = sortEvents([...v.events]);
+    evs.forEach((e, i) => {
+      if (!e.art.includes('accent') || e.start % 24 !== 0) return;
+      const prev = evs[i - 1];
+      const pickup = ['melody', 'answer', 'double'].includes(e.role) && prev && e.start - (prev.start + prev.dur) >= 24;
+      assert.ok(pickup, `Akzent auf dem Schlag bei ${e.start} (${e.role})`);
+    });
   }
   // Dynamik: jede Stimme hat Zeichen, und nur aus der Vorgabe-Reihe
   for (const p of sc.parts) {

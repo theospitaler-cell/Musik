@@ -3284,6 +3284,75 @@ body.lib-dragging .folder-card:not(.auto) {
 #steps[data-orch='1'] .orch-hide {
   display: none;
 }
+/* nur in der Orchestrierung */
+.orch-only {
+  display: none;
+}
+#steps[data-orch='1'] .orch-only {
+  display: block;
+}
+/* Führung & Stimmendynamik: zwei Optionen als Radio-Karten, darunter der Aktivitäts-Regler */
+.choice-list {
+  display: grid;
+  gap: 8px;
+}
+.choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.choice:hover {
+  border-color: var(--accent);
+}
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft, var(--surface));
+}
+.choice input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+.choice strong {
+  display: block;
+  font-size: 14px;
+}
+.choice small {
+  display: block;
+  margin-top: 1px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.activity-label {
+  margin-top: 14px;
+}
+.activity-range {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.activity-range:disabled {
+  opacity: 0.45;
+}
+.range-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.sub-block.is-off .activity-label,
+.sub-block.is-off .activity-range,
+.sub-block.is-off .range-scale {
+  opacity: 0.55;
+}
 @media (max-width: 520px) {
   .voice-list.slots .voice-slot {
     grid-template-columns: 128px minmax(0, 1fr);

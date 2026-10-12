@@ -1,6 +1,6 @@
 // Notensatz-Vorbereitung: Formteile & Probenbuchstaben, Artikulation, Dynamik, Schreibweise,
 // Zusammenbau des Arrangements (`arr`) für den MusicXML-4.0-Export.
-import { DYN_LEVELS, dynShift, mod } from '../core/constants.js';
+import { DYN_LEVELS, dynShift, dynIndex, mod } from '../core/constants.js';
 import { keyName, keyNameDe } from '../theory/keys.js';
 import { tempoHeading } from '../arrange/post.js';
 import { barFeatures, audioSections } from '../input/form.js';
@@ -122,6 +122,7 @@ export function nameSections(secs) {
 export function articulate(score) {
   const { voices, ctx } = score;
   const { mt, beat } = ctx.geo;
+  const dynamic = !!(score.behavior && score.behavior.dynamic);
   for (const v of voices) {
     const evs = sortEvents(v.events);
     for (let i = 0; i < evs.length; i++) {
@@ -138,6 +139,14 @@ export function articulate(score) {
       if (short && !onBeat && !e.art.includes('staccato')) e.art.push('staccato');
       if (e.role === 'stabs' && short && !e.art.includes('staccato')) e.art.push('staccato');
       if (sync && !e.art.includes('accent')) e.art.push('accent');
+      if (dynamic && (e.role === 'melody' || e.role === 'answer' || e.role === 'double')) {
+        // Fanfaren-Auftakte: Einsatz nach einer Pause wird betont, lange Phrasenschlüsse bekommen Tenuto
+        const afterRest = !!prev && e.start - endOf(prev) >= beat;
+        const next = evs[i + 1];
+        const phraseEnd = !next || next.start - endOf(e) >= beat / 2;
+        if (afterRest && e.dur >= 6 && !e.art.includes('accent')) e.art.push('accent');
+        if (e.dur >= 2 * beat && phraseEnd && !e.art.includes('staccato') && !e.art.includes('tenuto')) e.art.push('tenuto');
+      }
     }
   }
 }
@@ -170,7 +179,7 @@ function kmeans1d(vals, k) {
   return centers;
 }
 
-const LEADISH = new Set(['melody', 'double', 'answer']);
+const LEADISH = new Set(['melody', 'double']);
 
 export function assignDynamics(score, blocks) {
   const { voices, ctx } = score;
@@ -204,12 +213,23 @@ export function assignDynamics(score, blocks) {
     for (const b of blocks) if (b.startBar <= bar) r = b;
     return r;
   };
+  // Einwürfe, Gegenmelodien und Mini-Solos („answer“) treten hervor (mindestens mf); die Begleitung
+  // tritt währenddessen auf p zurück (zwei Stufen unter dem Einwurf)
+  const answers = [];
+  for (const v of voices) for (const e of v.events) if (e.role === 'answer') answers.push([e.start, endOf(e)]);
+  const answerAt = (t0, t1) => answers.some(([a, z]) => a < t1 && z > t0);
+  const MF = dynIndex('mf');
   for (const v of voices) {
     v.dirs = v.dirs.filter((d) => d.kind !== 'dyn');
     let cur = null;
     for (const e of sortEvents(v.events)) {
       const d = blockAt(e.start).dyn;
-      const want = LEADISH.has(e.role) || e.role === 'bass' ? d : dynShift(d, -1);
+      const level = dynIndex(d) < MF ? 'mf' : d;
+      let want;
+      if (e.role === 'answer') want = level;
+      else if (LEADISH.has(e.role)) want = d;
+      else if (answerAt(e.start, endOf(e))) want = e.role === 'bass' ? dynShift(d, -1) : dynShift(level, -2);
+      else want = e.role === 'bass' ? d : dynShift(d, -1);
       if (want !== cur) {
         v.dirs.push({ t: e.start, kind: 'dyn', value: want });
         cur = want;
@@ -347,7 +367,7 @@ export function buildArrangement(score, { title, composer = '', N, sections = nu
     form: { repeats: [], skip: null, segnoBar: null, toCodaBar: null, dsBar: null, codaBar: null },
     report: { notes: [...(material.report?.notes || []), ...score.report.notes] },
     options: { voices: N },
-    engine: { report: score.report, track: ctx.track },
+    engine: { report: score.report, track: ctx.track, behavior: score.behavior || null },
   };
   void chordAtList;
   return arr;

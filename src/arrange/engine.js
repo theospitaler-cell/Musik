@@ -229,7 +229,9 @@ export function arrange(songIn, options = {}) {
         const r = roles[leadV];
         if (r === 'melody') {
           // erste Vorstellung eines Formteils: exakt wie im Original (Wiedererkennung)
-          const { line, shift } = placeMelody(ctx, leadV, melodySlice, { adapt: b.firstStatement ? 0 : opts.adapt, climax });
+          // „Automatisch“: die Melodie wird Ton für Ton wiedergegeben (keine Pushes, keine zusätzlichen Verzierungen)
+          const exact = levelFor(opts, leadV) === null && Number(opts.adapt ?? 1) < 2;
+          const { line, shift } = placeMelody(ctx, leadV, melodySlice, { adapt: b.firstStatement || exact ? 0 : opts.adapt, climax });
           lines[leadV] = line;
           if (si === 0) b.melodyShift = shift;
         } else if (r === 'hook') {

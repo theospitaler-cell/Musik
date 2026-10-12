@@ -1,6 +1,6 @@
 // Regelprüfung der Orchestrierung – für den Bericht der Engine und die Tests.
 // Jede Regel stammt aus der Vorgabe; ein Eintrag in `violations` ist ein konkreter Verstoß.
-import { mod, dynShift } from '../core/constants.js';
+import { mod, dynShift, dynIndex } from '../core/constants.js';
 import { spellingIssues } from './tonality.js';
 import { frictions, perfectIssues, chordPool } from './voicing.js';
 import { chordAt } from '../model/song.js';
@@ -43,6 +43,7 @@ export function validateArrangement(arr, { maxRunBars = 8, sharedMax = 0.65 } = 
   const lead = voices.find((x) => x.role === 'lead');
   const foundation = voices.find((x) => x.role === 'bass');
   const inner = voices.filter((x) => x.role === 'inner' || (x.role === 'counter' && N < 9));
+  const behavior = (arr.engine && arr.engine.behavior) || { dynamic: true, mode: 'dynamic' };
   const stats = { notes: voices.map((x) => x.events.length) };
 
   // 1. Tonumfang
@@ -70,7 +71,8 @@ export function validateArrangement(arr, { maxRunBars = 8, sharedMax = 0.65 } = 
 
   // 5. Atem: kein Bläser spielt mehr als maxRunBars Takte ohne Pause von mindestens einer Zählzeit
   voices.forEach((x, i) => {
-    if (!isWind(x)) return;
+    // (die Melodie der Lead-Stimme wird nie für den Atem gekürzt – sie atmet nur an Pausen der Vorlage)
+    if (!isWind(x) || x.role === 'lead') return;
     const evs = sortEvents([...x.events]);
     let runStart = null;
     let runEnd = null;
@@ -96,8 +98,16 @@ export function validateArrangement(arr, { maxRunBars = 8, sharedMax = 0.65 } = 
     if (!holds) v('interlock', { voice: br.voice, t0: br.t0 });
   }
 
-  // 7. Melodieübernahme: Lead pausiert ≥ 2 Zählzeiten -> eine Nebenstimme führt
-  if (lead && N >= 2) {
+  // 7a. Klassischer Solo-Lead: Einwürfe, Läufe, Gegenmelodien und Soli gehören allein der Lead-Stimme
+  if (!behavior.dynamic) {
+    voices.forEach((x, i) => {
+      if (x === lead) return;
+      for (const e of x.events) if (e.role === 'answer') v('classic-lead', { voice: i, t: e.start });
+    });
+  }
+
+  // 7. Melodieübernahme: Lead pausiert ≥ 2 Zählzeiten -> eine Nebenstimme führt (dynamischer Modus)
+  if (lead && N >= 2 && behavior.dynamic) {
     const line = sortEvents([...lead.events]);
     for (const g of leadGaps(line, { beat })) {
       const filled = voices.some((x) => x !== lead && x.role !== 'double8' && x.role !== 'doubleU' && x.events.some((e) => e.role === 'answer' && e.start >= g.start && e.start < g.end));
@@ -133,7 +143,7 @@ export function validateArrangement(arr, { maxRunBars = 8, sharedMax = 0.65 } = 
         if (e.role !== 'pad' && e.role !== 'stabs') continue;
         const ld = leadDynAt(arr, e.start);
         const mine = dynAt(x, e.start);
-        if (ld && mine && mine !== dynShift(ld, -1)) v('dynamics', { voice: i, t: e.start, lead: ld, voiceDyn: mine });
+        if (ld && mine && dynIndex(mine) > dynIndex(dynShift(ld, -1))) v('dynamics', { voice: i, t: e.start, lead: ld, voiceDyn: mine });
       }
     }
   }

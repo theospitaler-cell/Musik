@@ -200,6 +200,8 @@ export function addSuspensions(arr, report) {
 //    paarweise zu längeren Tönen mit Tenuto zusammenfassen. Einsätze auf schweren Zeiten bleiben.
 //    lv: Schwierigkeit (Profi behält Achtel-Wiederholungen, fasst nur 16tel zusammen)
 export function reduceSyllableRepeats(events, lv, beat) {
+  // Schwierigkeit „Automatisch“: jeder erkannte Ton bleibt – auch gleiche Töne hintereinander
+  if (!lv) return { events: [...events], merged: 0 };
   const maxShort = lv && lv >= 5 ? 6 : 12; // Profi: nur 16tel, sonst bis Achtel
   const out = [];
   const src = [...events].sort((a, b) => a.start - b.start);

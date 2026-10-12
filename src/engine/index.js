@@ -11,7 +11,8 @@ import { routeStems, analyzeStemAudio } from './stems.js';
 import { parseWav } from '../input/stems.js';
 import { compose, applySatzRegeln } from './compose.js';
 import { applyHandoff, applyBreaths, interlock, markPhraseEnds } from './phrasing.js';
-import { articulate, spellVoices, buildArrangement, exportScore, ensembleName } from './engrave.js';
+import { articulate, spellVoices, buildArrangement, exportScore, ensembleName, detectSections } from './engrave.js';
+import { behaviorFor, applySustainCounters, applyMiniSolos, MODES, ACTIVITY_NAMES } from './behavior.js';
 import { validateArrangement, summarize } from './validate.js';
 import { sourceLinesOf } from '../arrange/original.js';
 import { songMeasureTicks, transposeChordList } from '../model/song.js';
@@ -27,7 +28,7 @@ export { estimateKey, keyTrack, spellPc, scaleSpelling, spellingIssues } from '.
 export { estimateTempo, plausibleTempo } from './tempo.js';
 export { PROFILES, ENSEMBLES, ensembleFor, getProfile, fitPitch } from './profiles.js';
 export { ENSEMBLE_PRESETS, defaultVoices, applyPreset, resizeEnsemble, matchPreset, presetForCount, slotInfo, describeInstrument, instrumentOptions, ensembleLabel } from './ensembles.js';
-export { validateArrangement, summarize, ensembleName, exportScore };
+export { validateArrangement, summarize, ensembleName, exportScore, behaviorFor, MODES, ACTIVITY_NAMES };
 
 // Basic Pitch (lokal, TensorFlow.js): Noten in Sekunden aus Mono-Audio
 export async function basicPitchNotes(samples, sampleRate) {
@@ -108,6 +109,9 @@ export function orchestrateFromOptions(song, o) {
     transpose: o.transpose ?? 'auto',
     tempo: o.tempo || undefined,
     drums: !!o.drums,
+    // Führung & Stimmendynamik: 'dynamic' (Standard) | 'classic', Aktivität der Nebenstimmen 1–5
+    mode: o.orchMode || 'dynamic',
+    activity: o.orchActivity ?? 3,
   });
 }
 
@@ -124,10 +128,17 @@ export function orchestrate(input, opts = {}) {
     shift = chooseTransposition(input, opts.instruments || defaultInstruments(N), { transpose: opts.transpose });
   }
   const material = toMaterial(input, { ...opts, shift });
-  const score = compose(material, N, opts);
+  const behavior = behaviorFor({ mode: opts.mode, activity: opts.activity });
+  const score = compose(material, N, { ...opts, behavior });
   // Atem zuerst: die Lücken der Melodie stehen erst dann fest, wenn ihre Atempausen gesetzt sind
   applyBreaths(score);
-  if (N >= 2) applyHandoff(score);
+  if (N >= 2 && behavior.dynamic) {
+    // Lücken -> Einwürfe/Läufe/Gegenmelodien (Call-and-Response), Haltetöne -> Bewegung darunter,
+    // dazu Mini-Solos. Im klassischen Modus bleibt die Melodie ganz bei der Lead-Stimme.
+    applyHandoff(score, { minBeats: behavior.gapBeats, maxBars: behavior.answerBars });
+    applySustainCounters(score, behavior);
+    applyMiniSolos(score, behavior, detectSections(score.ctx));
+  }
   // Satzregeln, Atem und Verzahnung greifen ineinander (ein gekürzter Ton macht Nachbarn zu neuen
   // Sprüngen, ein haltender Ton bildet einen neuen langen Lauf) – wiederholen bis nichts mehr dazukommt
   for (let round = 0; round < 4; round++) {
@@ -161,6 +172,10 @@ export function orchestrate(input, opts = {}) {
     ensemble: ensembleName(N),
     repairs: score.report.repairs,
     fills: score.report.fills.length,
+    mode: behavior.mode,
+    activity: behavior.activity,
+    solos: score.report.fills.filter((f) => f.kind === 'solo').length,
+    sustains: score.report.fills.filter((f) => f.kind === 'sustain').length,
     breaths: score.report.breaths.length,
     notes: arr.report.notes,
     violations: summarize(validation),

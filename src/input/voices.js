@@ -77,7 +77,12 @@ function mono(notes) {
 // attack(tPrev, tNext, midi) -> {depth, rise, …}: Anschlag-Erkennung aus dem Audio (fast.js); ohne sie
 // gelten nur Zeit-Regeln: ein gehaltener Ton (mind. holdSec) mit Abriss von höchstens gapSec bleibt einer.
 export const isNewAttack = (r) => !!r && (r.depth >= 0.6 || r.rise >= 3);
-export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4, attack = null, joinGap = 0.12, joinFirstMax = 0.12 } = {}) {
+// Schwellen (zum Abstimmen an echten Aufnahmen überschreibbar)
+export const TIDY_TUNE = { minSec: 0.12, gapSec: 0.06, holdSec: 0.4, joinGap: 0.12, joinFirstMax: 0.12, shortMin: 0.06, shortRise: 4, shortAmp: 0.8 };
+// rise(t, midi): Anstieg der Teiltonhüllkurve am Einsatz (fast.js, makeAttackDetector.onsetRise). Mit ihr bleiben
+// kurze Töne (ab shortMin) mit steilem Einsatz und ausreichender Lautstärke – echte Staccato-/Schnell-Noten –
+// statt an der 120-ms-Grenze zu fallen.
+export function tidyAiNotes(ai, { minSec = TIDY_TUNE.minSec, gapSec = TIDY_TUNE.gapSec, holdSec = TIDY_TUNE.holdSec, attack = null, joinGap = TIDY_TUNE.joinGap, joinFirstMax = TIDY_TUNE.joinFirstMax, rise = null } = {}) {
   const byPitch = new Map();
   for (const n of [...(ai || [])].sort((a, b) => a.start - b.start)) {
     const key = n.stem ? `${n.stem}:${n.midi}` : n.midi;
@@ -104,7 +109,18 @@ export function tidyAiNotes(ai, { minSec = 0.12, gapSec = 0.06, holdSec = 0.4, a
     }
     if (cur) out.push(cur);
   }
-  return out.filter((n) => n.end - n.start >= minSec).sort((a, b) => a.start - b.start || a.midi - b.midi);
+  let med = 0.5;
+  if (rise) {
+    const amps = out.filter((n) => n.midi >= 48 && n.midi <= 96).map((n) => n.amp ?? 0.5).sort((a, b) => a - b);
+    if (amps.length) med = amps[Math.floor(amps.length / 2)];
+  }
+  const keep = (n) => {
+    const d = n.end - n.start;
+    if (d >= minSec) return true;
+    if (!rise || d < TIDY_TUNE.shortMin || n.midi < 55 || n.midi > 90) return false;
+    return (n.amp ?? 0.5) >= TIDY_TUNE.shortAmp * med && rise(n.start, n.midi) >= TIDY_TUNE.shortRise;
+  };
+  return out.filter(keep).sort((a, b) => a.start - b.start || a.midi - b.midi);
 }
 
 // Schnelle Läufe und Tonwiederholungen (fast.js) zurückholen: Noten eines Musters bleiben auch unter

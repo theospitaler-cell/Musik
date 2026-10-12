@@ -372,8 +372,18 @@ export function fineChains(notes, B) {
 //  - er ist melodisch angebunden: ein lauter, ausgehaltener Ton höchstens 5 Halbtöne entfernt
 //    liegt höchstens 0,35 s davor oder danach.
 // onsetRise(t, midi) aus makeAttackDetector. Rückgabe: Map(Note -> {kind: 'single', grid: 6}).
+// Schwellen (zum Abstimmen an echten Aufnahmen überschreibbar: tune)
+export const SINGLE_TUNE = {
+  err: 0.15, // größte Abweichung vom 16tel-Raster (in Stufen)
+  rise: 4, // Anstieg der Teiltonhüllkurve am Einsatz (Faktor)
+  amp: 1.25, // Lautstärke relativ zur typischen Note des Liedes
+  linkAmp: 0.9, // ein ausgehaltener Nachbar muss mindestens so laut sein (relativ zur typischen Note)
+  linkDur: 0.12, // ... und so lange klingen (s)
+  linkDist: 5, // ... und höchstens so viele Halbtöne entfernt sein
+  linkGap: 0.35, // ... und höchstens so viele Sekunden davor/danach liegen
+};
 export function markSingleNotes(notes, beatSec, { onsetRise, tune = null } = {}) {
-  const T = { err: 0.15, rise: 4, amp: 1.25, ...(tune || {}) };
+  const T = { ...SINGLE_TUNE, ...(tune || {}) };
   const marks = new Map();
   if (!notes.length || !beatSec || beatSec.length < 3 || !onsetRise) return marks;
   const amps = notes.filter((n) => n.midi >= 48 && n.midi <= 96).map((n) => n.amp ?? 0.5).sort((a, b) => a - b);
@@ -405,7 +415,7 @@ export function markSingleNotes(notes, beatSec, { onsetRise, tune = null } = {})
       // Fragment eines Tons: gleiche Tonhöhe direkt davor/danach
       if (o.midi === n.midi && ((o.start > n.start && o.start - n.start < 0.4 && o.start - n.end <= 0.15) || (o.start < n.start && n.start - o.start < 0.5 && n.start - o.end <= 0.15))) fragment = true;
       if (Math.abs(o.start - n.start) <= 0.06 && [12, 19, 24, 7, 28].includes(n.midi - o.midi) && (o.amp ?? 0.5) >= 0.8 * (n.amp ?? 0.5)) harm = true;
-      if (o.end - o.start >= 0.12 && (o.amp ?? 0.5) >= 0.9 * med && Math.abs(o.midi - n.midi) <= 5 && ((o.end <= n.start + 0.04 && n.start - o.end <= 0.35) || (o.start >= n.end - 0.04 && o.start - n.end <= 0.35))) linked = true;
+      if (o.end - o.start >= T.linkDur && (o.amp ?? 0.5) >= T.linkAmp * med && Math.abs(o.midi - n.midi) <= T.linkDist && ((o.end <= n.start + 0.04 && n.start - o.end <= T.linkGap) || (o.start >= n.end - 0.04 && o.start - n.end <= T.linkGap))) linked = true;
     }
     if (fragment || harm || !linked) continue;
     if (onsetRise(n.start, n.midi) < T.rise) continue;

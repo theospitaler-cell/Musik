@@ -223,9 +223,10 @@ r.validation.ok;       // alle Satzregeln erfüllt?   r.report: Korrekturen, Ate
 | Tonart & Tempo | `tonality.js`, `tempo.js` | Krumhansl-Schmuckler gesamt und in gleitenden 8-Takt-Fenstern (Viterbi-Glättung → Modulationen), Schreibweise strikt nach der Skala (Bb statt A#, Leitton C# in d-Moll), Halbtempo-Prüfung |
 | Besetzung | `profiles.js` | Profile mit Bereich, Sweet Spot, Schlüssel, `<transpose>`; Besetzungen 1–15; stufenweise Oktavierung in den Bereich |
 | Satz | `compose.js`, `voicing.js` | Lead Sheet · Duo/Trio (Gegenstimme in Gegenbewegung, Terzen/Sexten) · Quartett (zwei eigenständige Mittelstimmen) · Drop-2 / Drop-2/4 mit Spannungen innen (5–8) · vier Register-Schichten (9–15) |
-| Phrasierung | `phrasing.js` | Atemräume alle 6–8 Takte, versetzt (Verzahnung), Melodieübernahme bei Pausen ≥ 2 Schläge |
-| Notensatz | `engrave.js` | Formteile + Probenbuchstaben, Artikulation (Staccato/Akzent/Atemzeichen), Dynamik aus Velocity-Clustern (Begleitung eine Stufe leiser), Export über `src/output/musicxml.js` |
-| Prüfung | `validate.js` | Bereich, Sprünge ≤ Oktave, Sekund-Reibungen unter C3, verdeckte Quinten/Oktaven, Atem, Verzahnung, Cluster, Dynamik, Schreibweise, Drop-Struktur |
+| Phrasierung | `phrasing.js` | Atemräume alle 6–8 Takte, versetzt (Verzahnung), Melodieübernahme (Einwurf) bei Pausen der Melodie – ab 2 Schlägen, je nach Aktivität ab einem halben Schlag |
+| Führung & Stimmendynamik | `behavior.js` | Modus A „Dynamisch & Polyphon“ / Modus B „Klassischer Solo-Lead“ und Aktivität 1–5 der Nebenstimmen: Call-and-Response in Lücken, Gegenfiguren unter Haltetönen, Mini-Soli über 2–4 Takte, Nachschläge, Bass nach der Bassdrum bzw. Funk-Muster |
+| Notensatz | `engrave.js` | Formteile + Probenbuchstaben, Artikulation (Staccato/Akzent/Atemzeichen; Tenuto und betonte Auftakte im dynamischen Modus), Dynamik aus Velocity-Clustern (Begleitung eine Stufe leiser, bei Einwürfen und Soli: Einwurf mindestens mf, Begleitung zwei Stufen darunter), Export über `src/output/musicxml.js` |
+| Prüfung | `validate.js` | Bereich, Sprünge ≤ Oktave, Sekund-Reibungen unter C3, verdeckte Quinten/Oktaven, Atem, Verzahnung, Cluster, Dynamik, Schreibweise, Drop-Struktur, klassischer Solo-Lead (keine Einwürfe) |
 
 Auslegungen, die man kennen sollte:
 
@@ -248,6 +249,27 @@ Auslegungen, die man kennen sollte:
 - **Stimmen-Zeilen:** Instrument (Auswahl aus den Profilen: Holz, Saxophone, Blech, Streicher, Tasten,
   E-Bass), erkannte Rolle (Lead · Gegenmelodie · Harmonie/Riff · Bass) sowie Schlüssel und Transposition,
   z. B. „Trompete in B (G-Schlüssel) · klingt eine große Sekunde tiefer“, „Posaune in C (F-Schlüssel)“.
+- **Führung & Stimmendynamik** (nur bei der Methode *Orchestrierung*, ab 2 Stimmen):
+  - *Dynamisch & Polyphon* (Standard): Nebenstimmen werfen in den Lücken der Melodie ein
+    (Call-and-Response, die Lead-Stimme pausiert), umspielen lange Töne (> 1,5 Schläge) in Achteln
+    gegen die Melodierichtung, übernehmen kurze Mini-Soli über 2–4 Takte (die Melodie Ton für Ton in
+    der Lage der Solo-Stimme, Doppler pausieren, danach Übergabe zurück an die Lead-Stimme) und spielen
+    synkopierte Nachschläge. Bei Groove-Material (Bassdrum-Daten oder synkopierte Melodie) folgt der Bass
+    der Bassdrum bzw. einem Funk-Muster; Choräle und Hymnen behalten ihren ruhigen Bass. Dynamik: Einwürfe
+    mindestens *mf*, die Begleitung tritt währenddessen auf *p* zurück; betonte Auftakte und Tenuto an
+    Phrasenenden.
+  - *Klassischer Solo-Lead*: Melodie, Läufe und Fills gehören allein der Lead-Stimme; die übrigen
+    Stimmen halten Akkordtöne, Liegeklänge und Rhythmus-Stützen (der Validator meldet jeden Einwurf).
+  - *Aktivität der Nebenstimmen* (Regler 1–5, nur im dynamischen Modus): 1 dezent (nur lange Lücken,
+    Liegeklänge) · 3 ausgewogen · 5 virtuos (schon kurze Lücken, Antworten bis 3 Takte, Mini-Soli über
+    4 Takte, Bass mit Antizipation). Gespeichert in den Optionen als `orchMode` / `orchActivity`.
+- **Werktreue bei „Automatisch“:** Ist die Schwierigkeit auf *Automatisch* gestellt, bleibt jeder erkannte
+  Melodieton erhalten – kein Atem-Schnitt in der Lead-Stimme (sie atmet nur an Pausen der Vorlage oder
+  durch Kürzen eines Haltetons), keine Zusammenfassung gleicher Töne („Silbenwiederholungen“), keine
+  Pushes oder zusätzlichen Verzierungen der Melodie (außer bei „Anpassung: Frei“). Ein Mini-Solo gibt die
+  Melodie Ton für Ton an eine Nebenstimme ab. Erst eine gewählte Schwierigkeit 1–5 vereinfacht wieder.
+  Erkennung: kurze Töne ab 60 ms bleiben, wenn die Teiltonhüllkurve einen steilen Anschlag zeigt und die
+  Lautstärke ausreicht; die Neu-Analyse („Neu analysieren“) wendet das auf gespeicherte Aufnahmen an.
 - **Methode:** *Orchestrierung* (die Engine, Standard), *Neu arrangieren* und *Original übernehmen*
   (die klassischen Methoden mit Stil, Soli, Schwierigkeit – brauchen mindestens 2 Stimmen).
   Gespeicherte ältere Arrangements öffnen sich weiter mit der klassischen Methode.

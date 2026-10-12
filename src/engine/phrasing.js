@@ -3,6 +3,7 @@ import { mod } from '../core/constants.js';
 import { inRange, nearestOctave } from './profiles.js';
 import { chordPool } from './voicing.js';
 import { ladder, ladderIndex, makeEvent, endOf, soundingAt, lastBefore, sortEvents } from './util.js';
+import { answerPool } from './behavior.js';
 
 // ---- Melodie übernehmen ---------------------------------------------------------------------
 // Lücken der Melodie (≥ 2 Schläge, mitten im Stück) bekommen eine Antwort der Nebenstimme.
@@ -16,13 +17,13 @@ export function leadGaps(leadLine, { beat, minBeats = 2 }) {
   return gaps;
 }
 
-function makeFill(score, voice, gap) {
+function makeFill(score, voice, gap, maxBars = 2) {
   const { ctx, leadLine, chordAt, scaleAtTick } = score;
   const { geo } = ctx;
   const beat = geo.beat;
   const len = gap.end - gap.start;
   const start = Math.ceil(gap.start / 12) * 12;
-  const end = Math.min(start + 2 * geo.mt, gap.end - (len >= 3 * beat ? beat / 2 : 0));
+  const end = Math.min(start + maxBars * geo.mt, gap.end - (len >= 3 * beat ? beat / 2 : 0));
   if (end - start < 12) return [];
   // Motiv: die letzten (bis zu 4) Melodietöne vor der Lücke
   const motif = leadLine.slice(Math.max(0, gap.before - 3), gap.before + 1).filter((e) => gap.start - endOf(e) <= geo.mt);
@@ -76,20 +77,21 @@ function makeFill(score, voice, gap) {
   return out;
 }
 
-export function applyHandoff(score) {
+// minBeats: Mindestlänge der Lücke in Schlägen; maxBars: längste Antwort in Takten (aus dem Verhalten)
+export function applyHandoff(score, { minBeats = 2, maxBars = 2 } = {}) {
   const { voices, leadLine, ctx, report } = score;
   const beat = ctx.geo.beat;
-  const gaps = leadGaps(leadLine, { beat });
+  const gaps = leadGaps(leadLine, { beat, minBeats });
   if (!gaps.length) return 0;
-  const counters = voices.filter((v) => v.role === 'counter');
-  const inner = voices.filter((v) => v.role === 'inner');
+  // Call-and-Response über alle Gegen- und Mittelstimmen (von oben, im Wechsel); ohne sie der Bass
   const bass = voices.find((v) => v.role === 'bass');
-  const pool = counters.length ? counters : inner.length ? [inner[0]] : bass ? [bass] : [];
+  const named = answerPool(score);
+  const pool = named.length ? named : bass ? [bass] : [];
   if (!pool.length) return 0;
   let n = 0;
   gaps.forEach((gap, gi) => {
     const v = pool[gi % pool.length];
-    const fill = makeFill(score, v, gap);
+    const fill = makeFill(score, v, gap, maxBars);
     if (!fill.length) return;
     const a = fill[0].start;
     const z = endOf(fill[fill.length - 1]);
@@ -192,8 +194,19 @@ export function applyBreaths(score, { target = 6, hard = 8 } = {}) {
       // Antworten (Melodieübernahme) werden nicht durch einen Atemraum zerschnitten
       const clearOfAnswers = (t) => !v.events.some((e) => e.role === 'answer' && e.start < t && endOf(e) > t - beat);
       let cands = [...new Set([...own, ...other, ...bars])].filter((t) => (counts.get(t) || 0) < maxTogether && clearOfAnswers(t));
+      if (v.role === 'lead') {
+        // Die Melodie bleibt vollständig: Atem nur dort, wo in der letzten Zählzeit davor kein Ton beginnt
+        // (ein Ton wird gekürzt oder es ist schon Pause) – sonst läuft die Melodie ohne Atemstelle weiter
+        const safe = (t) => !v.events.some((e) => (e.start >= t - beat && e.start < t) || (e.start < t - beat && endOf(e) > t - beat && t - beat - e.start < 6));
+        const beats = [];
+        for (let t = Math.ceil(from / beat) * beat; t <= to; t += beat) beats.push(t);
+        cands = [...new Set([...cands, ...beats])].filter(safe);
+      }
       cands.sort((x, y) => rank(x) - rank(y));
-      if (!cands.length) break;
+      if (!cands.length) {
+        if (v.role === 'lead' && !report.notes.some((x) => x.startsWith('Lead: keine Atemstelle'))) report.notes.push('Lead: keine Atemstelle ohne Tonverlust – die Melodie läuft vollständig durch (Atem an den Pausen der Vorlage).');
+        break;
+      }
       const b = cands[0];
       cutBreath(v, b, beat);
       report.breaths.push({ voice: v.index, t0: b - beat, t1: b, parity });

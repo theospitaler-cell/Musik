@@ -28,7 +28,7 @@ import { loadSettings, saveSettings } from './settings.js';
 import { STEM_MODES, normalizeStemMode, describeHardware, resolveStemPlan } from '../input/stems.js';
 import { MIN_VOICES, MAX_VOICES, voiceRole, ensembleName, resizeVoices, presetVoices, matchingPreset, carryPerVoice } from './voices.js';
 import { groupLibrary, mergeFolders, sameFolders, songTitleOf, uniqueFolderName } from './folders.js';
-import { orchestrateFromOptions } from '../engine/index.js';
+import { orchestrateFromOptions, ACTIVITY_NAMES } from '../engine/index.js';
 import { MIN_VOICES as MIN_ENS, MAX_VOICES as MAX_ENS, ENSEMBLE_PRESETS, ensembleLabel, applyPreset, resizeEnsemble, matchPreset, slotInfo, instrumentOptions } from '../engine/ensembles.js';
 import { hasMeterChanges } from '../model/song.js';
 
@@ -404,6 +404,8 @@ function defaultOpts() {
     voices: [...st.defaultVoices],
     engine: 'orchestra', // 'orchestra' = Orchestrierungs-Engine (1–15 Stimmen), 'classic' = Stile, Soli, Original übernehmen
     preset: null, // Ensemble-Vorlage (wird aus der Besetzung erkannt)
+    orchMode: 'dynamic', // Führung: 'dynamic' (Gegenmelodien, Fills, Soli) | 'classic' (Solo-Lead, Begleitung akkordisch)
+    orchActivity: 3, // Aktivität der Nebenstimmen 1 (dezent) … 5 (virtuos)
     style: 'auto', // der Stil wird immer automatisch passend zum Lied gewählt
     drums: st.defaultDrums,
     solo: st.defaultSolo,
@@ -1060,6 +1062,25 @@ const METHOD_INFO = {
 
 const methodOf = (o) => (o.engine === 'orchestra' ? 'orchestra' : o.original ? 'original' : 'free');
 
+// ---- Führung & Stimmendynamik (Orchestrierung)
+const ORCH_MODE_INFO = {
+  dynamic: 'Nebenstimmen antworten in den Lücken der Melodie (Call-and-Response), umspielen lange Töne, übernehmen kurze Mini-Soli und spielen synkopierte Begleitung; der Bass folgt dem Groove.',
+  classic: 'Die Lead-Stimme führt alle Melodien, Fills und Läufe allein; die übrigen Stimmen halten Akkordtöne, Liegeklänge und Rhythmus-Stützen.',
+};
+const clampActivity = (v) => Math.max(1, Math.min(5, Math.round(Number(v)) || 3));
+
+function syncOrchControls() {
+  const mode = S.opts.orchMode === 'classic' ? 'classic' : 'dynamic';
+  const act = clampActivity(S.opts.orchActivity);
+  $$('input[name="orch-mode"]').forEach((r) => (r.checked = r.value === mode));
+  $('#orch-activity').value = String(act);
+  $('#orch-activity').disabled = mode === 'classic';
+  $('#orch-activity-name').textContent = mode === 'classic' ? 'nur im dynamischen Modus' : ACTIVITY_NAMES[act - 1];
+  $('#orch-mode-note').textContent = mode === 'classic' ? 'Klassisch' : 'Dynamisch';
+  $('#orch-mode-info').textContent = ORCH_MODE_INFO[mode];
+  $('#lead-block').classList.toggle('is-off', mode === 'classic');
+}
+
 // Methode: 'orchestra' (neue Engine) | 'free' (neu arrangieren, klassisch) | 'original' (1:1 übernehmen)
 function setMethod(m, { quiet = false } = {}) {
   if (m !== 'orchestra' && S.opts.voices.length < 2) {
@@ -1334,6 +1355,8 @@ function readOpts() {
     voices: [...S.opts.voices],
     engine: S.opts.engine || 'orchestra',
     preset: S.opts.preset || null,
+    orchMode: S.opts.orchMode === 'classic' ? 'classic' : 'dynamic',
+    orchActivity: clampActivity(S.opts.orchActivity),
     style: 'auto',
     drums: $('#opt-drums').checked,
     solo: solo === 'rotate' || solo === 'none' ? solo : Number(solo),
@@ -1372,10 +1395,14 @@ function applyOptsToUi(o) {
   S.opts.voices = (S.opts.voices || []).slice(0, MAX_VOICES);
   if (S.opts.voices.length < MIN_ENS) S.opts.voices = resizeVoices(S.opts.voices.length ? S.opts.voices : [...S.settings.defaultVoices], 2);
   S.opts.preset = matchPreset(S.opts.voices, S.opts.preset);
+  // Führung & Stimmendynamik: gespeicherte Arrangements ohne Angabe laufen im Standard (dynamisch)
+  S.opts.orchMode = o.orchMode === 'classic' ? 'classic' : 'dynamic';
+  S.opts.orchActivity = clampActivity(o.orchActivity);
   S.opts.voiceDifficulty = S.opts.voiceDifficulty || [];
   S.opts.ranges = S.opts.ranges || [];
   renderBand();
   setMethod(methodOf(S.opts), { quiet: true });
+  syncOrchControls();
   difficultyOptions($('#opt-difficulty'), S.opts.difficulty ?? 'auto');
   setDrumMode(S.opts.drumMode || 'original');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
@@ -3228,6 +3255,18 @@ async function main() {
   $('#vc-minus').addEventListener('click', () => setVoiceCount(S.opts.voices.length - 1));
   $('#vc-plus').addEventListener('click', () => setVoiceCount(S.opts.voices.length + 1));
   $('#vc-range').addEventListener('input', (e) => setVoiceCount(Number(e.target.value)));
+  // Führung & Stimmendynamik
+  $$('input[name="orch-mode"]').forEach((r) =>
+    r.addEventListener('change', () => {
+      if (!r.checked) return;
+      S.opts.orchMode = r.value === 'classic' ? 'classic' : 'dynamic';
+      syncOrchControls();
+    }),
+  );
+  $('#orch-activity').addEventListener('input', (e) => {
+    S.opts.orchActivity = clampActivity(e.target.value);
+    syncOrchControls();
+  });
   $('#opt-difficulty').addEventListener('change', (e) => (S.opts.difficulty = e.target.value === 'auto' ? 'auto' : Number(e.target.value)));
   $$('#drum-mode .seg').forEach((b) => b.addEventListener('click', () => setDrumMode(b.dataset.mode)));
   // Tempo wieder automatisch

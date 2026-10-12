@@ -18,6 +18,7 @@ import { decodeComping } from './stems.js';
 import { ensembleFor, profileInstrument, getProfile, fitPitch, inRange } from './profiles.js';
 import { buildSonority, counterLine, fixPerfects, frictions, isFriction } from './voicing.js';
 import { makeEvent, meterGeometry, monoClean, soundingAt, lastBefore, endOf, sortEvents } from './util.js';
+import { behaviorFor, riffBass, stabsPlan, harmonicCounter } from './behavior.js';
 
 const snap = (x, step = 6) => Math.round(x / step) * step;
 
@@ -134,7 +135,7 @@ function padPattern(geo) {
 }
 
 // Schläge je Takt für die beiden Stimmgruppen (A/B)
-function attackPlan(bar, ctx, hasLead) {
+function attackPlan(bar, ctx, hasLead, behavior) {
   const { geo } = ctx;
   const info = ctx.decode.bars[bar];
   const rhythmic = info && info.mode === 'rhythmic';
@@ -161,6 +162,12 @@ function attackPlan(bar, ctx, hasLead) {
     }
   }
   if (!hasLead && (!info || info.density === 0)) return null;
+  // Dynamisch: Nachschläge/Offbeat-Achtel statt Liegeklänge (klassisch und „Dezent“: Liegeklänge).
+  // Wo die Vorlage selbst Klänge hält (Fanfaren, Chöre, Flächen), bleiben die Klänge stehen – mit einem
+  // Nachschlag darüber (Stufe 1); die Offbeat-Achtel gehören den rhythmischen Takten der Vorlage.
+  const held = info && info.mode === 'sustained';
+  const sp = stabsPlan(geo, held ? { ...behavior, stabs: Math.min(behavior.stabs, 1) } : behavior);
+  if (sp) return sp;
   const p = padPattern(geo);
   return { kind: 'pad', A: p.A.map(([t, d]) => [t, d, 'pad']), B: p.B.map(([t, d]) => [t, d, 'pad']) };
 }
@@ -200,6 +207,8 @@ export function compose(material, N, opts = {}) {
     return s;
   };
   const style = opts.style || 'funk';
+  // Führung & Stimmendynamik: dynamisch/polyphon oder klassischer Solo-Lead (Aktivität 1–5)
+  const behavior = opts.behavior || behaviorFor({ mode: opts.mode, activity: opts.activity });
   const report = { notes: [], voicings: [], fills: [], breaths: [], repairs: { friction: 0, perfects: 0, leaps: 0 } };
 
   // ---- Lead & Doppelungen
@@ -219,8 +228,11 @@ export function compose(material, N, opts = {}) {
   }
 
   // ---- Bass
-  const bassSrc = ctx.bassNotes.length ? ctx.bassNotes : bassFromChords(chords, geo, ctx.total);
-  if (!ctx.bassNotes.length) report.notes.push('Kein Bass-Stem: Basslinie aus den Akkorden abgeleitet');
+  // lebendige Basslinie (dynamisch): folgt der Bassdrum bzw. einem Funk-Muster, wo die Vorlage nur hält
+  const riff = riffBass(ctx, behavior, chordAt);
+  const bassSrc = riff || (ctx.bassNotes.length ? ctx.bassNotes : bassFromChords(chords, geo, ctx.total));
+  if (riff) report.notes.push('Bass: synkopierte Linie nach der Bassdrum bzw. einem Funk-Muster (wo die Vorlage Liegetöne hatte)');
+  else if (!ctx.bassNotes.length) report.notes.push('Kein Bass-Stem: Basslinie aus den Akkorden abgeleitet');
   const bassVoices = voices.filter((v) => v.role === 'bass' || v.role === 'bass8vb');
   let foundation = null;
   for (const v of bassVoices) {
@@ -255,6 +267,12 @@ export function compose(material, N, opts = {}) {
   if (N === 3 || N >= 9) {
     const src = N === 3 ? leadLine : thinLead(leadLine, geo);
     let avoid = null;
+    if (!behavior.dynamic) {
+      // klassisch: keine Gegenmelodie, die Stimme liegt auf Akkordtönen unter der Melodie
+      counterVoices.forEach((cv, k) => {
+        cv.events = harmonicCounter({ ctx, chordAt, leadLine }, cv, k);
+      });
+    } else
     for (const cv of counterVoices) {
       const line = counterLine({ lead: src, chordAt, scalePcs: scaleAtTick, profile: cv.profile, bassAt, avoid });
       const evs = [];
@@ -298,7 +316,7 @@ export function compose(material, N, opts = {}) {
     for (let b = 0; b < M; b++) {
       const a0 = b * geo.mt;
       const hasLead = leadLine.some((e) => e.start < a0 + geo.mt && endOf(e) > a0);
-      const plan = attackPlan(b, ctx, hasLead);
+      const plan = attackPlan(b, ctx, hasLead, behavior);
       if (!plan) continue;
       const attacks = [];
       plan.A.forEach(([t, d, kind]) => attacks.push({ t: a0 + t, dur: d, kind, grp: 0 }));
@@ -317,7 +335,7 @@ export function compose(material, N, opts = {}) {
           }
           const dur = Math.min(at.dur, a0 + geo.mt - at.t);
           if (dur <= 0) return;
-          const e = makeEvent(at.t, dur, p, null, { role: plan.kind === 'stabs' ? 'stabs' : 'pad', template: s.template });
+          const e = makeEvent(at.t, dur, p, null, { role: at.kind === 'stab' ? 'stabs' : 'pad', template: s.template });
           if (v.profile.staves > 1) {
             // Klavier: der ganze Satz dieses Moments – rechte Hand die Akkordtöne unter der Melodie,
             // linke Hand der Basston (Doppelsystem, Aufteilung beim Notensatz)
@@ -349,6 +367,7 @@ export function compose(material, N, opts = {}) {
     report,
     N,
     style,
+    behavior,
     foundation,
     inner,
   };
