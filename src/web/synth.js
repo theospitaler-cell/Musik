@@ -7,6 +7,7 @@ export const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 export function profileFor(inst) {
   if (!inst) return 'drums';
   const id = inst.id;
+  if (id === 'piano') return 'piano';
   if (id === 'tuba' || id === 'sousaphone' || id === 'bassTrombone') return 'lowbrass';
   if (id === 'horn') return 'horn';
   if (inst.family === 'brass') return 'brass';

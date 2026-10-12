@@ -241,7 +241,7 @@ export function exportMusicXML(arr, opts = {}) {
   partSpecs.forEach((ps, k) => {
     w.open('part', { id: ps.pid });
     if (ps.kind === 'drums') writeDrumPart(w, arr, ps, { isPart, layout, first: k === 0, drumStyle: opts.drumStyle || 'chart' });
-    else writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first: k === 0, useSimile: !!opts.simile, tenorClef: !!opts.tenorClef });
+    else writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first: k === 0, useSimile: !!opts.simile, tenorClef: !!opts.tenorClef, transposeForm: opts.transposeForm || 'octave-change' });
     w.close('part');
   });
   w.close('score-partwise');
@@ -561,7 +561,33 @@ function roleAtFactory(arr, idx) {
   };
 }
 
-function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, useSimile = false, tenorClef = false }) {
+// Doppelsystem: Ereignis auf oberes (ab C4) und unteres System verteilen
+const STAFF_SPLIT = 60;
+function splitStaves(events) {
+  const hi = [];
+  const lo = [];
+  for (const e of events) {
+    const up = [];
+    const down = [];
+    e.pitches.forEach((p, i) => (p >= STAFF_SPLIT ? up : down).push([p, e.lofs[i]]));
+    const part = (list, first) => ({
+      ...e,
+      pitches: list.map((x) => x[0]),
+      lofs: list.map((x) => x[1]),
+      grace: first ? e.grace : null,
+      art: first ? e.art : [],
+      fx: first ? e.fx : [],
+      slurStart: first ? e.slurStart : false,
+      slurEnd: first ? e.slurEnd : false,
+      breathAfter: first ? e.breathAfter : false,
+    });
+    if (up.length) hi.push(part(up, true));
+    if (down.length) lo.push(part(down, !up.length));
+  }
+  return { hi, lo };
+}
+
+function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, useSimile = false, tenorClef = false, transposeForm = 'octave-change' }) {
   void layout;
   const v = arr.voices[ps.idx];
   const inst = v.inst;
@@ -582,14 +608,19 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     };
   };
   const events = v.events.map(toWritten);
-  const measures = layoutVoice(events, arr.meter, total, geo.grid ? geo : null);
+  // Klavier & Co.: Doppelsystem G/F – Töne ab C4 stehen oben, darunter im Bassschlüssel; ein Akkord
+  // wird auf beide Systeme verteilt (Artikulation und Bögen am oberen Teil)
+  const grand = (inst.staves || 1) > 1;
+  const staffEvents = grand ? splitStaves(events) : null;
+  const measures = layoutVoice(grand ? staffEvents.hi : events, arr.meter, total, geo.grid ? geo : null);
+  const measuresLow = grand ? layoutVoice(staffEvents.lo, arr.meter, total, geo.grid ? geo : null) : null;
   const emptySrc = emptyBars(v.events, total, mt, geo.grid ? geo : null);
   const emptyPrinted = printed.map((pm) => emptySrc[pm.src] && !pm.startRepeat && !pm.endRepeat && !pm.segno && !pm.coda && !pm.toCoda && !pm.dalSegno);
   const blockStarts = new Set(arr.blocks.map((b) => b.startBar));
   // Stichnoten & Mehrtaktpausen (nur Einzelstimmen), auf gedruckter Folge
   const cueAt = new Map();
   const multiRest = new Map();
-  if (isPart) {
+  if (isPart && !grand) {
     let k = 0;
     while (k < printed.length) {
       if (!emptyPrinted[k]) {
@@ -640,7 +671,7 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     const blockStart = block.startBar === m;
     const pk = partKeyFifths(block.key.fifths, tr);
     let clef = null;
-    if (blockStart) {
+    if (blockStart && !grand) {
       const c = clefForBlock(v.events, inst, geo.start(block.startBar), geo.start(block.startBar + block.measures), tenorClef);
       if (c && c !== currentClef) clef = c;
     }
@@ -669,7 +700,16 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
         w.el('beat-type', meterHere.beatType);
         w.close('time');
       }
-      if (k === 0 || clef) {
+      if (k === 0 && grand) {
+        w.el('staves', 2);
+        w.el('part-symbol', 'brace');
+        for (const [num, c] of [[1, CLEFS.G2], [2, CLEFS.F4]]) {
+          w.open('clef', { number: num });
+          w.el('sign', c.sign);
+          w.el('line', c.line);
+          w.close('clef');
+        }
+      } else if (k === 0 || clef) {
         const c = CLEFS[clef || currentClef];
         w.open('clef');
         w.el('sign', c.sign);
@@ -680,9 +720,15 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
       if (k === 0 && tr.semis) {
         const steps = mod(4 * tr.lof, 7);
         w.open('transpose');
-        w.el('diatonic', -steps);
-        w.el('chromatic', -mod(tr.semis, 12));
-        if (tr.semis >= 12) w.el('octave-change', -Math.floor(tr.semis / 12));
+        if (transposeForm === 'compound') {
+          // zusammengefasste Angabe, z. B. Tenorsax: diatonic -8, chromatic -14 (ohne octave-change)
+          w.el('diatonic', -(steps + 7 * Math.floor(tr.semis / 12)));
+          w.el('chromatic', -tr.semis);
+        } else {
+          w.el('diatonic', -steps);
+          w.el('chromatic', -mod(tr.semis, 12));
+          if (tr.semis >= 12) w.el('octave-change', -Math.floor(tr.semis / 12));
+        }
         w.close('transpose');
       }
       if (mr) {
@@ -756,7 +802,15 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
     const m0 = geo.start(m);
     const dirs = dirsAt(m).map((d) => ({ ...d, t: d.t - m0 }));
     if (showGlobal && arr.tempoMap) for (const tm of arr.tempoMap) if (tm.t > 0 && tm.t >= m0 && tm.t < geo.start(m + 1)) dirs.push({ t: tm.t - m0, kind: 'tempo', bpm: tm.bpm });
-    writeMeasureItems(w, itemsFixed, { pre, dirs: inMultiRest > 0 && !dirs.length ? [] : dirs, harmonies, mi, keyFifths: pk.fifths, cue: inCue, isDrum: false, voice: 1, instRef: null });
+    writeMeasureItems(w, itemsFixed, { pre, dirs: inMultiRest > 0 && !dirs.length ? [] : dirs, harmonies, mi, keyFifths: pk.fifths, cue: inCue, isDrum: false, voice: 1, staff: grand ? 1 : null, instRef: null });
+    if (grand) {
+      // unteres System: zurück an den Taktanfang
+      const low = measuresLow[m].map((it) => (it.tieStart && it.kind === 'note' && (!nextPm || nextPm.src !== m + 1) && it.start + it.dur >= geo.len(m) ? { ...it, tieStart: false } : it));
+      w.open('backup');
+      w.el('duration', geo.len(m));
+      w.close('backup');
+      writeMeasureItems(w, low, { pre: [], dirs: [], harmonies: [], mi, keyFifths: pk.fifths, cue: false, isDrum: false, voice: 2, staff: 2, instRef: null });
+    }
     if (inMultiRest > 0) inMultiRest--;
     writeFormDirectionsEnd(w, pm, showGlobal);
     writeBarlines(w, pm, k === printed.length - 1, nextPm, arr);
@@ -812,7 +866,7 @@ function buildCue(arr, selfIdx, bar, tr) {
   return { items, label: arr.voices[best.i].inst.short };
 }
 
-function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue, isDrum, voice, instRef, drumMap, hideRests = false }) {
+function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue, isDrum, voice, staff = null, instRef, drumMap, hideRests = false }) {
   for (const f of pre || []) f();
   const keyMap = keyAlterMap(keyFifths);
   const state = {};
@@ -843,6 +897,7 @@ function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue,
         for (let d = 0; d < it.dots; d++) w.el('dot');
       }
       if (it.tuplet) writeTimeMod(w, it);
+      if (staff) w.el('staff', staff);
       if (it.tuplet && (it.tuplet.start || it.tuplet.stop)) {
         w.open('notations');
         if (it.tuplet.start) w.el('tuplet', null, { type: 'start', bracket: 'yes' });
@@ -869,6 +924,7 @@ function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue,
       w.el('type', 'eighth', cue ? { size: 'cue' } : undefined);
       const accG = accidentalFor(sp, state, keyMap, false);
       if (accG) w.el('accidental', accG);
+      if (staff) w.el('staff', staff);
       if (g.gliss) {
         w.open('notations');
         w.el('glissando', g.rip ? 'rip' : 'gliss.', { type: 'start', 'line-type': g.rip ? 'wavy' : 'solid', number: 1 });
@@ -916,6 +972,7 @@ function writeMeasureItems(w, items, { pre, dirs, harmonies, mi, keyFifths, cue,
         if (dd?.head) w.el('notehead', dd.head);
         else if (e.ghost) w.el('notehead', 'normal', { parentheses: 'yes' });
       }
+      if (staff) w.el('staff', staff);
       if (k === 0 && it.beams) it.beams.forEach((b, bi) => w.el('beam', b, { number: bi + 1 }));
       writeNotations(w, it, e, k, pitches.length, isDrum, cue);
       w.close('note');

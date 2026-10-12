@@ -24,7 +24,7 @@ export function buildPlan(arr) {
   }
   const printed = printedMeasures(arr);
   const r = arr.report;
-  const fxList = Object.entries(r.fx)
+  const fxList = Object.entries(r.fx || {})
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${FX_NAMES[k] || k}: ${n}`);
   return {
@@ -39,7 +39,7 @@ export function buildPlan(arr) {
     transpose: arr.transposeShift,
     form: arr.form,
     rows,
-    quality: [
+    quality: arr.engine ? engineQuality(arr) : [
       `Lange Melodietöne mit Bewegung in den Mittelstimmen: ${r.longNotesCovered}/${r.longNotes}${r.fillsInjected ? ` (davon ${r.fillsInjected} automatisch ergänzt)` : ''}`,
       `Quint-/Oktavparallelen: ${r.parallelsFound} gefunden, ${r.parallelsFixed} korrigiert`,
       `Atempausen für Bläser eingefügt: ${r.breaths}`,
@@ -48,6 +48,26 @@ export function buildPlan(arr) {
     ],
     warnings: [...(arr.song.warnings || []), ...(r.notes || [])],
   };
+}
+
+// Prüfbericht der Orchestrierungs-Engine (src/engine): jede Regel der Vorgabe mit Ergebnis
+function engineQuality(arr) {
+  const e = arr.engine;
+  const rep = e.report;
+  const viol = e.validation ? e.validation.violations : [];
+  const by = {};
+  for (const v of viol) by[v.rule] = (by[v.rule] || 0) + 1;
+  const out = [];
+  out.push(viol.length ? `Satzregeln: ${viol.length} Verstöße (${Object.entries(by).map(([k, n]) => `${k} ×${n}`).join(', ')})` : 'Satzregeln: alle erfüllt (Tonumfang, Sprünge, Parallelen, Reibungen, Atem, Dynamik, Schreibweise)');
+  out.push(`Quint-/Oktavparallelen zwischen Lead und Bass: ${rep.repairs.perfects} korrigiert`);
+  out.push(`Sekund-Reibungen unter C3: ${rep.repairs.friction} Stellen angepasst`);
+  out.push(`Sprünge über eine Oktave: ${rep.repairs.leaps} Töne versetzt`);
+  out.push(`Atempausen für Bläser: ${rep.breaths.length} (versetzt, die Mittelstimmen verzahnt) · Melodieübernahmen bei Pausen: ${rep.fills.length}`);
+  const t = {};
+  for (const v of rep.voicings) t[v.template] = (t[v.template] || 0) + 1;
+  const names = { drop2: 'Drop-2', drop24: 'Drop-2/4', closed: 'enger Satz' };
+  if (rep.voicings.length) out.push(`Satztechnik: ${Object.entries(t).map(([k, n]) => `${names[k] || k} ×${n}`).join(', ')}`);
+  return out;
 }
 
 const FX_NAMES = {

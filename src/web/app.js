@@ -28,6 +28,9 @@ import { loadSettings, saveSettings } from './settings.js';
 import { STEM_MODES, normalizeStemMode, describeHardware, resolveStemPlan } from '../input/stems.js';
 import { MIN_VOICES, MAX_VOICES, voiceRole, ensembleName, resizeVoices, presetVoices, matchingPreset, carryPerVoice } from './voices.js';
 import { groupLibrary, mergeFolders, sameFolders, songTitleOf, uniqueFolderName } from './folders.js';
+import { orchestrateFromOptions } from '../engine/index.js';
+import { MIN_VOICES as MIN_ENS, MAX_VOICES as MAX_ENS, ENSEMBLE_PRESETS, ensembleLabel, applyPreset, resizeEnsemble, matchPreset, slotInfo, instrumentOptions } from '../engine/ensembles.js';
+import { hasMeterChanges } from '../model/song.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -399,6 +402,8 @@ function defaultOpts() {
   const st = S.settings;
   return {
     voices: [...st.defaultVoices],
+    engine: 'orchestra', // 'orchestra' = Orchestrierungs-Engine (1–15 Stimmen), 'classic' = Stile, Soli, Original übernehmen
+    preset: null, // Ensemble-Vorlage (wird aus der Besetzung erkannt)
     style: 'auto', // der Stil wird immer automatisch passend zum Lied gewählt
     drums: st.defaultDrums,
     solo: st.defaultSolo,
@@ -467,7 +472,7 @@ function tabSub(t) {
       ? `Solo · ${o.soloInstrument === 'drums' ? 'Schlagzeug' : INSTRUMENTS[o.soloInstrument]?.short || ''}`
       : o.ensemble === 'drums'
         ? 'Schlagzeug'
-        : `${ensembleName(o.voices?.length || 4)}${o.original ? ' · Original' : ''}`;
+        : `${ensembleLabel(o.voices?.length || 4)}${o.original ? ' · Original' : ''}`;
   if (t.pendingId && !t.song) return `${ens} · gespeichert`;
   return t.song ? ens : `${ens} · noch kein Song`;
 }
@@ -687,7 +692,7 @@ function refreshEmptyState() {
   const pending = !!t.pendingId && !has;
   $('#es-title').textContent = pending ? `„${t.pendingTitle || 'Arrangement'}“ wird geöffnet …` : has ? `„${S.song.title}“ ist geladen` : 'Neues Projekt';
   $('#es-text').textContent = has
-    ? 'Stelle links Besetzung, Stil und Schwierigkeit ein – oder wähle hier nur die Anzahl der Instrumente – und erstelle dann das Arrangement.'
+    ? 'Stelle links Besetzung (1 bis 15 Stimmen), Tempo und Tonart ein – oder wähle hier nur die Anzahl der Instrumente – und erstelle dann die Noten.'
     : 'Wähle, wie viele Instrumente spielen, und lade einen Song – NoteCode schreibt die Noten: Arrangement mit Intro, Gegenstimmen, Solo und Schluss, Solo-Noten oder Playback 1:1 zum Mitspielen.';
   $('#es-file span').textContent = has ? 'Anderen Song wählen …' : 'Song wählen …';
   $('#es-file').classList.toggle('primary', !has);
@@ -700,17 +705,19 @@ function refreshEmptyState() {
   renderCountChooser();
 }
 
-// "Wie viele Instrumente?" – 1 = Solo, 2–8 = Mehrere, dazu Schlagzeug
+
+// "Wie viele Instrumente?" – 1 = Lead Sheet, 2–8 Ensemble, Orchester, Solo (Übungsnoten), Schlagzeug
 function renderCountChooser() {
   const box = $('#cc-grid');
   if (!box || !S.opts) return;
   const ens = S.opts.ensemble;
   const n0 = S.opts.voices.length;
-  const cur = ens === 'solo' ? 1 : ens === 'drums' ? 'drums' : n0 > 8 ? 'orch' : n0;
+  const cur = ens === 'solo' ? 'solo' : ens === 'drums' ? 'drums' : n0 > 8 ? 'orch' : n0;
   box.innerHTML = '';
-  const items = [[1, 'Solo']];
-  for (let n = MIN_VOICES; n <= 8; n++) items.push([n, ensembleName(n)]);
+  const items = [];
+  for (let n = MIN_ENS; n <= 8; n++) items.push([n, ensembleLabel(n)]);
   items.push(['orch', 'Orchester']);
+  items.push(['solo', 'Solo']);
   items.push(['drums', 'Schlagzeug']);
   for (const [k, name] of items) {
     const b = document.createElement('button');
@@ -718,33 +725,31 @@ function renderCountChooser() {
     b.className = 'cc-tile' + (k === cur ? ' active' : '') + (k === 'drums' ? ' drums' : '');
     b.setAttribute('role', 'radio');
     b.setAttribute('aria-checked', String(k === cur));
-    b.innerHTML = k === 'drums' ? `<svg><use href="#i-drum"/></svg><small>${name}</small>` : k === 'orch' ? `<strong>${n0 > 8 ? n0 : '9+'}</strong><small>${name}</small>` : `<strong>${k}</strong><small>${name}</small>`;
+    if (k === 'drums') b.innerHTML = `<svg><use href="#i-drum"/></svg><small>${name}</small>`;
+    else if (k === 'solo') b.innerHTML = `<svg><use href="#i-music"/></svg><small>${name}</small>`;
+    else if (k === 'orch') b.innerHTML = `<strong>${n0 > 8 ? n0 : '9+'}</strong><small>${name}</small>`;
+    else b.innerHTML = `<strong>${k}</strong><small>${name}</small>`;
     b.addEventListener('click', () => pickCount(k));
     box.appendChild(b);
   }
 }
 
-// Konzertpartitur: Kammerorchester in Partiturordnung (Holz, Blech, Streicher)
+
+// Großes Blasorchester: bleibt die Anzahl im Bereich 9–15, gilt sie weiter, sonst 13 Stimmen
 function useOrchestra() {
-  const p = PRESETS.find((x) => x.orchestra);
-  if (!p) return;
-  const next = [...p.voices];
-  S.opts.voiceDifficulty = carryPerVoice(S.opts.voices, next, S.opts.voiceDifficulty);
-  S.opts.ranges = carryPerVoice(S.opts.voices, next, S.opts.ranges);
-  S.opts.voices = next;
-  applyOptsToUi(readOptsKeepVoices());
-  toast(`Besetzung: ${p.name.replace(/\s*\(.*\)/, '')} · ${next.length} Stimmen`);
+  const r = applyPreset('orchestra', S.opts.voices.length);
+  setVoices(r.voices, r.preset);
+  toast(`Besetzung: Blasorchester · ${r.voices.length} Stimmen`);
 }
 
+
 function pickCount(k) {
-  if (k === 1) setEnsemble('solo');
+  if (k === 'solo') setEnsemble('solo');
   else if (k === 'drums') setEnsemble('drums');
-  else if (k === 'orch') {
+  else {
     if (S.opts.ensemble !== 'quartet') setEnsemble('quartet');
-    useOrchestra();
-  } else {
-    if (S.opts.ensemble !== 'quartet') setEnsemble('quartet');
-    setVoiceCount(k);
+    if (k === 'orch') useOrchestra();
+    else setVoiceCount(k);
   }
   renderCountChooser();
 }
@@ -793,7 +798,7 @@ async function restoreTabs() {
   for (const id of (saved?.ids || []).slice(0, 12)) {
     const it = await S.library.get(id);
     if (!it || it.deleted) continue;
-    const t = makeTab({ ...defaultOpts(), ...(it.options || {}) });
+    const t = makeTab({ ...defaultOpts(), engine: 'classic', ...(it.options || {}) });
     t.pendingId = id;
     t.pendingTitle = it.title;
     t.folder = it.folder || null;
@@ -951,59 +956,136 @@ function renderVoiceCount(box, n, onPick) {
   }
 }
 
-// Besetzung auf n Stimmen bringen; Feineinstellungen wandern mit ihrem Instrument
+
+// Anzahl ändern: folgt die Besetzung der Vorlage, folgt sie weiter; eigene Wahl bleibt erhalten
 function setVoiceCount(n) {
+  const r = resizeEnsemble(S.opts.voices, n, S.opts.preset);
+  if (r.voices.join() === S.opts.voices.join() && r.preset === S.opts.preset) return;
+  setVoices(r.voices, r.preset);
+}
+
+// Besetzung setzen: Feineinstellungen wandern mit ihrem Instrument, die Vorlage wird erkannt
+function setVoices(next, preset = null) {
   const old = [...S.opts.voices];
-  const next = resizeVoices(old, n);
-  if (next.join() === old.join()) return;
   S.opts.voiceDifficulty = carryPerVoice(old, next, S.opts.voiceDifficulty);
   S.opts.ranges = carryPerVoice(old, next, S.opts.ranges);
-  S.opts.voices = next;
+  S.opts.voices = [...next];
+  S.opts.preset = preset || matchPreset(next, S.opts.preset);
+  // die klassischen Methoden brauchen mindestens zwei Stimmen
+  if (next.length < 2 && S.opts.engine !== 'orchestra') setMethod('orchestra', { quiet: true });
   const solo = $('#opt-solo').value;
-  renderBand();
   if (S.opts.ensemble !== 'solo') fillSoloSelect($('#opt-solo'), next, /^\d+$/.test(solo) && Number(solo) >= next.length ? 0 : solo);
+  renderBand();
   renderTabBar();
 }
 
-// Schritt 2 (Mehrere): Anzahl, Vorlage, Instrumente
+function pickPreset(id) {
+  const r = applyPreset(id, S.opts.voices.length);
+  setVoices(r.voices, r.preset);
+  const p = ENSEMBLE_PRESETS.find((x) => x.id === id);
+  toast(`Besetzung: ${p.name} · ${ensembleLabel(r.voices.length)}`);
+}
+
+const ROLE_CLASS = { lead: 'lead', double8: 'lead', doubleU: 'lead', counter: 'counter', inner: 'inner', bass: 'bass', bass8vb: 'bass' };
+
+// Zeilen der Stimmen: Instrument (Auswahl aus den Profilen), erkannte Rolle, Schlüssel & Transposition
+function renderSlots() {
+  const box = $('#voice-grid');
+  box.innerHTML = '';
+  const voices = S.opts.voices;
+  const groups = instrumentOptions();
+  voices.forEach((id, i) => {
+    const info = slotInfo(voices, i);
+    const slot = document.createElement('div');
+    slot.className = 'voice-slot';
+    const lab = document.createElement('div');
+    lab.className = 'vlabel';
+    lab.title = info.roleDetail;
+    lab.innerHTML = `<i style="background:${VOICE_COLORS[i % VOICE_COLORS.length]}"></i><b>${i + 1}</b><span class="role role-${ROLE_CLASS[info.role] || 'inner'}">${info.roleLabel}</span>`;
+    const sel = document.createElement('select');
+    sel.setAttribute('aria-label', `Instrument für Stimme ${i + 1} (${info.roleLabel})`);
+    for (const g of groups) {
+      const og = document.createElement('optgroup');
+      og.label = g.label;
+      for (const it of g.items) {
+        const o = document.createElement('option');
+        o.value = it.key;
+        o.textContent = it.name;
+        og.appendChild(o);
+      }
+      sel.appendChild(og);
+    }
+    sel.value = id;
+    sel.addEventListener('change', () => {
+      S.opts.voices = [...S.opts.voices];
+      S.opts.voices[i] = sel.value;
+      if (S.opts.ranges) S.opts.ranges[i] = null; // neues Instrument: Tonumfang wieder automatisch
+      S.opts.preset = matchPreset(S.opts.voices, S.opts.preset);
+      if (S.opts.ensemble !== 'solo') fillSoloSelect($('#opt-solo'), S.opts.voices, $('#opt-solo').value);
+      renderBand();
+      renderTabBar();
+    });
+    const meta = document.createElement('div');
+    meta.className = 'slot-meta';
+    meta.textContent = `${info.title} · ${info.transposition}`;
+    meta.title = info.roleDetail;
+    slot.append(lab, sel, meta);
+    box.appendChild(slot);
+  });
+  $('#slots-note').textContent = `${voices.length} ${voices.length === 1 ? 'Stimme' : 'Stimmen'}`;
+}
+
+
+// Schritt 2 (Mehrere): Anzahl, Vorlage, Stimmen
 function renderBand() {
   const n = S.opts.voices.length;
-  renderVoiceCount($('#voice-count'), n, setVoiceCount);
-  $('#voice-count-name').textContent = ensembleName(n);
-  renderVoiceGrid(
-    $('#voice-grid'),
-    S.opts.voices,
-    (v) => {
-      S.opts.voices = v;
-      if (S.opts.ensemble !== 'solo') fillSoloSelect($('#opt-solo'), v, $('#opt-solo').value);
-      markPreset();
-      renderTabBar();
-    },
-    { extras: true },
-  );
+  $('#vc-value').textContent = String(n);
+  $('#vc-range').value = String(n);
+  $('#vc-minus').disabled = n <= MIN_ENS;
+  $('#vc-plus').disabled = n >= MAX_ENS;
+  $('#voice-count-name').textContent = ensembleLabel(n);
+  renderSlots();
   markPreset();
   renderFineList();
   renderCountChooser();
 }
 
-function setOriginal(on) {
-  S.opts.original = !!on;
+
+const METHOD_INFO = {
+  orchestra:
+    'Orchestrierung: Lead, Gegenmelodie, Harmonie und Bass für genau diese Instrumente – mit Drop-Voicings, versetzten Atempausen und spielbaren Stimmen, jede Regel geprüft. Von 1 bis 15 Stimmen.',
+  free: 'Nah am Original (ca. 90 %): Melodie, Bass und Begleitung bleiben, dazu ein kurzer Vorspann, bei vielen gleichen Strophen fallen einzelne weg, am Ende ein kurzer Anhang. Unter „Erweitert“ → „Frei“ schreibt NoteCode den ganzen Satz im gewählten Stil neu.',
+  original: 'Groove und Melodie werden 1:1 aus der Vorlage auf die Instrumente verteilt – gleiche Form, gleiche Länge.',
+};
+
+const methodOf = (o) => (o.engine === 'orchestra' ? 'orchestra' : o.original ? 'original' : 'free');
+
+// Methode: 'orchestra' (neue Engine) | 'free' (neu arrangieren, klassisch) | 'original' (1:1 übernehmen)
+function setMethod(m, { quiet = false } = {}) {
+  if (m !== 'orchestra' && S.opts.voices.length < 2) {
+    if (!quiet) toast('Die klassischen Methoden brauchen mindestens 2 Stimmen – beim Lead Sheet gilt die Orchestrierung.');
+    m = 'orchestra';
+  }
+  S.opts.engine = m === 'orchestra' ? 'orchestra' : 'classic';
+  S.opts.original = m === 'original';
   $$('#arr-mode .seg').forEach((b) => {
-    const act = (b.dataset.orig === '1') === !!on;
+    const act = b.dataset.method === m;
     b.classList.toggle('active', act);
     b.setAttribute('aria-checked', String(act));
   });
-  $('#arr-mode-info').textContent = on
-    ? 'Groove und Melodie werden 1:1 aus der Vorlage auf die Instrumente verteilt – gleiche Form, gleiche Länge.'
-    : 'Nah am Original (ca. 90 %): Melodie, Bass und Begleitung bleiben, dazu ein kurzer Vorspann, bei vielen gleichen Strophen fallen einzelne weg, am Ende ein kurzer Anhang. Unter „Erweitert“ → „Frei“ schreibt NoteCode den ganzen Satz im gewählten Stil neu.';
+  $('#arr-mode-info').textContent = METHOD_INFO[m];
   updateModeVisibility();
 }
 
+
 // nur zeigen, was für die gewählte Besetzung eine Rolle spielt
 function updateModeVisibility() {
+  const orch = S.opts.ensemble === 'quartet' && S.opts.engine === 'orchestra';
   const free = S.opts.ensemble === 'quartet' || (S.opts.ensemble === 'solo' && !S.opts.playback);
-  const original = S.opts.ensemble === 'quartet' && !!S.opts.original;
+  const original = S.opts.ensemble === 'quartet' && !!S.opts.original && !orch;
   $$('.arr-only').forEach((el) => el.classList.toggle('hidden', original || (el.classList.contains('free-only') && !free)));
+  // Orchestrierung: Stil, Soli, Schwierigkeit und Variante gibt es dort nicht (CSS: .orch-hide)
+  $('#steps').dataset.orch = orch ? '1' : '';
 }
 
 // Schritt 4: Schwierigkeit & Tonumfang je Stimme
@@ -1104,7 +1186,7 @@ function updatePlaybackUi() {
   $('#solo-playback').classList.toggle('hidden', !on);
   $$('.free-only').forEach((el) => el.classList.toggle('hidden', pb));
   $$('.playback-only').forEach((el) => el.classList.toggle('hidden', !pb));
-  const label = drums ? 'Schlagzeug-Noten erstellen' : solo ? 'Playback-Noten erstellen' : 'Arrangement erstellen';
+  const label = drums ? 'Schlagzeug-Noten erstellen' : solo ? 'Playback-Noten erstellen' : 'Noten erstellen';
   $('#generate span').textContent = label;
   $('#es-generate span').textContent = label;
   updateModeVisibility();
@@ -1243,12 +1325,15 @@ function fillTransposeSelect() {
 const EXTRA_OPT_KEYS = ['tweaks', 'melodyFirst', 'cleanHarmony', 'cleaner', 'bassMode', 'focus', 'drumDifficulty', 'feedback'];
 const extraOpts = () => Object.fromEntries(EXTRA_OPT_KEYS.filter((k) => S.opts[k] !== undefined).map((k) => [k, S.opts[k]]));
 
+
 function readOpts() {
   const solo = $('#opt-solo').value;
   const tempo = Number($('#opt-tempo').value) || null;
   const tr = $('#opt-transpose').value;
   return {
     voices: [...S.opts.voices],
+    engine: S.opts.engine || 'orchestra',
+    preset: S.opts.preset || null,
     style: 'auto',
     drums: $('#opt-drums').checked,
     solo: solo === 'rotate' || solo === 'none' ? solo : Number(solo),
@@ -1264,7 +1349,7 @@ function readOpts() {
     difficulty: $('#opt-difficulty').value === 'auto' ? 'auto' : Number($('#opt-difficulty').value),
     voiceDifficulty: perVoice(S.opts.voiceDifficulty),
     ranges: perVoice(S.opts.ranges),
-    original: !!S.opts.original, // Mehrere: true = Groove & Melodie 1:1, false = neu arrangieren
+    original: !!S.opts.original, // Klassisch: true = Groove & Melodie 1:1, false = neu arrangieren
     playback: !!S.opts.playback,
     title: S.opts.title || null,
     playParts: S.opts.playParts ? S.opts.playParts.map((p) => ({ ...p })) : null,
@@ -1279,14 +1364,18 @@ function perVoice(arr) {
   return Array.from({ length: n }, (_, i) => arr?.[i] ?? null);
 }
 
+
 function applyOptsToUi(o) {
   S.opts = { ...S.opts, ...o };
+  // gespeicherte Arrangements ohne Angabe wurden mit der klassischen Methode erzeugt
+  S.opts.engine = o.engine ?? 'classic';
   S.opts.voices = (S.opts.voices || []).slice(0, MAX_VOICES);
-  if (S.opts.voices.length < MIN_VOICES) S.opts.voices = resizeVoices(S.opts.voices.length ? S.opts.voices : [...S.settings.defaultVoices], MIN_VOICES);
+  if (S.opts.voices.length < MIN_ENS) S.opts.voices = resizeVoices(S.opts.voices.length ? S.opts.voices : [...S.settings.defaultVoices], 2);
+  S.opts.preset = matchPreset(S.opts.voices, S.opts.preset);
   S.opts.voiceDifficulty = S.opts.voiceDifficulty || [];
   S.opts.ranges = S.opts.ranges || [];
   renderBand();
-  setOriginal(!!S.opts.original);
+  setMethod(methodOf(S.opts), { quiet: true });
   difficultyOptions($('#opt-difficulty'), S.opts.difficulty ?? 'auto');
   setDrumMode(S.opts.drumMode || 'original');
   fillSoloSelect($('#opt-solo'), S.opts.voices, o.solo ?? 0);
@@ -1304,24 +1393,20 @@ function applyOptsToUi(o) {
   if (S.opts.ensemble === 'solo') $('#opt-solo').value = o.solo === 'none' ? 'none' : '0';
 }
 
+
+// Ensemble-Vorlagen als Schnellwahl: setzen Anzahl und Standardbesetzung, bleiben manuell änderbar
 function renderPresets() {
   const box = $('#preset-chips');
   box.innerHTML = '';
-  for (const p of PRESETS) {
+  for (const p of ENSEMBLE_PRESETS) {
     const b = document.createElement('button');
+    b.type = 'button';
     b.className = 'chip';
-    b.textContent = p.name.replace(/\s*\(.*\)/, '');
-    b.title = p.name;
+    b.textContent = p.name;
+    b.title = `${p.name} – ${p.info}`;
     b.dataset.preset = p.id;
-    b.addEventListener('click', () => {
-      // Vorlage in der gewählten Anzahl Stimmen
-      const next = presetVoices(p, p.orchestra ? p.voices.length : S.opts.voices.length);
-      S.opts.voiceDifficulty = carryPerVoice(S.opts.voices, next, S.opts.voiceDifficulty);
-      S.opts.ranges = carryPerVoice(S.opts.voices, next, S.opts.ranges);
-      S.opts.voices = next;
-      applyOptsToUi(readOptsKeepVoices());
-      toast(`Besetzung: ${p.name.replace(/\s*\(.*\)/, '')} · ${ensembleName(next.length)}`);
-    });
+    b.setAttribute('role', 'radio');
+    b.addEventListener('click', () => pickPreset(p.id));
     box.appendChild(b);
   }
 }
@@ -1331,10 +1416,16 @@ function readOptsKeepVoices() {
   o.style = 'auto';
   return o;
 }
+
 function markPreset() {
-  // Vorlage in der aktuellen Anzahl Stimmen; passen mehrere, wird die erste markiert
-  const hit = matchingPreset(S.opts.voices);
-  $$('#preset-chips .chip').forEach((c) => c.classList.toggle('active', !!hit && c.dataset.preset === hit.id));
+  const id = S.opts.preset || matchPreset(S.opts.voices, null);
+  $$('#preset-chips .chip').forEach((c) => {
+    const on = c.dataset.preset === id;
+    c.classList.toggle('active', on);
+    c.setAttribute('aria-checked', String(on));
+  });
+  const p = ENSEMBLE_PRESETS.find((x) => x.id === id);
+  $('#preset-info').textContent = p ? p.info : 'Eigene Besetzung';
 }
 
 // ---------------------------------------------------------------- Vorlage
@@ -1869,26 +1960,47 @@ async function generate({ silent = false, effort = null, cfgPatch = null, label 
   const level = effort ?? effortLevel();
   const cfg = { ...effortOf(level).arrange, ...(cfgPatch || {}) };
   const pb = opts.ensemble === 'solo' && opts.playback;
+  // Orchestrierung (neue Engine, 1–15 Stimmen). Bei Taktartwechseln im Stück schreibt die klassische
+  // Methode Takt für Takt (die Orchestrierung arbeitet mit gleichbleibender Taktart).
+  let orch = opts.ensemble === 'quartet' && opts.engine === 'orchestra';
+  if (orch && hasMeterChanges(S.song)) {
+    if (opts.voices.length < 2) {
+      busyEnd();
+      btn.disabled = false;
+      btn.querySelector('span').textContent = btnLabel;
+      renderTabBar();
+      toast('Taktartwechsel im Stück: für ein Lead Sheet nicht möglich – bitte mindestens 2 Stimmen wählen.', 'error');
+      return false;
+    }
+    orch = false;
+    opts.engine = 'classic';
+    toast('Taktartwechsel im Stück: die Orchestrierung arbeitet mit gleichbleibender Taktart – dieses Arrangement entsteht mit der klassischen Methode.');
+  }
   // Variantensuche nur für frei geschriebene Mehrstimmen-Arrangements
   // (nah am Original gibt es nur eine Fassung – dort gibt es nichts zu vergleichen)
-  const search = opts.ensemble === 'quartet' && !opts.original && cfg.seeds > 1 && !usesFaithful(S.song, opts);
+  const search = !orch && opts.ensemble === 'quartet' && !opts.original && cfg.seeds > 1 && !usesFaithful(S.song, opts);
   const bars = S.song.measureCount || 32;
   const tasks = [
     {
       id: 'arr',
-      label: pb ? 'Playback-Noten erstellen' : search ? 'Varianten schreiben und vergleichen' : 'Arrangement schreiben',
-      expect: search ? Math.min(cfg.budgetMs, 4000 + bars * 40 * cfg.seeds) : 600 + bars * 12,
+      label: orch ? `Orchestrierung: ${opts.voices.length} ${opts.voices.length === 1 ? 'Stimme' : 'Stimmen'} aus Melodie, Bass, Begleitung und Groove` : pb ? 'Playback-Noten erstellen' : search ? 'Varianten schreiben und vergleichen' : 'Arrangement schreiben',
+      expect: orch ? 500 + bars * 8 * opts.voices.length : search ? Math.min(cfg.budgetMs, 4000 + bars * 40 * cfg.seeds) : 600 + bars * 12,
     },
     { id: 'notes', label: 'Noten setzen (Seite für Seite)', expect: 1500 + bars * speedOf('notes', 90) },
   ];
-  const pg = progress(label || (pb ? 'Playback-Noten werden erstellt' : 'Arrangement wird erstellt'), { tasks });
+  const pg = progress(label || (pb ? 'Playback-Noten werden erstellt' : orch ? 'Noten werden erstellt' : 'Arrangement wird erstellt'), { tasks });
   await nextFrame();
   let tNotes = 0;
   let ok = false;
   try {
     S.opts = { ...S.opts, ...opts };
+    if (!orch && S.opts.engine === 'classic') setMethod(methodOf(S.opts), { quiet: true });
     const t0 = performance.now();
-    if (search) {
+    if (orch) {
+      // Spuren (Melodie, Bass, Begleitung, Groove) der Analyse -> Orchestrierung -> MusicXML-Modell
+      S.arr = orchestrateFromOptions(S.song, opts).arr;
+      S.arr.options = { ...opts };
+    } else if (search) {
       S.arr = await arrangeBest(S.song, opts, cfg, { onProgress: (f, text) => pg.set('arr', f, text), signal: jobSignal() });
     } else {
       S.arr = arrange(S.song, opts);
@@ -1932,6 +2044,8 @@ async function showResult(onProgress = null, { restore = false } = {}) {
   $('#result').classList.remove('hidden');
   $('#arrange-grid').classList.remove('no-result');
   $('#res-title').textContent = a.meta.title;
+  // Überarbeiten (Rückmeldung, Variantensuche) gehört zur klassischen Methode
+  $('#revise').classList.toggle('hidden', !!a.engine);
   const chips = [
     [a.options?.drumMode === 'own' && a.drums ? 'Schlagzeug · eigener Rhythmus' : a.playAlong ? 'Playback 1:1' : a.options?.styleAuto ? `${a.style.name} (automatisch)` : a.style.name, 'accent'],
     [keyNameDe(a.key) + (a.transposeShift ? ` (${a.transposeShift > 0 ? '+' : ''}${a.transposeShift})` : ''), ''],
@@ -2007,13 +2121,17 @@ function restorePages() {
   return true;
 }
 
+
 function xmlFor(view) {
   const st = S.settings;
-  const chords = S.arr.soloMode && !S.arr.playAlong && st.chords !== 'none' ? 'all' : st.chords;
+  const eng = !!S.arr.engine;
+  // Lead Sheet: Akkordsymbole immer; Orchestrierung schreibt <transpose> zusammengefasst (diatonic/chromatic)
+  const chords = eng && S.arr.voices.length === 1 ? (st.chords === 'none' ? 'none' : 'all') : S.arr.soloMode && !S.arr.playAlong && st.chords !== 'none' ? 'all' : st.chords;
   const tenorClef = st.tenorClef;
-  if (view === 'score') return exportMusicXML(S.arr, { mode: 'score', concert: st.concertScore, paper: st.paper, chords, tenorClef });
+  const transposeForm = eng ? 'compound' : undefined;
+  if (view === 'score') return exportMusicXML(S.arr, { mode: 'score', concert: st.concertScore, paper: st.paper, chords, tenorClef, transposeForm });
   if (view === 'drums') return exportMusicXML(S.arr, { mode: 'part', partIndex: 'drums', paper: st.paper });
-  return exportMusicXML(S.arr, { mode: 'part', partIndex: Number(view), paper: st.paper, chords, tenorClef });
+  return exportMusicXML(S.arr, { mode: 'part', partIndex: Number(view), paper: st.paper, chords, tenorClef, transposeForm });
 }
 
 async function renderNotes(onProgress = null) {
@@ -3102,10 +3220,14 @@ async function main() {
   // Besetzung: Original übernehmen / neu arrangieren
   $$('#arr-mode .seg').forEach((b) =>
     b.addEventListener('click', () => {
-      setOriginal(b.dataset.orig === '1');
+      setMethod(b.dataset.method);
       renderTabBar();
     }),
   );
+  // Stimmenanzahl: Stepper und Regler (1–15)
+  $('#vc-minus').addEventListener('click', () => setVoiceCount(S.opts.voices.length - 1));
+  $('#vc-plus').addEventListener('click', () => setVoiceCount(S.opts.voices.length + 1));
+  $('#vc-range').addEventListener('input', (e) => setVoiceCount(Number(e.target.value)));
   $('#opt-difficulty').addEventListener('change', (e) => (S.opts.difficulty = e.target.value === 'auto' ? 'auto' : Number(e.target.value)));
   $$('#drum-mode .seg').forEach((b) => b.addEventListener('click', () => setDrumMode(b.dataset.mode)));
   // Tempo wieder automatisch

@@ -19,6 +19,7 @@ export const FAMILIES = {
   sax: 'Saxophone',
   woodwind: 'Holzbläser',
   string: 'Streicher',
+  keys: 'Tasten',
   rhythm: 'Rhythmus',
 };
 
@@ -153,6 +154,13 @@ export const INSTRUMENTS = {
     id: 'contrabass', name: 'Kontrabass', short: 'Kb.', family: 'string', clef: 'F4',
     range: [28, 67], comfort: [28, 55], transpose: { semis: 12, lof: 0 }, breath: null, midiProgram: 43, bassCapable: true, strings: [28, 33, 38, 43],
     fx: ['pizz', 'bowing'],
+  }),
+  // Klavier: Doppelsystem G/F (staves: 2) – Töne unter C4 stehen im Bassschlüssel, mehrstimmige
+  // Ereignisse (Akkorde) werden beim Notensatz auf beide Systeme verteilt
+  piano: I({
+    id: 'piano', name: 'Klavier', short: 'Klav.', family: 'keys', staves: 2,
+    range: [21, 108], comfort: [36, 84], breath: null, midiProgram: 0, bassCapable: true,
+    fx: [],
   }),
   ebass: I({
     id: 'ebass', name: 'E-Bass', short: 'E-B.', family: 'rhythm', clef: 'F4',

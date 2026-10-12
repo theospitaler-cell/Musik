@@ -200,6 +200,66 @@ automatische Arrangement ist das ein sehr guter Entwurf, kein Ersatz für einen 
 Das Ergebnis ist eine Annäherung – am besten bei klar hörbarer Melodie. Die Analyse wird in
 der Bibliothek gespeichert (und synchronisiert), die Aufnahme selbst bleibt auf dem Gerät.
 
+### Orchestrierungs-Engine (`src/engine/`, 1–15 Stimmen)
+
+Eigenständige Schicht, die Demucs-Stems (oder ein Lied aus ABC/MIDI/MusicXML) in eine spielbare
+Partitur für N = 1 … 15 Stimmen setzt und als MusicXML 4.0 schreibt. Aufruf:
+
+```bash
+node scripts/orchestrate.mjs <Ordner mit vocals.wav, bass.wav, other.wav, drums.wav> --voices=8
+node scripts/orchestrate.mjs lied.abc --voices=15 --out=lied.musicxml
+```
+
+```js
+import { orchestrate } from './src/engine/index.js';
+const r = orchestrate(songOderStems, { voices: 8 });   // 1..15, optional instruments: ['trumpet', …]
+r.xml();               // MusicXML 4.0 (transponierte Stimmen); r.xml({ concert: true }) = Konzertton
+r.validation.ok;       // alle Satzregeln erfüllt?   r.report: Korrekturen, Atemstellen, Hinweise
+```
+
+| Teil | Datei | Aufgabe |
+| --- | --- | --- |
+| Stem-Routing | `stems.js` | Bass 30–250 Hz + Sub-Bass-Lag-Ausgleich, Raster/Downbeat/Backbeat nur aus den Schlagzeug-Transienten, Comping-Decoder (Dichte > 2 je Takt = synkopierte Staccato-/Marcato-Einwürfe, ≤ 1 = phrasierte Liegeklänge), Tonwiederholungen ab 60 ms bleiben, Oberton-Geister raus |
+| Tonart & Tempo | `tonality.js`, `tempo.js` | Krumhansl-Schmuckler gesamt und in gleitenden 8-Takt-Fenstern (Viterbi-Glättung → Modulationen), Schreibweise strikt nach der Skala (Bb statt A#, Leitton C# in d-Moll), Halbtempo-Prüfung |
+| Besetzung | `profiles.js` | Profile mit Bereich, Sweet Spot, Schlüssel, `<transpose>`; Besetzungen 1–15; stufenweise Oktavierung in den Bereich |
+| Satz | `compose.js`, `voicing.js` | Lead Sheet · Duo/Trio (Gegenstimme in Gegenbewegung, Terzen/Sexten) · Quartett (zwei eigenständige Mittelstimmen) · Drop-2 / Drop-2/4 mit Spannungen innen (5–8) · vier Register-Schichten (9–15) |
+| Phrasierung | `phrasing.js` | Atemräume alle 6–8 Takte, versetzt (Verzahnung), Melodieübernahme bei Pausen ≥ 2 Schläge |
+| Notensatz | `engrave.js` | Formteile + Probenbuchstaben, Artikulation (Staccato/Akzent/Atemzeichen), Dynamik aus Velocity-Clustern (Begleitung eine Stufe leiser), Export über `src/output/musicxml.js` |
+| Prüfung | `validate.js` | Bereich, Sprünge ≤ Oktave, Sekund-Reibungen unter C3, verdeckte Quinten/Oktaven, Atem, Verzahnung, Cluster, Dynamik, Schreibweise, Drop-Struktur |
+
+Auslegungen, die man kennen sollte:
+
+- **Vorzeichen:** Transponierende Stimmen tragen ihre notierte Tonart (Trompete in B zu F-Dur: G-Dur,
+  ein Kreuz); Posaune, Tuba, Flöte stehen in F-Dur (−1). Im Konzertton-Export haben alle −1.
+- **Tonumfänge** der Vorgabe sind teils notiert, teils klingend angegeben; `profiles.js` hält je Seite
+  fest, wie sie gelesen wurden (z. B. Klarinette E3–G6 notiert = klingend D3–F6).
+- **Halbtempo-Prüfung:** verdoppelt wird nur bei 60–85 BPM *und* belegbarer 16tel-Dichte (oder Achtel-
+  Dichte mit ≥ 3 Einsätzen je Schlag). Reine Achtel-Begleitung genügt nicht – sonst würden Balladen um
+  80 BPM fälschlich verdoppelt.
+
+#### In der Oberfläche („Arrangieren“ → Besetzung)
+
+- **Anzahl Stimmen:** Stepper (− / +) und Regler von 1 bis 15. 1 = Lead Sheet (Melodie + Akkordsymbole).
+- **Ensemble-Vorlagen** als Schnellwahl: *Lead Sheet* (1), *Duo / Trio* (2–3), *Klassisches Quartett*
+  (4), *Brass Ensemble* (5–8), *Großes Blasorchester / Bigband* (12–15; 9–11 = kleines Blasorchester),
+  *Streichquartett / Streicherensemble* (4–8). Ändert man Vorlage oder Anzahl, füllt NoteCode die
+  Stimmen mit einer sinnvollen Standardbesetzung vor; jede Stimme bleibt per Auswahlfeld änderbar
+  (dann gilt „Eigene Besetzung“, und beim Ändern der Anzahl bleiben Lead, Bass und eigene Wahl).
+- **Stimmen-Zeilen:** Instrument (Auswahl aus den Profilen: Holz, Saxophone, Blech, Streicher, Tasten,
+  E-Bass), erkannte Rolle (Lead · Gegenmelodie · Harmonie/Riff · Bass) sowie Schlüssel und Transposition,
+  z. B. „Trompete in B (G-Schlüssel) · klingt eine große Sekunde tiefer“, „Posaune in C (F-Schlüssel)“.
+- **Methode:** *Orchestrierung* (die Engine, Standard), *Neu arrangieren* und *Original übernehmen*
+  (die klassischen Methoden mit Stil, Soli, Schwierigkeit – brauchen mindestens 2 Stimmen).
+  Gespeicherte ältere Arrangements öffnen sich weiter mit der klassischen Methode.
+- **Ablauf beim Knopf „Noten erstellen“:** Aufnahme → (Desktop-App: Demucs-v4-Spuren) → Basic Pitch je
+  Spur → Melodie, Bass, Begleitung, Groove, Form im Lied → `orchestrate()` mit N und den gewählten
+  Instrumenten → MusicXML 4.0 → Notenvorschau (Partitur und Einzelstimmen), Export als MusicXML/PDF/
+  PNG/MIDI/MuseScore-Paket. Regieplan und Prüfbericht zeigen die Regelprüfung der Engine.
+- **Klavier** steht im Doppelsystem G/F (rechte Hand Akkord, linke Hand Bass); Streicher notieren mit
+  Viola im Altschlüssel und Kontrabass/E-Bass eine Oktave höher als klingend.
+- Bei Taktartwechseln im Stück arbeitet die klassische Methode (die Orchestrierung geht von einer
+  gleichbleibenden Taktart aus); ein Lead Sheet ist dort nicht möglich.
+
 ## Was NoteCode schreibt
 
 **Formplan** (Beispiel Funk, Standardlänge):

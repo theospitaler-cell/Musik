@@ -83,21 +83,27 @@
               <div class="ens-panel active" data-enspanel="quartet">
                 <div class="sub-block">
                   <div class="sub-label"><span>Anzahl Stimmen</span><span class="sub-note" id="voice-count-name">Quartett</span></div>
-                  <div class="segmented count-seg" id="voice-count" role="radiogroup" aria-label="Anzahl Stimmen"></div>
+                  <div class="stepper" id="voice-stepper">
+                    <button type="button" class="step-btn" id="vc-minus" aria-label="Eine Stimme weniger"><span aria-hidden="true">−</span></button>
+                    <output class="step-val" id="vc-value" aria-live="polite">4</output>
+                    <button type="button" class="step-btn" id="vc-plus" aria-label="Eine Stimme mehr"><span aria-hidden="true">+</span></button>
+                    <input type="range" id="vc-range" min="1" max="15" step="1" value="4" aria-label="Stimmenanzahl von 1 bis 15" />
+                  </div>
                 </div>
                 <div class="sub-block">
-                  <div class="sub-label"><span>Vorlage</span></div>
-                  <div class="chips" id="preset-chips"></div>
+                  <div class="sub-label"><span>Ensemble-Vorlage</span><span class="sub-note" id="preset-info"></span></div>
+                  <div class="chips preset-chips" id="preset-chips" role="radiogroup" aria-label="Ensemble-Vorlage"></div>
                 </div>
                 <div class="sub-block">
-                  <div class="sub-label"><span>Instrumente</span></div>
-                  <div class="voice-list" id="voice-grid"></div>
+                  <div class="sub-label"><span>Stimmen</span><span class="sub-note" id="slots-note"></span></div>
+                  <div class="voice-list slots" id="voice-grid"></div>
                 </div>
                 <div class="sub-block">
                   <div class="sub-label"><span>Arrangement</span></div>
-                  <div class="segmented two" id="arr-mode" role="radiogroup" aria-label="Arrangement">
-                    <button class="seg active" data-orig="0">Neu arrangieren</button>
-                    <button class="seg" data-orig="1">Original übernehmen</button>
+                  <div class="segmented three" id="arr-mode" role="radiogroup" aria-label="Arrangement">
+                    <button class="seg active" data-method="orchestra">Orchestrierung</button>
+                    <button class="seg" data-method="free">Neu arrangieren</button>
+                    <button class="seg" data-method="original">Original übernehmen</button>
                   </div>
                   <p class="muted small hint" id="arr-mode-info"></p>
                 </div>
@@ -142,7 +148,7 @@
                 <p class="muted small hint">Schlagzeug-Noten gibt es immer mit Playback: das Original läuft im Mischpult synchron mit.</p>
               </div>
 
-              <label class="field free-only arr-only" id="solo-field"><span id="solo-label">Hauptsolo</span><select id="opt-solo"></select></label>
+              <label class="field free-only arr-only orch-hide" id="solo-field"><span id="solo-label">Hauptsolo</span><select id="opt-solo"></select></label>
             </section>
 
             <!-- 3 Stil & Tempo -->
@@ -158,7 +164,7 @@
             </section>
 
             <!-- 4 Schwierigkeit -->
-            <section class="card step" id="step-level">
+            <section class="card step orch-hide" id="step-level">
               <div class="step-head"><span class="step-num">4</span><div class="step-title"><h2>Schwierigkeit</h2><p>Für alle Stimmen – einzeln anpassbar</p></div></div>
               <label class="field"><span>Schwierigkeit</span><select id="opt-difficulty"></select></label>
               <details class="fine" id="fine-box">
@@ -168,7 +174,7 @@
             </section>
 
             <!-- Erweitert -->
-            <details class="card step adv free-only" id="step-adv">
+            <details class="card step adv free-only orch-hide" id="step-adv">
               <summary class="step-head"><span class="step-num ghost"><svg><use href="#i-sliders" /></svg></span><div class="step-title"><h2>Erweitert</h2><p>Anpassung, Form, Variante</p></div><svg class="chev"><use href="#i-chevron" /></svg></summary>
               <div class="field-grid">
                 <label class="field arr-only"><span>Anpassung des Songs</span>
@@ -185,7 +191,7 @@
               </div>
             </details>
 
-            <button class="btn primary big" id="generate" disabled><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
+            <button class="btn primary big" id="generate" disabled title="Spuren erkennen, Stimmen setzen und die Noten (MusicXML) schreiben"><svg><use href="#i-wand" /></svg><span>Noten erstellen</span></button>
           </aside>
 
           <!-- Arbeitsbereich -->
@@ -200,7 +206,7 @@
               </div>
               <div class="es-actions">
                 <button class="btn primary" id="es-file"><svg><use href="#i-upload" /></svg><span>Song wählen …</span></button>
-                <button class="btn primary hidden" id="es-generate"><svg><use href="#i-wand" /></svg><span>Arrangement erstellen</span></button>
+                <button class="btn primary hidden" id="es-generate"><svg><use href="#i-wand" /></svg><span>Noten erstellen</span></button>
                 <span class="muted small" id="es-hint">oder Datei hierher ziehen</span>
               </div>
               <div class="feature-row">
