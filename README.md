@@ -200,6 +200,22 @@ automatische Arrangement ist das ein sehr guter Entwurf, kein Ersatz für einen 
 Das Ergebnis ist eine Annäherung – am besten bei klar hörbarer Melodie. Die Analyse wird in
 der Bibliothek gespeichert (und synchronisiert), die Aufnahme selbst bleibt auf dem Gerät.
 
+### Windows: „Der Computer wurde durch Windows geschützt“ (SmartScreen)
+
+Der Installer ist **nicht signiert**; Windows kennt die Datei deshalb nicht und warnt. Das ist keine Schadsoftware-
+Erkennung. Beim ersten Installieren: *Weitere Informationen → Trotzdem ausführen* (erst nach „Weitere
+Informationen“ erscheint der Knopf). Alternativ in den Dateieigenschaften unten *Zulassen* ankreuzen oder in
+PowerShell `Unblock-File .\NoteCode-Setup-….exe`. Updates in der App (Einstellungen → Nach Updates suchen) lösen die
+Warnung nicht aus.
+
+Dauerhaft verschwindet sie nur mit einem **Code-Signing-Zertifikat** (kostet Geld und braucht eine
+Identitätsprüfung, ein selbst erzeugtes Zertifikat hilft nicht). Der Build ist vorbereitet: Zertifikat als
+GitHub-Secrets `WIN_CSC_LINK` (.pfx als Base64 oder https-Link) und `WIN_CSC_KEY_PASSWORD` hinterlegen, dann
+signiert `.github/workflows/apps.yml` den Installer automatisch. Wege: ein Code-Signing-Zertifikat von einer
+Zertifizierungsstelle (OV/EV), Azure Trusted Signing (electron-builder `azureSignOptions`) oder – für Open-Source-
+Projekte – SignPath Foundation. Ohne Zertifikat bleibt die Browser-Version als installierbare Web-App (Edge/Chrome
+→ „App installieren“) eine Möglichkeit ohne diese Warnung; KI-Erkennung und Spurentrennung gibt es dort nicht.
+
 ### Noten ändern (Notenblatt-Editor, `src/sheet/`)
 
 Der Start-Bildschirm hat zwei große Plus-Knöpfe: **Noten ändern** (neu) und **Noten schreiben** (die bisherige

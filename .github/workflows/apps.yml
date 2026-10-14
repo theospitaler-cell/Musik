@@ -36,10 +36,15 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Versionsnummer
         run: node scripts/write-version.mjs
+      # Mit Code-Signing-Zertifikat (Secrets WIN_CSC_LINK = .pfx als Base64 oder https-Link, WIN_CSC_KEY_PASSWORD)
+      # wird der Installer signiert – nur so verschwindet die SmartScreen-Warnung „unbekannte App“ dauerhaft.
+      # Ohne Secrets entsteht wie bisher ein unsignierter Installer.
       - name: Windows-Installer bauen
         run: npx electron-builder --win --publish never
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.WIN_CSC_LINK == '' && 'false' || 'true' }}
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -131,7 +136,7 @@ jobs:
             | **Windows** | `NoteCode-Setup-….exe` herunterladen und starten (bei „Der Computer wurde durch Windows geschützt“: *Weitere Informationen → Trotzdem ausführen*) |
             | **Android** | `NoteCode-…-Android.apk` auf dem Handy herunterladen, öffnen und installieren (beim ersten Mal „Installation aus dieser Quelle erlauben“) |
 
-            **Schon installiert?** Ab dieser Version aktualisiert sich NoteCode selbst: Einstellungen → *App & Updates* → *Nach Updates suchen* (wird auch beim Start geprüft). `notecode-web.zip` und `web-version.json` sind dieses Update-Paket.
+            **Schon installiert?** Ab dieser Version aktualisiert sich NoteCode selbst: Einstellungen → *App & Updates* → *Nach Updates suchen* (wird auch beim Start geprüft). `notecode-web.zip` und `web-version.json` sind dieses Update-Paket. Die Windows-Warnung betrifft nur den Installer, nicht die Updates in der App.
 
             Stand: ${{ github.sha }}
       - name: Release veröffentlichen (zweiter Versuch)
@@ -162,6 +167,6 @@ jobs:
             | **Windows** | `NoteCode-Setup-….exe` herunterladen und starten (bei „Der Computer wurde durch Windows geschützt“: *Weitere Informationen → Trotzdem ausführen*) |
             | **Android** | `NoteCode-…-Android.apk` auf dem Handy herunterladen, öffnen und installieren (beim ersten Mal „Installation aus dieser Quelle erlauben“) |
 
-            **Schon installiert?** Ab dieser Version aktualisiert sich NoteCode selbst: Einstellungen → *App & Updates* → *Nach Updates suchen* (wird auch beim Start geprüft). `notecode-web.zip` und `web-version.json` sind dieses Update-Paket.
+            **Schon installiert?** Ab dieser Version aktualisiert sich NoteCode selbst: Einstellungen → *App & Updates* → *Nach Updates suchen* (wird auch beim Start geprüft). `notecode-web.zip` und `web-version.json` sind dieses Update-Paket. Die Windows-Warnung betrifft nur den Installer, nicht die Updates in der App.
 
             Stand: ${{ github.sha }}
