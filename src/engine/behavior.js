@@ -12,7 +12,7 @@
 //
 // activity 1–5 skaliert, wie viel die Nebenstimmen tun (1 = dezent, 3 = ausgewogen, 5 = virtuos).
 import { mod } from '../core/constants.js';
-import { inRange, nearestOctave } from './profiles.js';
+import { inRange, nearestOctave, fitPitch } from './profiles.js';
 import { ladder, ladderIndex, makeEvent, endOf, soundingAt, lastBefore, sortEvents } from './util.js';
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -306,4 +306,175 @@ export function harmonicCounter(score, voice, rank = 0) {
     else out.push(makeEvent(t, Math.min(half, ctx.total - t), pick, null, { role: 'counter' }));
   }
   return out;
+}
+
+// ---- Melodieanteil je Stimme --------------------------------------------------------------------
+// shares[i] = Anteil (0–100 %) der Takte, in denen Stimme i die Melodie der Lead-Stimme mitspielt (Index 0 =
+// Lead, wird ignoriert). Die Lead-Stimme bleibt unverändert; die Takte kommen in Zweierblöcken (Phrasen) und sind
+// gleichmäßig über das Stück verteilt, je Stimme etwas versetzt. Hohe Stimmen und Bässe spielen die Melodie in
+// ihrer Oktavlage, mittlere und tiefere Stimmen als Terzparallele unter der Melodie (leitereigen).
+export function barsForShare(totalBars, percent, rank = 0, blockBars = null) {
+  const pct = clamp(Number(percent) || 0, 0, 100);
+  if (pct <= 0 || totalBars <= 0) return [];
+  if (pct >= 100) return Array.from({ length: totalBars }, (_, i) => i);
+  const block = blockBars || (totalBars >= 4 ? 2 : 1);
+  const nBlocks = Math.ceil(totalBars / block);
+  // der erste Block bleibt der Hauptstimme (das Thema wird zuerst vorgestellt), solange es mehr Blöcke gibt
+  const first = nBlocks >= 3 ? 1 : 0;
+  const avail = nBlocks - first;
+  const want = Math.min(avail, Math.max(1, Math.round(((totalBars * pct) / 100) / block)));
+  const picked = new Set();
+  const phase = (rank * 0.37) % 1;
+  for (let j = 0; j < want; j++) {
+    let b = first + Math.floor(((j + phase) * avail) / want);
+    // belegten Block durch den nächsten freien ersetzen
+    let guard = 0;
+    while (picked.has(b) && guard++ < avail) b = first + ((b - first + 1) % avail);
+    picked.add(b);
+  }
+  const bars = [];
+  for (const b of [...picked].sort((x, y) => x - y)) for (let k = 0; k < block; k++) if (b * block + k < totalBars) bars.push(b * block + k);
+  return bars;
+}
+
+export function applyMelodyShare(score, shares) {
+  const { ctx, report } = score;
+  const { mt } = ctx.geo;
+  const leadV = score.voices.find((v) => v.role === 'lead');
+  if (!leadV || !Array.isArray(shares)) return 0;
+  const centerOf = (v) => (v.profile.sweet[0] + v.profile.sweet[1]) / 2;
+  const leadCenter = centerOf(leadV);
+  let touched = 0;
+  const others = score.voices.filter((v) => v !== leadV);
+  others.forEach((v, rank) => {
+    const pct = clamp(Number(shares[v.index]) || 0, 0, 100);
+    if (pct <= 0) return;
+    const bars = barsForShare(ctx.M, pct, rank);
+    if (!bars.length) return;
+    const bassy = v.role === 'bass' || v.role === 'bass8vb';
+    const harmonize = !bassy && centerOf(v) < leadCenter - 2;
+    // zusammenhängende Takte zu Fenstern
+    const windows = [];
+    for (const b of bars) {
+      const last = windows[windows.length - 1];
+      if (last && last.z === b) last.z = b + 1;
+      else windows.push({ a: b, z: b + 1 });
+    }
+    let n = 0;
+    for (const w of windows) {
+      const a = w.a * mt;
+      const z = w.z * mt;
+      const src = sortEvents(leadV.events.filter((e) => e.start < z && endOf(e) > a));
+      const fill = [];
+      for (const e of src) {
+        const start = Math.max(e.start, a);
+        const dur = Math.min(endOf(e), z) - start;
+        if (dur <= 0) continue;
+        const m = e.pitches[0];
+        let p = null;
+        if (harmonize) {
+          // leitereigene Terz unter der Melodie, in die Lage der Stimme gefaltet
+          const lad = ladderFor(score, v, start, 127);
+          const pcs = [...score.scaleAtTick(start)];
+          const full = ladder(pcs, 24, 108);
+          const i = ladderIndex(full, m);
+          const third = full[Math.max(0, i - 2)];
+          p = nearestOctave(third, m - 4, v.profile);
+          if (!inRange(p, v.profile) || lad.length === 0) p = null;
+        }
+        if (p === null) p = nearestOctave(m, bassy ? v.profile.sweet[0] : m, v.profile);
+        if (!inRange(p, v.profile)) p = fitPitch(m, v.profile);
+        fill.push(makeEvent(start, dur, p, null, { role: 'double', vel: e.vel }));
+      }
+      if (!fill.length) continue;
+      placeWindow(v, a, z, fill);
+      n++;
+    }
+    if (n) {
+      touched++;
+      report.melodyShare = report.melodyShare || [];
+      report.melodyShare.push({ voice: v.index, bars: bars.length, percent: pct });
+    }
+  });
+  if (touched) report.notes.push(`Melodie in Nebenstimmen: ${report.melodyShare.map((x) => `Stimme ${x.voice + 1} ${x.percent} %`).join(', ')}`);
+  return touched;
+}
+
+// ---- Solo-Übergabe ------------------------------------------------------------------------------
+// soloShares[i] = Anteil (0–100 %) der Takte, in denen Stimme i das Solo spielt: sie bekommt die Melodie der
+// Lead-Stimme (Ton für Ton, in ihrer Lage), und die Lead-Stimme spielt währenddessen das, was die Stimme sonst
+// gespielt hätte (ihre Begleitung). Die Solos stehen in Blöcken von 2–4 Takten und überschneiden sich nicht;
+// andere Doppler pausieren, solange ein Solo läuft.
+export function applySoloShare(score, soloShares) {
+  const { ctx, report } = score;
+  const { mt } = ctx.geo;
+  const leadV = score.voices.find((v) => v.role === 'lead');
+  if (!leadV || !Array.isArray(soloShares)) return 0;
+  const block = ctx.M >= 16 ? 4 : 2;
+  const taken = new Set();
+  // Takte, in denen schon ein Mini-Solo steht
+  for (const f of report.fills) {
+    if (f.kind !== 'solo') continue;
+    for (let b = Math.floor(f.t0 / mt); b * mt < f.t1; b++) taken.add(b);
+  }
+  let touched = 0;
+  const others = score.voices.filter((v) => v !== leadV);
+  others.forEach((v, rank) => {
+    const pct = clamp(Number(soloShares[v.index]) || 0, 0, 100);
+    if (pct <= 0) return;
+    const bars = barsForShare(ctx.M, pct, rank, block).filter((b) => !taken.has(b));
+    if (!bars.length) return;
+    bars.forEach((b) => taken.add(b));
+    const windows = [];
+    for (const b of bars) {
+      const last = windows[windows.length - 1];
+      if (last && last.z === b) last.z = b + 1;
+      else windows.push({ a: b, z: b + 1 });
+    }
+    let n = 0;
+    for (const w of windows) {
+      const a = w.a * mt;
+      const z = w.z * mt;
+      const melody = sortEvents(leadV.events.filter((e) => e.start < z && endOf(e) > a));
+      if (melody.length < 2) continue;
+      const solo = [];
+      for (const e of melody) {
+        const start = Math.max(e.start, a);
+        const dur = Math.min(endOf(e), z) - start;
+        if (dur <= 0) continue;
+        let m = nearestOctave(e.pitches[0], e.pitches[0], v.profile);
+        if (!inRange(m, v.profile)) m = fitPitch(e.pitches[0], v.profile);
+        solo.push(makeEvent(start, dur, m, null, { role: 'melody', solo: true, vel: e.vel }));
+      }
+      // was die Stimme sonst gespielt hätte, geht an die Lead-Stimme (in deren Lage, unterhalb der Melodie-Mitte)
+      const prev = sortEvents(v.events.filter((e) => e.start < z && endOf(e) > a));
+      const accomp = [];
+      const lowAnchor = leadV.profile.sweet[0] + 2;
+      for (const e of prev) {
+        const start = Math.max(e.start, a);
+        const dur = Math.min(endOf(e), z) - start;
+        if (dur <= 0) continue;
+        let m = nearestOctave(e.pitches[0], lowAnchor, leadV.profile);
+        if (!inRange(m, leadV.profile)) m = fitPitch(e.pitches[0], leadV.profile);
+        accomp.push(makeEvent(start, dur, m, null, { role: e.role && e.role !== 'melody' ? e.role : 'inner', vel: e.vel }));
+      }
+      // andere Doppler und Einwürfe pausieren, solange das Solo läuft
+      for (const o of score.voices) {
+        if (o === v || o === leadV) continue;
+        o.events = o.events.filter((e) => !((e.role === 'answer' || e.role === 'double') && e.start >= a && e.start < z));
+        for (const e of o.events) if ((e.role === 'answer' || e.role === 'double') && e.start < a && endOf(e) > a) e.dur = a - e.start;
+      }
+      placeWindow(v, a, z, solo);
+      placeWindow(leadV, a, z, accomp);
+      report.fills.push({ voice: v.index, t0: a, t1: z, kind: 'solo' });
+      n++;
+    }
+    if (n) {
+      touched++;
+      report.soloShare = report.soloShare || [];
+      report.soloShare.push({ voice: v.index, bars: bars.length, percent: pct });
+    }
+  });
+  if (touched) report.notes.push(`Solo-Übergabe: ${report.soloShare.map((x) => `Stimme ${x.voice + 1} ${x.percent} %`).join(', ')} – die Hauptstimme begleitet währenddessen`);
+  return touched;
 }

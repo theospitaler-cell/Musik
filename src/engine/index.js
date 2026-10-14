@@ -12,7 +12,7 @@ import { parseWav } from '../input/stems.js';
 import { compose, applySatzRegeln } from './compose.js';
 import { applyHandoff, applyBreaths, interlock, markPhraseEnds } from './phrasing.js';
 import { articulate, spellVoices, buildArrangement, exportScore, ensembleName, detectSections } from './engrave.js';
-import { behaviorFor, applySustainCounters, applyMiniSolos, MODES, ACTIVITY_NAMES } from './behavior.js';
+import { behaviorFor, applySustainCounters, applyMiniSolos, applyMelodyShare, applySoloShare, MODES, ACTIVITY_NAMES } from './behavior.js';
 import { validateArrangement, summarize } from './validate.js';
 import { sourceLinesOf } from '../arrange/original.js';
 import { songMeasureTicks, transposeChordList } from '../model/song.js';
@@ -139,6 +139,11 @@ export function orchestrate(input, opts = {}) {
     applySustainCounters(score, behavior);
     applyMiniSolos(score, behavior, detectSections(score.ctx));
   }
+  // Melodieanteil je Stimme (opts.melodyShare: Prozent je Stimme, Index 0 = Lead): die Lead-Stimme bleibt, andere
+  // Stimmen spielen in diesem Anteil der Takte die Melodie mit
+  if (N >= 2 && Array.isArray(opts.melodyShare)) applyMelodyShare(score, opts.melodyShare);
+  // Solo-Übergabe (opts.soloShare: Prozent je Stimme): die Stimme spielt das Solo, die Lead-Stimme ihre Begleitung
+  if (N >= 2 && Array.isArray(opts.soloShare)) applySoloShare(score, opts.soloShare);
   // Satzregeln, Atem und Verzahnung greifen ineinander (ein gekürzter Ton macht Nachbarn zu neuen
   // Sprüngen, ein haltender Ton bildet einen neuen langen Lauf) – wiederholen bis nichts mehr dazukommt
   for (let round = 0; round < 4; round++) {

@@ -36,6 +36,9 @@ export function createSheetUI(env) {
     // Oktavieren: Geltungsbereich und Auswahl
     oct: { scope: 'all', from: 1, to: 1, line: 1, measure: 1, notes: new Set() },
     lines: [], // Zeilen des gezeigten Blatts: [{ from, to, page, staff }] (Takte im ganzen Stück, 1-basiert)
+    // Stimmen dazuschreiben: Melodie in den anderen Stimmen
+    melody: 'auto', // 'auto' | 'none' (nur Begleitung) | 'share' (Melodie teilweise mit) | 'solo' (Solos übergeben)
+    shares: {}, // je Instrument: Anteil der Takte in Prozent
   };
   const resetOct = () => {
     E.oct = { scope: 'all', from: 1, to: 1, line: 1, measure: 1, notes: new Set() };
@@ -502,6 +505,8 @@ export function createSheetUI(env) {
   }
 
   // ----------------------------------------------------------------------------------- Bedienfelder
+  // Anteil (in %) einer Stimme in den Modi „Melodie mitspielen“ / „Solos übergeben“
+  const shareOf = (id) => (E.shares[id] ?? (E.melody === 'solo' ? 25 : 30));
   const keyChoices = (mode) => Array.from({ length: 15 }, (_, i) => makeKey(i - 7, mode));
 
   function renderPanels() {
@@ -551,7 +556,14 @@ export function createSheetUI(env) {
     add.innerHTML = `
       <div class="step-head"><span class="step-num">4</span><div class="step-title"><h2>Stimmen dazuschreiben</h2><p>Dieses Blatt bleibt Hauptstimme · Schema „${esc(scheme.name)}“</p></div></div>
       <label class="field"><span>Hauptstimme spielt</span><select id="sheet-lead">${instrumentOptions({ selected: p.instrument || (INSTRUMENTS[p.sourceInstrument] ? p.sourceInstrument : scheme.voices[0]) })}</select></label>
-      ${voices.length ? `<div class="voice-pick" id="sheet-voices">${voices.map((v, i) => `<label><input type="checkbox" value="${v}" checked /><span>${esc(INSTRUMENTS[v].name)}</span><small>${SLOT_NAMES[i + 1]}</small></label>`).join('')}</div>` : '<p class="muted small">Im aktiven Schema sind keine weiteren Stimmen gesetzt – in den Einstellungen unter „Besetzung“ ergänzen.</p>'}
+      <label class="field"><span>Melodie in den anderen Stimmen</span><select id="sheet-melody">
+        <option value="auto"${E.melody === 'auto' ? ' selected' : ''}>Automatisch (nach Führung &amp; Aktivität)</option>
+        <option value="none"${E.melody === 'none' ? ' selected' : ''}>Nur Begleitung – das Original bleibt, die Stimmen begleiten</option>
+        <option value="share"${E.melody === 'share' ? ' selected' : ''}>Melodie teilweise mitspielen – Anteil je Stimme</option>
+        <option value="solo"${E.melody === 'solo' ? ' selected' : ''}>Solos übergeben – Anteil je Stimme, die Hauptstimme begleitet dann</option>
+      </select></label>
+      ${E.melody === 'share' || E.melody === 'solo' ? `<p class="muted small">${E.melody === 'share' ? 'Anteil der Takte, in denen die Stimme die Melodie mitspielt (die Hauptstimme bleibt unverändert).' : 'Anteil der Takte, in denen die Stimme das Solo spielt – die Hauptstimme übernimmt dann deren Begleitung.'}</p>` : ''}
+      ${voices.length ? `<div class="voice-pick" id="sheet-voices">${voices.map((v, i) => `<div class="voice-row"><label><input type="checkbox" value="${v}" checked /><span>${esc(INSTRUMENTS[v].name)}</span><small>${SLOT_NAMES[i + 1]}</small></label>${E.melody === 'share' || E.melody === 'solo' ? `<div class="share-row"><input type="range" class="share-range" data-voice="${v}" min="0" max="100" step="5" value="${shareOf(v)}" aria-label="Anteil ${esc(INSTRUMENTS[v].name)}" /><output>${shareOf(v)} %</output></div>` : ''}</div>`).join('')}</div>` : '<p class="muted small">Im aktiven Schema sind keine weiteren Stimmen gesetzt – in den Einstellungen unter „Besetzung“ ergänzen.</p>'}
       <label class="field"><span>Führung</span><select id="sheet-mode-voices"><option value="dynamic">Dynamisch &amp; polyphon</option><option value="classic">Klassischer Solo-Lead</option></select></label>
       <div class="sheet-btn-row"><button class="btn primary" id="sheet-addvoices" type="button" ${voices.length ? '' : 'disabled'}><svg><use href="#i-plus" /></svg><span>Stimmen schreiben</span></button></div>
     `;
@@ -755,6 +767,17 @@ export function createSheetUI(env) {
         toast(`Für ${t.name} umgeschrieben${r.octaves ? ` (${r.octaves > 0 ? '+' : ''}${r.octaves} Oktave${Math.abs(r.octaves) > 1 ? 'n' : ''})` : ''}${r.outOfRange ? ` – ${r.outOfRange} Töne liegen außerhalb des Tonumfangs` : ''}`, r.outOfRange ? '' : 'ok');
       }),
     );
+    $('#sheet-melody')?.addEventListener('change', (e) => {
+      E.melody = e.target.value;
+      renderPanels();
+    });
+    $$('#sheet-voices .share-range').forEach((rg) =>
+      rg.addEventListener('input', () => {
+        E.shares[rg.dataset.voice] = Number(rg.value);
+        const out = rg.parentElement.querySelector('output');
+        if (out) out.textContent = `${rg.value} %`;
+      }),
+    );
     $('#sheet-addvoices')?.addEventListener('click', () => addVoicesNow());
     sel('#sheet-save').addEventListener('click', () => save());
     sel('#sheet-pdf').addEventListener('click', () => exportPdf());
@@ -765,7 +788,7 @@ export function createSheetUI(env) {
 
   async function addVoicesNow() {
     const p = E.project;
-    const picked = $$('#sheet-voices input:checked').map((i) => i.value);
+    const picked = $$('#sheet-voices input[type="checkbox"]:checked').map((i) => i.value);
     if (!picked.length) return toast('Bitte mindestens eine weitere Stimme wählen.', 'error');
     if (listParts(projectXml(p)).length > 1) return toast('Das Blatt hat schon mehrere Stimmen – bitte zuerst eine Stimme einzeln speichern.', 'error');
     const pg = progress('Stimmen werden geschrieben', { cancellable: false });
@@ -778,13 +801,16 @@ export function createSheetUI(env) {
         voices: picked,
         mode: $('#sheet-mode-voices').value,
         activity: S.opts?.orchActivity ?? 3,
+        melody: E.melody,
+        shares: picked.map((v) => shareOf(v)),
         title: p.title,
       });
       const np = newProject({ title: p.title, xml: r.xml, origin: 'score', sourceInstrument: lead });
       np.instrument = lead;
       np.history = [...p.history];
       setProject(np, { prepared: [], mode: 'engraved', id: E.id });
-      notice(`${r.instruments.length} Stimmen: ${r.instruments.map((i) => INSTRUMENTS[i].short.replace(/\.$/, '')).join(', ')}. Die Hauptstimme ist dein Notenblatt (Töne 1:1).`);
+      const extra = E.melody === 'solo' ? ' In den Solo-Takten spielt die Hauptstimme die Begleitung der Solostimme.' : E.melody === 'share' ? ' Die Hauptstimme bleibt unverändert, die anderen Stimmen spielen die Melodie anteilig mit.' : E.melody === 'none' ? ' Die anderen Stimmen begleiten nur.' : '';
+      notice(`${r.instruments.length} Stimmen: ${r.instruments.map((i) => INSTRUMENTS[i].short.replace(/\.$/, '')).join(', ')}. Die Hauptstimme ist dein Notenblatt (Töne 1:1).${extra}`);
       await renderView();
     } catch (e) {
       console.error(e);

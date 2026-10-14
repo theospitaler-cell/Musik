@@ -199,6 +199,9 @@ export function compose(material, N, opts = {}) {
     dirs: [],
     label: `Stimme ${i + 1}`,
   }));
+  // Melodieanteil gesteuert (opts.melodyShare): Oktav-/Unisono-Doppler spielen Begleitung wie die Innenstimmen;
+  // die Melodie kommt nur in dem gewählten Anteil dazu (applyMelodyShare)
+  if (Array.isArray(opts.melodyShare) || Array.isArray(opts.soloShare)) for (const v of voices) if (v.role === 'double8' || v.role === 'doubleU') v.role = 'inner';
   const chordAt = (t) => chordAtList(chords, t);
   const scaleAtTick = (t) => {
     const k = ctx.keyAt(Math.max(0, Math.floor(t / geo.mt)));

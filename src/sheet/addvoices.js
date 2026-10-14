@@ -18,9 +18,12 @@ export function toConcertXml(xml, sourceId) {
 }
 
 // opts: { sourceId: Instrument, für das das Blatt notiert ist | 'concert', lead: Instrument der Hauptstimme,
-//         voices: [Instrument-IDs der weiteren Stimmen], mode: 'dynamic'|'classic', activity: 1–5, title }
+//         voices: [Instrument-IDs der weiteren Stimmen], mode: 'dynamic'|'classic', activity: 1–5, title,
+//         melody: 'auto' (wie bisher) | 'none' (nur Begleitung) | 'share' (Melodie anteilig mitspielen)
+//                 | 'solo' (Solos anteilig an andere Stimmen übergeben, die Hauptstimme begleitet dann),
+//         shares: [Prozent der Takte je Stimme in der Reihenfolge von voices] }
 export function addVoices(xml, opts) {
-  const { sourceId = 'concert', lead = null, voices = [], mode = 'dynamic', activity = 3, title = '' } = opts;
+  const { sourceId = 'concert', lead = null, voices = [], mode = 'dynamic', activity = 3, title = '', melody = 'auto', shares = [] } = opts;
   const leadId = lead && INSTRUMENTS[lead] ? lead : sourceId !== 'concert' && INSTRUMENTS[sourceId] ? sourceId : 'trumpet';
   const list = voices.filter((v) => INSTRUMENTS[v]);
   if (!list.length) throw new Error('Bitte mindestens eine weitere Stimme wählen');
@@ -28,8 +31,20 @@ export function addVoices(xml, opts) {
   const song = songFromMusicXML(concert);
   if (title) song.title = title;
   const instruments = [leadId, ...list];
-  const r = orchestrate(song, { voices: instruments.length, instruments, transpose: 0, mode, activity, title: song.title });
-  return { xml: r.xml(), report: r.report, validation: r.validation, instruments, arr: r.arr };
+  // Melodieanteil: 'none' = alle Nebenstimmen nur Begleitung, 'share' = je Stimme ein Prozentwert (die Auswahl
+  // der Stimmen kann Plätze auslassen – die Prozente gehören zur Stimme, nicht zum Platz)
+  let melodyShare;
+  let soloShare;
+  const picked = voices.map((v, i) => (INSTRUMENTS[v] ? Number(shares[i]) || 0 : null)).filter((x) => x !== null);
+  if (melody === 'none') melodyShare = instruments.map(() => 0);
+  else if (melody === 'share') melodyShare = [0, ...picked];
+  else if (melody === 'solo') {
+    // Soli: Doppler spielen Begleitung (kein Melodieanteil), die Übergabe passiert nur in den Solo-Takten
+    melodyShare = instruments.map(() => 0);
+    soloShare = [0, ...picked];
+  }
+  const r = orchestrate(song, { voices: instruments.length, instruments, transpose: 0, mode, activity, title: song.title, melodyShare, soloShare });
+  return { xml: r.xml(), report: r.report, validation: r.validation, instruments, arr: r.arr, melodyShare, soloShare };
 }
 
 // Eine Stimme eines mehrstimmigen Blatts als eigenes Blatt herausziehen (für Bibliothek/Partitur)

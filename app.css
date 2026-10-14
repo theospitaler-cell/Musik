@@ -3850,3 +3850,26 @@ body.lib-dragging .folder-card:not(.auto) {
 .sheet-page svg g.measure {
   cursor: pointer;
 }
+
+/* Stimmen dazuschreiben: Anteil je Stimme */
+.voice-row {
+  display: grid;
+  gap: 4px;
+}
+.share-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px 6px;
+}
+.share-row input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.share-row output {
+  min-width: 52px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 13.5px;
+  color: var(--muted);
+}

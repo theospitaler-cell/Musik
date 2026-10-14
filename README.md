@@ -223,7 +223,14 @@ Blatt anzufassen:
   nicht angefasst (`src/sheet/image/chords.js`). Abschaltbar unter „Akkordsymbole im Bild mitändern“; die
   Anzeige nennt die erkannten Grundtöne zur Kontrolle.
 - **Stimmen dazuschreiben:** das Blatt ist die Hauptstimme (Töne 1:1); die weiteren Stimmen kommen aus dem
-  aktiven Schema und der Orchestrierung (Führung dynamisch/klassisch).
+  aktiven Schema und der Orchestrierung (Führung dynamisch/klassisch). „Melodie in den anderen Stimmen“:
+  *Automatisch* (wie bisher), *Nur Begleitung* (das Original bleibt, die anderen Stimmen begleiten nur),
+  *Melodie teilweise mitspielen* (Schieberegler je Stimme: Anteil der Takte in 0–100 %, in Zweierblöcken
+  gleichmäßig verteilt; hohe Stimmen und Bässe in ihrer Oktavlage, mittlere/tiefere als leitereigene Terz unter
+  der Melodie; die Hauptstimme bleibt unverändert) und *Solos übergeben* (Schieberegler je Stimme: Anteil der
+  Takte in Blöcken von 2–4 Takten – die Stimme spielt das Solo, die Hauptstimme übernimmt währenddessen deren
+  Begleitung; Soli überschneiden sich nicht, der erste Block bleibt der Hauptstimme). Umsetzung:
+  `applyMelodyShare` / `applySoloShare` in `src/engine/behavior.js`, Option `melodyShare` / `soloShare`.
 - **Bibliothek:** „Auswählen“ → mehrere Notenblätter **zu einer Partitur** (Reihenfolge nach Schema) oder
   **zu einem PDF** (Seiten umsortieren oder weglassen).
 - **Einstellungen → Besetzung (Schemas):** Maininstrument und 2.–6. Stimme, beliebig viele Schemas speichern und
