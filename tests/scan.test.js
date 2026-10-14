@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadPng } from './helpers-image.js';
 import { loadVerovioNode, fakeRasterize } from './helpers-verovio.js';
-import { toGray, whiten, estimateSkew, rotate, whiteShare, binarize } from '../src/sheet/image/raster.js';
+import { toGray, whiten, estimateSkew, rotate, whiteShare, binarize, estimateStaffSpace, scaleGray } from '../src/sheet/image/raster.js';
 import { detectStaves } from '../src/sheet/image/staff.js';
 import { detectBarlines } from '../src/sheet/image/barlines.js';
 import { musicMask, applyErase, labelComponents } from '../src/sheet/image/erase.js';
@@ -222,4 +222,46 @@ test('Geometrie aus dem Verovio-SVG', async () => {
   assert.equal(g.lines.length, 5);
   assert.equal(g.space, 180);
   assert.ok(g.x1 - g.x0 > 3000);
+});
+
+test('Kleines, blasses Bild (Bildschirmfoto): wird hochgerechnet, Zeilen und Taktstriche werden gefunden', () => {
+  const g = whiten(toGray(clean));
+  // auf 55 % verkleinern und die Tinte aufhellen: Notenlinien ~6 px Abstand, dünn und grau
+  const small = scaleGray(g, 0.55);
+  const faint = { width: small.width, height: small.height, gray: small.gray.map((v) => 255 - Math.round((255 - v) * 0.6)) };
+  const est = estimateStaffSpace(faint);
+  assert.ok(est && est.space > 5 && est.space < 7, `Abstand ${est && est.space}`);
+  const { page, scale } = preparePage(faint);
+  assert.ok(scale > 1.5, `Faktor ${scale}`);
+  const staves = analyzePage(page);
+  assert.equal(staves.length, 3);
+  assert.ok(staves.every((s) => s.space > 9 && s.space < 13), staves.map((s) => s.space.toFixed(1)).join(' '));
+  assert.deepEqual(staves.map((s) => s.barlines.length), [5, 7, 4]);
+  // ein großes, gutes Bild bleibt unangetastet
+  assert.equal(preparePage(clean).scale, 1);
+});
+
+test('Neigung bei ungerader Bildhöhe: kein Absturz auf den Randwert', () => {
+  const g = whiten(toGray(clean));
+  const h = g.height % 2 === 0 ? g.height - 1 : g.height;
+  const odd = { width: g.width, height: h, gray: g.gray.slice(0, g.width * h) };
+  assert.equal(estimateSkew(odd), 0);
+  const { skew } = preparePage({ width: g.width, height: h, gray: odd.gray });
+  assert.equal(skew, 0);
+});
+
+test('Taktstriche: Hälse mit Notenkopf daneben sind keine Taktstriche', () => {
+  // Zeile mit fünf Linien, ein echter Taktstrich (x=100) und ein Hals (x=200) mit Notenkopf an der unteren Linie
+  const w = 300;
+  const h = 80;
+  const bin = new Uint8Array(w * h);
+  const lines = [20, 30, 40, 50, 60];
+  for (const y of lines) for (let x = 10; x < 290; x++) bin[y * w + x] = 1;
+  for (let y = 20; y <= 60; y++) bin[y * w + 100] = bin[y * w + 101] = 1;
+  for (let y = 20; y <= 60; y++) bin[y * w + 200] = bin[y * w + 201] = 1;
+  for (let y = 56; y <= 64; y++) for (let x = 188; x <= 199; x++) bin[y * w + x] = 1; // Notenkopf links vom Hals, innerhalb der Zeile
+  const staff = { lines, space: 10, thickness: 1, x0: 10, x1: 289, top: 20, bottom: 60 };
+  const bars = detectBarlines({ width: w, height: h, bin }, staff);
+  assert.equal(bars.length, 1);
+  assert.ok(Math.abs(bars[0] - 100.5) < 1);
 });

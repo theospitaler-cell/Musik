@@ -174,7 +174,7 @@ export function estimateSkew(img, { maxDeg = 4, step = 0.1 } = {}) {
     const t = Math.tan((deg * Math.PI) / 180);
     const rows = new Float32Array(sh * 2);
     for (let i = 0; i < pts.length; i += 2) {
-      const y = Math.round(pts[i + 1] - t * (pts[i] - sw / 2)) + sh / 2;
+      const y = Math.round(pts[i + 1] - t * (pts[i] - sw / 2)) + Math.floor(sh / 2);
       if (y >= 0 && y < sh * 2) rows[y]++;
     }
     let s = 0;
@@ -243,4 +243,116 @@ export function whiteShare(gray) {
   let n = 0;
   for (let i = 0; i < gray.length; i++) if (gray[i] === 255) n++;
   return n / gray.length;
+}
+
+// ---- Auflösung --------------------------------------------------------------------------------------
+// Notenlinienabstand aus der Periodizität des Zeilenprofils (die Linien dürfen blass und dünn sein).
+// Rückgabe { space, strength } oder null, wenn kein regelmäßiges Linienmuster zu sehen ist.
+export function estimateStaffSpace(img, { min = 3, max = 40 } = {}) {
+  const { width: w, height: h, gray } = toGray(img);
+  const prof = new Float64Array(h);
+  for (let y = 0; y < h; y++) {
+    let s = 0;
+    const base = y * w;
+    for (let x = 0; x < w; x++) s += 255 - gray[base + x];
+    prof[y] = s / w;
+  }
+  // Hochpass: gleitenden Mittelwert (Breite 2·max+1) abziehen
+  const win = 2 * max + 1;
+  const hp = new Float64Array(h);
+  let acc = 0;
+  const cs = new Float64Array(h + 1);
+  for (let y = 0; y < h; y++) cs[y + 1] = cs[y] + prof[y];
+  for (let y = 0; y < h; y++) {
+    const a = Math.max(0, y - max);
+    const b = Math.min(h, y + max + 1);
+    hp[y] = prof[y] - (cs[b] - cs[a]) / (b - a);
+    acc += hp[y] * hp[y];
+  }
+  void win;
+  if (acc <= 0) return null;
+  const r = new Float64Array(max + 1);
+  for (let lag = min; lag <= max; lag++) {
+    let s = 0;
+    for (let y = 0; y + lag < h; y++) s += hp[y] * hp[y + lag];
+    r[lag] = s / acc;
+  }
+  let best = 0;
+  for (let lag = min; lag <= max; lag++) if (r[lag] > best) best = r[lag];
+  if (best < 0.03) return null;
+  // kleinster Abstand mit mindestens 70 % des Maximums (Vielfache des Abstands ignorieren)
+  let lag = min;
+  for (let l = min + 1; l < max; l++) {
+    if (r[l] >= best * 0.7 && r[l] >= r[l - 1] && r[l] >= r[l + 1]) {
+      lag = l;
+      break;
+    }
+  }
+  // Feinwert: Parabel durch die drei Werte um das Maximum
+  const a = r[lag - 1] || 0;
+  const b = r[lag];
+  const c = r[lag + 1] || 0;
+  const d = a - 2 * b + c;
+  const off = d < 0 ? (0.5 * (a - c)) / d : 0;
+  return { space: lag + Math.max(-0.5, Math.min(0.5, off)), strength: best };
+}
+
+// Bilinear vergrößern/verkleinern (Faktor > 0)
+export function scaleGray(img, factor) {
+  const { width: w, height: h, gray } = toGray(img);
+  const W = Math.max(1, Math.round(w * factor));
+  const H = Math.max(1, Math.round(h * factor));
+  const out = new Uint8Array(W * H);
+  const fx = w / W;
+  const fy = h / H;
+  for (let y = 0; y < H; y++) {
+    const sy = Math.min(h - 1, Math.max(0, (y + 0.5) * fy - 0.5));
+    const y0 = Math.floor(sy);
+    const y1 = Math.min(h - 1, y0 + 1);
+    const ty = sy - y0;
+    for (let x = 0; x < W; x++) {
+      const sx = Math.min(w - 1, Math.max(0, (x + 0.5) * fx - 0.5));
+      const x0 = Math.floor(sx);
+      const x1 = Math.min(w - 1, x0 + 1);
+      const tx = sx - x0;
+      const top = gray[y0 * w + x0] * (1 - tx) + gray[y0 * w + x1] * tx;
+      const bot = gray[y1 * w + x0] * (1 - tx) + gray[y1 * w + x1] * tx;
+      out[y * W + x] = Math.round(top * (1 - ty) + bot * ty);
+    }
+  }
+  return { width: W, height: H, gray: out };
+}
+
+// Blasse, dünne Striche (Bildschirmfoto, verkleinerter Druck) nachdunkeln: alles bis `black` wird schwarz,
+// ab `white` weiß, dazwischen linear
+export function darken(img, { black = 170, white = 240 } = {}) {
+  const { width: w, height: h, gray } = toGray(img);
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) lut[v] = v >= white ? 255 : v <= black ? 0 : Math.round(((v - black) / (white - black)) * 255);
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = lut[gray[i]];
+  return { width: w, height: h, gray: out };
+}
+
+// Typischer Grauwert der Notenlinien (Zeilen mit der stärksten, gleichmäßigen Tinte über die Breite)
+export function estimateLineGray(img) {
+  const { width: w, height: h, gray } = toGray(img);
+  const prof = new Float64Array(h);
+  for (let y = 0; y < h; y++) {
+    let s = 0;
+    const base = y * w;
+    for (let x = 0; x < w; x++) s += 255 - gray[base + x];
+    prof[y] = s / w;
+  }
+  const sorted = Array.from(prof).sort((a, b) => a - b);
+  const q = sorted[Math.floor(sorted.length * 0.985)];
+  if (!(q > 0)) return 255;
+  const vals = [];
+  for (let y = 0; y < h; y++) {
+    if (prof[y] < q * 0.5) continue;
+    for (let x = 0; x < w; x++) if (gray[y * w + x] < 250) vals.push(gray[y * w + x]);
+  }
+  if (!vals.length) return 255;
+  vals.sort((a, b) => a - b);
+  return vals[Math.floor(vals.length / 2)];
 }

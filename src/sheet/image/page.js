@@ -1,14 +1,19 @@
 // Eine eingescannte Seite umschreiben („Original-Seite behalten“): Hintergrund perfekt weiß, Titel/Texte
 // unverändert, die Notenzeilen werden mit den geänderten Noten neu gesetzt und an derselben Stelle eingefügt.
-import { binarize, toGray, whiten, estimateSkew, rotate } from './raster.js';
+import { binarize, toGray, whiten, estimateSkew, rotate, estimateStaffSpace, estimateLineGray, scaleGray, darken } from './raster.js';
 import { detectStaves } from './staff.js';
 import { detectBarlines } from './barlines.js';
 import { musicMask, applyErase, overlay } from './erase.js';
 import { sliceSystems, systemBreaks, engraveSystem } from './engrave.js';
 import { findChordSymbols, applyChordShift, shiftIsIdentity } from './chords.js';
 
-// Seite vorbereiten: Graustufen, Beleuchtung ausgleichen, gerade drehen, Hintergrund weiß
-export function preparePage(img, { deskew = true } = {}) {
+// Seite vorbereiten: Graustufen, Beleuchtung ausgleichen, bei kleiner Auflösung vergrößern, gerade drehen,
+// Hintergrund weiß. Bildschirmfotos und kleine Drucke (Notenlinienabstand unter ~8 px) werden auf etwa 11 px
+// hochgerechnet und nachgedunkelt, damit die dünnen, blassen Linien als Linien erkannt werden.
+const TARGET_SPACE = 11;
+const MIN_SPACE = 8.5;
+const MAX_SIDE = 4200;
+export function preparePage(img, { deskew = true, upscale = true } = {}) {
   let page = whiten(toGray(img));
   let skew = 0;
   if (deskew) {
@@ -16,7 +21,27 @@ export function preparePage(img, { deskew = true } = {}) {
     if (Math.abs(skew) >= 0.15) page = rotate(page, skew);
     else skew = 0;
   }
-  return { page, skew };
+  let scale = 1;
+  if (upscale) {
+    // erst gerade, dann messen (schräge Linien verwischen das Zeilenmuster)
+    const est = estimateStaffSpace(page);
+    if (est && est.strength >= 0.1 && est.space < MIN_SPACE) {
+      const f = Math.min(4, TARGET_SPACE / est.space, MAX_SIDE / Math.max(page.width, page.height));
+      if (f > 1.15) {
+        const scaled = scaleGray(page, f);
+        // Linien so weit nachdunkeln, dass auch die blassesten Zeilen Tinte werden
+        const L = estimateLineGray(scaled);
+        const black = Math.max(150, Math.min(235, L + 0.3 * (255 - L)));
+        const big = darken(scaled, { black, white: Math.min(252, black + 45) });
+        // nur übernehmen, wenn danach Notenzeilen zu finden sind (sonst bleibt das Original)
+        if (detectStaves(binarize(big)).length >= detectStaves(binarize(page)).length) {
+          page = big;
+          scale = f;
+        }
+      }
+    }
+  }
+  return { page, skew, scale };
 }
 
 // Notenzeilen der Seite samt Taktstrichen
