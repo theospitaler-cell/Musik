@@ -104,6 +104,10 @@ export function createSheetUI(env) {
   async function refreshEngine() {
     const d = window.notecodeDesktop;
     let eng = { kind: 'builtin', text: 'Notenerkennung: einfache eingebaute Erkennung (saubere Drucke, gerade aufgenommen). Für Fotos und dichte Sätze: Desktop-App mit KI-Erkennung.' };
+    if (d && !d.omrStatus) {
+      // die Windows-App wurde per Update auf die neue Oberfläche gebracht, das Programm selbst ist aber alt
+      eng = { kind: 'builtin', text: 'Notenerkennung: einfache eingebaute Erkennung. Für die KI-Erkennung die Windows-App neu installieren (aktuelles Setup aus den GitHub-Releases).' };
+    }
     if (d && d.omrStatus) {
       try {
         const st = await d.omrStatus();

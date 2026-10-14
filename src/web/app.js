@@ -2843,13 +2843,29 @@ async function runUpdateCheck({ silent = false } = {}) {
       return;
     }
     $('#upd-status').textContent = `Neue Version ${r.latest.version} verfügbar.`;
-    toast(`Update ${r.latest.version} verfügbar`, '', { label: 'Jetzt aktualisieren', run: installUpdate });
+    showUpdateBanner(r.latest.version, r.current.version);
+    if (!silent) toast(`Update ${r.latest.version} verfügbar`, '', { label: 'Jetzt aktualisieren', run: installUpdate });
   } catch (e) {
     if (!silent) {
       $('#upd-status').textContent = 'Update-Prüfung fehlgeschlagen: ' + e.message;
       toast('Update-Prüfung fehlgeschlagen: ' + e.message, 'error');
     }
   }
+}
+
+// Dauerhafte Hinweisleiste statt nur eines kurzen Hinweises (bis zum Update oder „Später“)
+let bannerDismissed = null;
+function showUpdateBanner(latest, current) {
+  if (bannerDismissed === latest) return;
+  const b = $('#update-banner');
+  if (!b) return;
+  $('#update-banner-text').textContent = `Neue Version ${latest} verfügbar (installiert: ${current}). Neu im Update: Fehlerbehebungen und neue Funktionen.`;
+  b.classList.remove('hidden');
+  $('#update-banner-btn').onclick = () => installUpdate();
+  $('#update-banner-close').onclick = () => {
+    bannerDismissed = latest;
+    b.classList.add('hidden');
+  };
 }
 
 async function installUpdate() {
@@ -3150,6 +3166,11 @@ function bindSyncStatus() {
   renderUpdateCard();
   // einmal beim Start still prüfen (nur installierte Apps)
   setTimeout(() => runUpdateCheck({ silent: true }), 4000);
+  // und weiter prüfen: beim Zurückkehren in die App und alle 30 Minuten (nur installierte Apps)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') runUpdateCheck({ silent: true });
+  });
+  setInterval(() => runUpdateCheck({ silent: true }), 30 * 60 * 1000);
   $('#sync-now').addEventListener('click', async () => {
     if (!S.library.cloud.user) return openAuth();
     try {

@@ -3873,3 +3873,29 @@ body.lib-dragging .folder-card:not(.auto) {
   font-size: 13.5px;
   color: var(--muted);
 }
+
+/* Update-Hinweisleiste */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13.5px;
+}
+.update-banner.hidden {
+  display: none;
+}
+.update-banner .btn.primary {
+  background: #fff;
+  color: var(--accent);
+  border-color: #fff;
+}
+.update-banner .btn.ghost {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.5);
+  background: transparent;
+}
