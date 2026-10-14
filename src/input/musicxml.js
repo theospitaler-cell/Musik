@@ -308,11 +308,13 @@ export function guessMelodyPart(scan) {
   return pickLead(cands, { mt, totalTicks: Math.max(...scan.parts.map((p) => p.measures.length)) * mt, firstBonus: 1.2 });
 }
 
-export function songFromMusicXML(xmlText, { melodyPart = null } = {}) {
+// unfold = false: die Takte bleiben in der geschriebenen Reihenfolge (Wiederholungen und Klammern werden nicht
+// ausgeschrieben) – nötig, wenn das Ergebnis wieder dem Notenblatt entsprechen soll
+export function songFromMusicXML(xmlText, { melodyPart = null, unfold = true } = {}) {
   const scan = scanScore(xmlText);
   const meter = scan.meter;
   const mt = measureTicks(meter);
-  const order = expandOrder(scan.measureMeta);
+  const order = unfold ? expandOrder(scan.measureMeta) : scan.measureMeta.map((_, i) => i);
   const melIdx = melodyPart ?? guessMelodyPart(scan);
   const warnings = [];
 

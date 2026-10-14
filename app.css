@@ -3545,9 +3545,13 @@ body.lib-dragging .folder-card:not(.auto) {
 .sheet-pages {
   display: flex;
   flex-direction: column;
+  align-items: stretch; /* .pages zentriert sonst: SVG-Seiten schrumpfen auf 300 px */
   gap: 16px;
 }
 .sheet-page {
+  width: 100%;
+  max-width: 1100px;
+  margin-inline: auto;
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 6px;

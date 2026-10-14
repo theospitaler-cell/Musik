@@ -4,7 +4,7 @@ import { INSTRUMENTS } from '../arrange/instruments.js';
 import { songFromMusicXML } from '../input/musicxml.js';
 import { orchestrate } from '../engine/index.js';
 import { transposeXml, analyzeXml } from './transpose.js';
-import { readScore, writeScore, partsOf, el, removeChildren } from './xml.js';
+import { readScore, writeScore, partsOf, measuresOf, cloneNode, el, removeChildren } from './xml.js';
 
 // Das Blatt in klingende Tonhöhen bringen (die Orchestrierung arbeitet mit klingenden Tönen). Hat die Stimme
 // ein <transpose>, übernimmt der Import die Umrechnung; sonst gilt die Notierung für sourceId.
@@ -28,7 +28,8 @@ export function addVoices(xml, opts) {
   const list = voices.filter((v) => INSTRUMENTS[v]);
   if (!list.length) throw new Error('Bitte mindestens eine weitere Stimme wählen');
   const concert = toConcertXml(xml, sourceId);
-  const song = songFromMusicXML(concert);
+  // Takte wie geschrieben (ohne Wiederholungen auszuschreiben): die Hauptstimme bleibt das Notenblatt
+  const song = songFromMusicXML(concert, { unfold: false });
   if (title) song.title = title;
   const instruments = [leadId, ...list];
   // Melodieanteil: 'none' = alle Nebenstimmen nur Begleitung, 'share' = je Stimme ein Prozentwert (die Auswahl
@@ -44,7 +45,38 @@ export function addVoices(xml, opts) {
     soloShare = [0, ...picked];
   }
   const r = orchestrate(song, { voices: instruments.length, instruments, transpose: 0, mode, activity, title: song.title, melodyShare, soloShare });
-  return { xml: r.xml(), report: r.report, validation: r.validation, instruments, arr: r.arr, melodyShare, soloShare };
+  return { xml: restoreRepeats(r.xml(), xml), report: r.report, validation: r.validation, instruments, arr: r.arr, melodyShare, soloShare };
+}
+
+// Wiederholungszeichen und Klammern des Notenblatts (<barline> mit <repeat>/<ending>) in alle Stimmen übernehmen.
+// Voraussetzung: gleich viele Takte; sonst bleibt die Ausgabe ohne Wiederholungszeichen.
+export function restoreRepeats(outXml, sourceXml) {
+  const src = partsOf(readScore(sourceXml))[0];
+  if (!src) return outXml;
+  const srcMeasures = measuresOf(src);
+  const marks = srcMeasures.map((m) => m.all('barline').filter((b) => b.child('repeat') || b.child('ending')));
+  if (!marks.some((x) => x.length)) return outXml;
+  const root = readScore(outXml);
+  const parts = partsOf(root);
+  if (!parts.length || measuresOf(parts[0]).length !== srcMeasures.length) return outXml;
+  for (const part of parts) {
+    measuresOf(part).forEach((m, i) => {
+      if (!marks[i].length) return;
+      // eigene Taktstriche an den betroffenen Stellen ersetzen (links/rechts), den Rest behalten
+      const locs = new Set(marks[i].map((b) => b.attrs.location || 'right'));
+      m.children = m.children.filter((c) => !(c.name === 'barline' && locs.has(c.attrs.location || 'right')));
+      for (const b of marks[i]) {
+        const copy = cloneNode(b);
+        if ((b.attrs.location || 'right') === 'left') {
+          // linker Taktstrich steht vor den Noten (nach <attributes>/<direction> ist erlaubt, davor sicherer)
+          const at = m.children.findIndex((c) => c.name === 'note' || c.name === 'harmony' || c.name === 'direction');
+          m.children.splice(at < 0 ? m.children.length : at, 0, copy);
+        } else m.children.push(copy);
+      }
+    });
+  }
+  void el;
+  return writeScore(root);
 }
 
 // Eine Stimme eines mehrstimmigen Blatts als eigenes Blatt herausziehen (für Bibliothek/Partitur)

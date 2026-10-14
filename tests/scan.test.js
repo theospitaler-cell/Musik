@@ -265,3 +265,29 @@ test('Taktstriche: Hälse mit Notenkopf daneben sind keine Taktstriche', () => {
   assert.equal(bars.length, 1);
   assert.ok(Math.abs(bars[0] - 100.5) < 1);
 });
+
+test('Fette Wörter über der Zeile sind keine Hilfslinien: Text bleibt, echte Hilfslinien werden gelöscht', () => {
+  const w = 400;
+  const h = 220;
+  const gray = new Uint8Array(w * h).fill(255);
+  const set = (x0, y0, x1, y1) => {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) gray[y * w + x] = 0;
+  };
+  const lines = [100, 110, 120, 130, 140];
+  for (const y of lines) set(20, y, 380, y + 1);
+  // fettes Wort („like“) auf Höhe der vierten Hilfslinie über der Zeile: Körper mit Querstrich
+  set(60, 54, 63, 68);
+  set(66, 58, 90, 68);
+  set(70, 54, 72, 68);
+  set(100, 54, 104, 68);
+  set(104, 60, 130, 62);
+  // echte Hilfslinie ohne Kopf, zwei Linien über der Zeile (y = 100 − 2·10 = 80), 20 px lang
+  set(250, 80, 270, 81);
+  const staff = { lines, space: 10, thickness: 2, x0: 20, x1: 380, top: 100, bottom: 140, barlines: [] };
+  const page = { width: w, height: h, gray };
+  const m = musicMask(page, staff);
+  const erased = (x, y) => m.mask[(y - m.y0) * m.w + (x - m.x0)] === 1;
+  assert.ok(!erased(75, 64), 'fettes Wort wurde als Hilfslinie gelöscht');
+  assert.ok(!erased(110, 61), 'Wort wurde gelöscht');
+  assert.ok(erased(260, 80), 'echte Hilfslinie blieb stehen');
+});

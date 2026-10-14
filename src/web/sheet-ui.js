@@ -4,7 +4,7 @@
 import { INSTRUMENTS, FAMILIES } from '../arrange/instruments.js';
 import { makeKey, keyNameDe } from '../theory/keys.js';
 import { CLEFS, analyzeXml } from '../sheet/transpose.js';
-import { newProject, projectXml, transposeProject, setClefProject, convertProject, shiftOctaveProject, undo, redo, infoOf } from '../sheet/project.js';
+import { newProject, projectXml, transposeProject, setClefProject, convertProject, shiftOctaveProject, undo, redo, infoOf, resetToOriginal, isOriginal, replaceWithScore } from '../sheet/project.js';
 import { describeMeasure, measureCount } from '../sheet/octave.js';
 import { addVoices, listParts, extractPart } from '../sheet/addvoices.js';
 import { mergeScores } from '../sheet/merge.js';
@@ -33,6 +33,7 @@ export function createSheetUI(env) {
     token: 0,
     engine: null, // { kind: 'desktop'|'builtin'|'none', text }
     busy: false,
+    wantOriginal: true, // Ansicht „Original-Seite“, wenn möglich
     // Oktavieren: Geltungsbereich und Auswahl
     oct: { scope: 'all', from: 1, to: 1, line: 1, measure: 1, notes: new Set() },
     lines: [], // Zeilen des gezeigten Blatts: [{ from, to, page, staff }] (Takte im ganzen Stück, 1-basiert)
@@ -234,6 +235,7 @@ export function createSheetUI(env) {
     E.project = project;
     E.prepared = prepared;
     E.mode = prepared.length && project.origin === 'scan' ? mode : 'engraved';
+    E.wantOriginal = E.mode === 'original';
     E.partId = null;
     E.id = id;
     resetOct();
@@ -252,12 +254,14 @@ export function createSheetUI(env) {
   function syncMode() {
     const canOriginal = E.prepared.length > 0 && E.project?.origin === 'scan' && partsOf(readScore(projectXml(E.project))).length === 1;
     if (!canOriginal && E.mode === 'original') E.mode = 'engraved';
+    else if (canOriginal && E.wantOriginal && E.mode !== 'original') E.mode = 'original';
     $$('#sheet-mode .seg').forEach((b) => {
       b.classList.toggle('active', b.dataset.mode === E.mode);
       if (b.dataset.mode === 'original') b.disabled = !canOriginal;
     });
     $('#sheet-empty').classList.toggle('hidden', !!E.project);
     $('#sheet-view').classList.toggle('hidden', !E.project);
+    $('#sheet-reset').disabled = !E.project || isOriginal(E.project);
     $('#sheet-undo').disabled = !E.project?.history.length;
     $('#sheet-redo').disabled = !E.project?.future.length;
     $('#sheet-sub').textContent = E.project ? `${E.project.title || 'Ohne Titel'} · ${FORMAT_LABEL[E.project.origin] || ''}` : 'Notenblatt einscannen oder laden';
@@ -809,10 +813,10 @@ export function createSheetUI(env) {
         shares: picked.map((v) => shareOf(v)),
         title: p.title,
       });
-      const np = newProject({ title: p.title, xml: r.xml, origin: 'score', sourceInstrument: lead });
-      np.instrument = lead;
-      np.history = [...p.history];
-      setProject(np, { prepared: [], mode: 'engraved', id: E.id });
+      replaceWithScore(p, { xml: r.xml, sourceInstrument: lead, instrument: lead });
+      E.partId = null;
+      E.mode = 'engraved';
+      resetOct();
       const extra = E.melody === 'solo' ? ' In den Solo-Takten spielt die Hauptstimme die Begleitung der Solostimme.' : E.melody === 'share' ? ' Die Hauptstimme bleibt unverändert, die anderen Stimmen spielen die Melodie anteilig mit.' : E.melody === 'none' ? ' Die anderen Stimmen begleiten nur.' : '';
       notice(`${r.instruments.length} Stimmen: ${r.instruments.map((i) => INSTRUMENTS[i].short.replace(/\.$/, '')).join(', ')}. Die Hauptstimme ist dein Notenblatt (Töne 1:1).${extra}`);
       await renderView();
@@ -840,7 +844,7 @@ export function createSheetUI(env) {
       songTitle: p.title || null,
       folder: prev ? prev.folder || null : E.folder || null,
       createdAt: prev?.createdAt,
-      sheet: { origin: p.origin, sourceInstrument: p.sourceInstrument, instrument: p.instrument, chords: p.chords !== false, mode: E.mode, pages: p.pages.map((x) => ({ xml: x.xml, base: x.base })), hasImages: E.prepared.length },
+      sheet: { origin: p.origin, sourceInstrument: p.sourceInstrument, instrument: p.instrument, chords: p.chords !== false, original: p.original, mode: E.mode, pages: p.pages.map((x) => ({ xml: x.xml, base: x.base })), hasImages: E.prepared.length },
       summary: {
         style: p.origin === 'scan' ? 'Notenblatt (Scan)' : info.parts.length > 1 ? 'Partitur' : 'Notenblatt',
         voices: info.parts.map((x) => x.name),
@@ -922,6 +926,11 @@ export function createSheetUI(env) {
     const project = newProject({ title: it.title, pages: s.pages.map((x) => ({ xml: x.xml, base: x.base })), origin: s.origin === 'scan' ? 'scan' : s.origin || 'datei', sourceInstrument: s.sourceInstrument });
     project.instrument = s.instrument || null;
     project.chords = s.chords !== false;
+    if (s.original && Array.isArray(s.original.pages) && s.original.pages.length) project.original = s.original;
+    else if (s.pages.every((x) => x.base)) {
+      // ältere Blätter: der erkannte Ausgangsstand je Seite (base) ist das Original
+      project.original = { pages: s.pages.map((x) => ({ xml: x.base, base: x.base })), sourceInstrument: s.sourceInstrument, instrument: null, origin: project.origin };
+    }
     const prepared = [];
     if (s.hasImages && S.local?.getKV) {
       try {
@@ -1303,6 +1312,7 @@ export function createSheetUI(env) {
       b.addEventListener('click', () => {
         if (b.disabled) return;
         E.mode = b.dataset.mode;
+        E.wantOriginal = E.mode === 'original';
         renderView();
       }),
     );
@@ -1311,6 +1321,14 @@ export function createSheetUI(env) {
     });
     $('#sheet-redo').addEventListener('click', async () => {
       if (E.project && redo(E.project)) await renderView();
+    });
+    $('#sheet-reset').addEventListener('click', async () => {
+      if (!E.project || !resetToOriginal(E.project)) return;
+      E.partId = null;
+      resetOct();
+      notice('');
+      toast('Original wiederhergestellt – mit „Rückgängig“ geht es zurück.', 'ok');
+      await renderView();
     });
     $('#lib-select').addEventListener('click', () => setSelecting(!sel.on));
     $('#folder-select').addEventListener('click', () => setSelecting(!sel.on));

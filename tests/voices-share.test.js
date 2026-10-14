@@ -113,3 +113,24 @@ test('Solos übergeben: mehrere Stimmen teilen sich die Takte ohne Überschneidu
   assert.ok(owners.size >= 8, `Solo-Takte: ${owners.size}`);
   assert.equal(new Set(owners.values()).size, 3, 'jede Stimme hat ein Solo');
 });
+
+test('Wiederholungen bleiben wie geschrieben: gleiche Taktzahl, Zeichen und Klammern in allen Stimmen', async () => {
+  const { readScore, partsOf, measuresOf } = await import('../src/sheet/xml.js');
+  const src = readFileSync(new URL('./fixtures/scans/page-clean.musicxml', import.meta.url), 'utf8');
+  const marked = src
+    .replace('<measure number="1">', '<measure number="1"><barline location="left"><repeat direction="forward"/></barline>')
+    .replace(/(<measure number="4">[\s\S]*?)(<\/measure>)/, '$1<barline location="right"><ending number="1" type="stop"/><repeat direction="backward"/></barline>$2')
+    .replace('<measure number="3">', '<measure number="3"><barline location="left"><ending number="1" type="start"/></barline>');
+  const r = addVoices(marked, { ...COMMON, sourceId: 'trumpet', melody: 'none' });
+  const root = readScore(r.xml);
+  const parts = partsOf(root);
+  assert.equal(parts.length, 4);
+  for (const p of parts) {
+    const ms = measuresOf(p);
+    assert.equal(ms.length, 16, 'Taktzahl wie das Blatt (ohne ausgeschriebene Wiederholung)');
+    const reps = ms.flatMap((m, i) => m.all('barline').filter((b) => b.child('repeat')).map((b) => `${i + 1}:${b.child('repeat').attrs.direction}`));
+    assert.deepEqual(reps, ['1:forward', '4:backward']);
+    const ends = ms.flatMap((m, i) => m.all('barline').filter((b) => b.child('ending')).map((b) => `${i + 1}:${b.child('ending').attrs.type}`));
+    assert.deepEqual(ends.sort(), ['3:start', '4:stop']);
+  }
+});

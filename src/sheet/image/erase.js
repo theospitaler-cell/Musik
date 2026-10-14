@@ -80,6 +80,7 @@ function hasLedger(c, mask, w, staff, ox, oy) {
   // Buchstaben (e, A, t …) haben Querstriche bis ≈ 1,3 Zeilenabstände – Hilfslinien sind länger
   const runMin = sp * 1.5;
   const runMax = sp * 3.2;
+  const lineT = Math.max(1, Math.round(staff.thickness || 1));
   for (let y = c.y0; y <= c.y1; y++) {
     const yy = y + oy;
     // Höhe im Linienraster (k·space ober-/unterhalb der Linien)?
@@ -88,18 +89,34 @@ function hasLedger(c, mask, w, staff, ox, oy) {
     const k = above > 0.7 ? above : below > 0.7 ? below : null;
     if (k === null || Math.abs(k - Math.round(k)) > 0.18) continue;
     let run = 0;
-    let best = 0;
+    let runStart = 0;
     for (let x = c.x0; x <= c.x1 + 1; x++) {
       const on = x <= c.x1 && mask[y * w + x] === 1;
-      if (on) run++;
-      else {
-        best = Math.max(best, run);
+      if (on) {
+        if (!run) runStart = x;
+        run++;
+      } else {
+        if (run >= runMin && run <= runMax && thinShare(mask, w, y, runStart, runStart + run - 1, lineT) >= 0.3) return true;
         run = 0;
       }
     }
-    if (best >= runMin && best <= runMax) return true;
   }
   return false;
+}
+
+// Anteil der Spalten eines waagrechten Strichs, durch die nur eine dünne Tintenstrecke (Linienstärke) führt: bei
+// Hilfslinien außerhalb des Notenkopfs und der Hälse fast überall, in fetten Wörtern kaum (Buchstabenkörper)
+function thinShare(mask, w, y, xa, xb, lineT) {
+  const h = mask.length / w;
+  let thin = 0;
+  for (let x = xa; x <= xb; x++) {
+    let a = y;
+    let b = y;
+    while (a - 1 >= 0 && mask[(a - 1) * w + x]) a--;
+    while (b + 1 < h && mask[(b + 1) * w + x]) b++;
+    if (b - a + 1 <= lineT + 3) thin++;
+  }
+  return thin / Math.max(1, xb - xa + 1);
 }
 
 // Entscheidet je Fläche, ob sie Musik ist (siehe Kopfkommentar). Buchstaben stehen in Zeilen aus mehreren

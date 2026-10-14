@@ -9,7 +9,7 @@ import { findChordSymbols, shiftName, shiftIsIdentity, applyChordShift } from '.
 import { transposeXml } from '../src/sheet/transpose.js';
 import { chordShiftBetween } from '../src/sheet/chordshift.js';
 import { shiftOctavesXml, describeMeasure, measureCount } from '../src/sheet/octave.js';
-import { newProject, shiftOctaveProject, undo, projectXml } from '../src/sheet/project.js';
+import { newProject, shiftOctaveProject, undo, redo, projectXml } from '../src/sheet/project.js';
 import { readScore, partsOf, measuresOf } from '../src/sheet/xml.js';
 
 const FIX = new URL('./fixtures/scans/', import.meta.url);
@@ -244,4 +244,46 @@ test('Projekt: Oktavieren über mehrere Seiten, Rückgängig', () => {
   assert.ok(undo(p));
   assert.deepEqual(octaves(p.pages[0].xml), [[4], [5]]);
   assert.equal(measureCount(projectXml(p)), 4);
+});
+
+test('Auf Original zurücksetzen: Töne, Schlüssel, Instrument und Stimmen; Rückgängig bringt die Änderungen zurück', async () => {
+  const { resetToOriginal, isOriginal, replaceWithScore, transposeProject, setClefProject, convertProject } = await import('../src/sheet/project.js');
+  const p1 = score([[note('C', 0, 4), note('D', 0, 4), note('E', 0, 4), note('F', 0, 4)], [note('G', 0, 4), rest, note('A', 0, 4), note('B', 0, 4)]]);
+  const p = newProject({ pages: [{ xml: p1 }], origin: 'scan', sourceInstrument: 'trumpet' });
+  assert.ok(isOriginal(p));
+  assert.equal(resetToOriginal(p), false, 'nichts zu tun');
+  transposeProject(p, { chromatic: 2 });
+  shiftOctaveProject(p, { octaves: 1, measures: [2, 2] });
+  setClefProject(p, 'F4');
+  assert.ok(!isOriginal(p));
+  const changed = projectXml(p);
+  assert.notEqual(changed, p1);
+  assert.ok(resetToOriginal(p));
+  assert.ok(isOriginal(p));
+  assert.equal(p.pages[0].xml, p1);
+  assert.equal(p.pages[0].xml, p.pages[0].base, 'unveränderte Seite = Original-Bild');
+  // der Schritt selbst ist rückgängig zu machen
+  assert.ok(undo(p));
+  assert.equal(projectXml(p), changed);
+  assert.ok(redo(p));
+  assert.ok(isOriginal(p));
+  // Instrument-Wechsel setzt auch die Notierung zurück
+  convertProject(p, { targetId: 'trombone' });
+  assert.equal(p.sourceInstrument, 'trombone');
+  resetToOriginal(p);
+  assert.equal(p.sourceInstrument, 'trumpet');
+  assert.equal(p.instrument, null);
+  // Stimmen dazuschreiben: Rückgängig und Zurücksetzen führen zum einzelnen Blatt zurück
+  const two = p1.replace('</part-list>', '</part-list>'); // anderer Text als zweite „Partitur“
+  replaceWithScore(p, { xml: two.replace('Trompete', 'Trompete 2'), sourceInstrument: 'trumpet', instrument: 'trumpet' });
+  assert.equal(p.origin, 'score');
+  assert.ok(!isOriginal(p));
+  assert.ok(undo(p));
+  assert.equal(p.origin, 'scan');
+  assert.ok(isOriginal(p));
+  replaceWithScore(p, { xml: two.replace('Trompete', 'Trompete 2'), sourceInstrument: 'trumpet', instrument: 'trumpet' });
+  assert.ok(resetToOriginal(p));
+  assert.equal(p.origin, 'scan');
+  assert.equal(p.pages.length, 1);
+  assert.equal(p.pages[0].xml, p1);
 });

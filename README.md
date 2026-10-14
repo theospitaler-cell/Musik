@@ -228,7 +228,9 @@ Blatt anzufassen:
   bleibt die Seite unberührt; „Neu gesetzt“ zeigt das Blatt komplett aus dem MusicXML.
 - **Änderungen:** Schlüssel per Knopfdruck (Violin, Bass, Alt, Tenor), Transponieren (Halbton, Zieltonart),
   für ein Instrument umschreiben (Quelle „notiert für …“ → Ziel, Töne 1:1, Oktavlage im bequemen Bereich, passender
-  Schlüssel, Vorzeichen), Rückgängig/Wiederholen.
+  Schlüssel, Vorzeichen), Rückgängig/Wiederholen sowie **„Auf Original zurücksetzen“** (alle Änderungen inklusive
+  dazugeschriebener Stimmen zurück zum erkannten Stand; der Schritt ist mit Rückgängig umkehrbar, das Original wird
+  mit dem Blatt gespeichert).
 - **Oktavieren:** eine Oktave rauf/runter per Knopfdruck für das **ganze Stück**, eine **Zeile**, **Takte** (von–bis,
   oder im Blatt auf einen Takt tippen, Umschalt erweitert) oder **einzelne Töne** (Tonnamen antippen, auch über mehrere
   Takte). Die Auswahl ist im Blatt markiert; Haltebögen zu Tönen in anderer Oktave fallen weg, am Rand des
@@ -247,6 +249,8 @@ Blatt anzufassen:
   Takte in Blöcken von 2–4 Takten – die Stimme spielt das Solo, die Hauptstimme übernimmt währenddessen deren
   Begleitung; Soli überschneiden sich nicht, der erste Block bleibt der Hauptstimme). Umsetzung:
   `applyMelodyShare` / `applySoloShare` in `src/engine/behavior.js`, Option `melodyShare` / `soloShare`.
+  Wiederholungszeichen und Klammern des Blatts bleiben wie geschrieben (Takte werden nicht ausgeschrieben, die
+  Zeichen kommen in alle Stimmen).
 - **Bibliothek:** „Auswählen“ → mehrere Notenblätter **zu einer Partitur** (Reihenfolge nach Schema) oder
   **zu einem PDF** (Seiten umsortieren oder weglassen).
 - **Einstellungen → Besetzung (Schemas):** Maininstrument und 2.–6. Stimme, beliebig viele Schemas speichern und

@@ -5,21 +5,36 @@ import { readScore, writeScore, partsOf, measuresOf, el } from './xml.js';
 import { transposeXml, setClefXml, convertForInstrument, analyzeXml } from './transpose.js';
 import { shiftOctavesXml, measureCount } from './octave.js';
 
-export function newProject({ title = '', xml = null, pages = null, origin = 'datei', sourceInstrument = 'trumpet' } = {}) {
+export function newProject({ title = '', xml = null, pages = null, origin = 'datei', sourceInstrument = 'trumpet', original = null } = {}) {
   // base = erkannter Ausgangsstand je Seite: solange die Seite unverändert ist, bleibt das Original-Bild stehen
   const list = (pages && pages.length ? pages : [{ xml }]).map((p) => ({ xml: p.xml, image: p.image || null, base: p.base ?? p.xml }));
   return {
     title,
-    origin, // 'scan' | 'datei' | 'bibliothek'
+    origin, // 'scan' | 'datei' | 'bibliothek' | 'score'
     sourceInstrument, // Instrument, für das das Blatt notiert ist ('concert' = klingend)
     instrument: null, // Zielinstrument nach dem Umschreiben (nur Anzeige)
     pages: list,
+    // der Stand beim Laden bzw. Erkennen: dorthin führt „Auf Original zurücksetzen“
+    original: original || { pages: list.map((x) => ({ xml: x.xml, base: x.base })), sourceInstrument, instrument: null, origin },
     history: [],
     future: [],
   };
 }
 
-const snapshot = (p) => p.pages.map((x) => x.xml);
+// Ganzer Zustand für Rückgängig/Wiederholen (auch wenn Stimmen dazukommen und sich die Seiten ändern)
+const snapshot = (p) => ({
+  pages: p.pages.map((x) => ({ xml: x.xml, base: x.base })),
+  sourceInstrument: p.sourceInstrument,
+  instrument: p.instrument,
+  origin: p.origin,
+});
+
+function restore(p, s) {
+  p.pages = s.pages.map((x, i) => ({ xml: x.xml, base: x.base, image: p.pages[i]?.image || null }));
+  p.sourceInstrument = s.sourceInstrument;
+  p.instrument = s.instrument;
+  p.origin = s.origin;
+}
 
 function push(p) {
   p.history.push(snapshot(p));
@@ -30,17 +45,43 @@ function push(p) {
 export function undo(p) {
   if (!p.history.length) return false;
   p.future.push(snapshot(p));
-  const prev = p.history.pop();
-  p.pages.forEach((pg, i) => (pg.xml = prev[i]));
+  restore(p, p.history.pop());
   return true;
 }
 
 export function redo(p) {
   if (!p.future.length) return false;
   p.history.push(snapshot(p));
-  const next = p.future.pop();
-  p.pages.forEach((pg, i) => (pg.xml = next[i]));
+  restore(p, p.future.pop());
   return true;
+}
+
+// Steht das Projekt noch auf dem Original (Töne, Seiten, Instrument)?
+export function isOriginal(p) {
+  const o = p.original;
+  if (!o) return true;
+  if (o.pages.length !== p.pages.length) return false;
+  if ((o.origin || p.origin) !== p.origin) return false;
+  if ((o.sourceInstrument ?? null) !== (p.sourceInstrument ?? null)) return false;
+  return o.pages.every((x, i) => x.xml === p.pages[i].xml);
+}
+
+// Alle Änderungen zurücknehmen: Töne, Schlüssel, Tonart, Instrument, dazugeschriebene Stimmen.
+// Der Schritt selbst lässt sich mit „Rückgängig“ wieder zurücknehmen.
+export function resetToOriginal(p) {
+  if (isOriginal(p)) return false;
+  push(p);
+  restore(p, { pages: p.original.pages, sourceInstrument: p.original.sourceInstrument, instrument: p.original.instrument ?? null, origin: p.original.origin || p.origin });
+  return true;
+}
+
+// Aus dem Blatt wird eine Partitur (Stimmen dazugeschrieben): ein einziges Dokument; Rückgängig bringt das Blatt zurück
+export function replaceWithScore(p, { xml, sourceInstrument = null, instrument = null }) {
+  push(p);
+  p.pages = [{ xml, image: null, base: xml }];
+  p.origin = 'score';
+  p.sourceInstrument = sourceInstrument;
+  p.instrument = instrument;
 }
 
 // Seiten zu einem Blatt: weitere Seiten hängen ihre Takte an (Nummern laufen weiter), unveränderte Vorzeichen,
