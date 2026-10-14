@@ -3358,3 +3358,495 @@ body.lib-dragging .folder-card:not(.auto) {
     grid-template-columns: 128px minmax(0, 1fr);
   }
 }
+
+/* ---------- Start: zwei große Plus-Karten ---------- */
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 8px;
+}
+.home-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 260px;
+  padding: 32px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease), transform 0.2s var(--ease);
+}
+.home-card:hover,
+.home-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+  outline: none;
+}
+.home-plus {
+  width: 84px;
+  height: 84px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: var(--grad);
+}
+.home-plus svg {
+  width: 44px;
+  height: 44px;
+}
+.home-card strong {
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+.home-text {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.home-recent {
+  margin-top: 28px;
+}
+.home-recent h3 {
+  font-size: 15px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.home-recent-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.home-recent-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.home-recent-item:hover {
+  border-color: var(--accent);
+}
+.home-recent-item small {
+  color: var(--muted);
+}
+.back-home {
+  margin-bottom: 8px;
+}
+
+/* ---------- Noten ändern ---------- */
+.sheet-grid {
+  display: grid;
+  grid-template-columns: 400px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.sheet-load-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+#view-sheet .step-title p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.sheet-panel .field {
+  margin-bottom: 10px;
+}
+.sheet-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+.sheet-btn-row .btn {
+  flex: 1 1 auto;
+}
+.clef-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+.clef-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.clef-btn b {
+  font-size: 22px;
+  line-height: 1;
+}
+.clef-btn:hover {
+  border-color: var(--accent);
+}
+.clef-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+.sheet-info {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--muted);
+  margin: 4px 0 12px;
+}
+.sheet-info strong {
+  color: var(--text);
+}
+.sheet-notice {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: #fff6e0;
+  border: 1px solid #ecd9a6;
+  color: #6b4b00;
+  font-size: 13.5px;
+}
+.sheet-notice.error {
+  background: #fdecee;
+  border-color: #f0b8bd;
+  color: var(--danger);
+}
+.sheet-tools {
+  display: flex;
+  gap: 6px;
+}
+.sheet-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.sheet-page {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.sheet-page img,
+.sheet-page canvas,
+.sheet-page svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.voice-pick {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.voice-pick label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+.voice-pick label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.voice-pick small {
+  margin-left: auto;
+  color: var(--muted);
+}
+.part-list {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 12px;
+}
+.part-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.part-list button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 650;
+}
+
+/* ---------- Bibliothek: Auswahl ---------- */
+.lib-card .lib-check {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.library-grid.selecting .lib-card {
+  position: relative;
+  cursor: pointer;
+}
+.lib-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow);
+}
+.lib-selbar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+}
+.lib-selbar.hidden {
+  display: none;
+}
+.chip-sheet {
+  background: var(--brass) !important;
+  color: #fff !important;
+}
+
+/* ---------- Dialog Reihenfolge / Auswahl ---------- */
+.sheet-dialog-body {
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+.sheet-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+.order-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.order-row img {
+  width: 56px;
+  height: 72px;
+  object-fit: cover;
+  object-position: top;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.order-row .order-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.order-row .order-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.order-row .order-name small {
+  color: var(--muted);
+}
+.order-btns {
+  display: flex;
+  gap: 4px;
+}
+.order-row.off {
+  opacity: 0.45;
+}
+
+/* ---------- Einstellungen: Schemas ---------- */
+.scheme-row {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.scheme-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.scheme-slots {
+  display: grid;
+  gap: 8px;
+}
+.scheme-slot {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.scheme-slot > span {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.scheme-slot.main > span {
+  color: var(--accent-ink);
+}
+
+@media (max-width: 900px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .home-card {
+    min-height: 180px;
+    padding: 22px;
+  }
+  .sheet-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 520px) {
+  .scheme-slot {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .lib-selbar {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    flex-wrap: wrap;
+  }
+}
+
+/* Oktavieren & Akkordsymbole im Notenblatt-Editor */
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 4px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.check-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.oct-scope {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.oct-btn {
+  padding: 9px 8px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.oct-btn:hover {
+  border-color: var(--accent);
+}
+.oct-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+.oct-range {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+.note-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 8px;
+}
+.note-chip {
+  min-width: 48px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.note-chip.grace {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.note-chip.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg, #fff);
+  font-weight: 650;
+}
+.sheet-page {
+  position: relative;
+}
+.sheet-page .sel-box {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.sheet-page svg .sel-rect {
+  fill: var(--accent);
+  fill-opacity: 0.16;
+  stroke: var(--accent);
+  stroke-width: 20px;
+  pointer-events: none;
+}
+.sheet-page canvas,
+.sheet-page svg g.measure {
+  cursor: pointer;
+}

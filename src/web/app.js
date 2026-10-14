@@ -31,6 +31,7 @@ import { groupLibrary, mergeFolders, sameFolders, songTitleOf, uniqueFolderName 
 import { orchestrateFromOptions, ACTIVITY_NAMES } from '../engine/index.js';
 import { MIN_VOICES as MIN_ENS, MAX_VOICES as MAX_ENS, ENSEMBLE_PRESETS, ensembleLabel, applyPreset, resizeEnsemble, matchPreset, slotInfo, instrumentOptions } from '../engine/ensembles.js';
 import { hasMeterChanges } from '../model/song.js';
+import { createSheetUI } from './sheet-ui.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -328,10 +329,14 @@ function deserializeSource(s) {
 }
 
 // ---------------------------------------------------------------- Navigation
+// „Noten ändern“ und „Noten schreiben“ gehören zum Start (Navigation zeigt dort „Start“)
+const NAV_OF = { home: 'home', sheet: 'home', arrange: 'home', library: 'library', settings: 'settings' };
 function showView(name) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
-  $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.nav === name));
+  $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.nav === (NAV_OF[name] || name)));
   if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
+  if (name === 'home' && S.sheet) S.sheet.renderHome();
+  if (name === 'sheet' && S.sheet) S.sheet.onShowSheet();
   if (name === 'library') renderLibrary();
   if (name === 'settings') renderSettings();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2524,7 +2529,7 @@ function itemCard(it) {
   const card = document.createElement('div');
   card.className = 'card lib-card';
   const sm = it.summary || {};
-  card.innerHTML = `<div class="meta-chips"><span class="accent">${sm.style || ''}</span>${sm.key ? `<span>${sm.key}</span>` : ''}${sm.bars ? `<span>${sm.bars} Takte</span>` : ''}</div>
+  card.innerHTML = `<div class="meta-chips"><span class="accent${it.kind === 'sheet' ? ' chip-sheet' : ''}">${sm.style || ''}</span>${sm.key ? `<span>${sm.key}</span>` : ''}${sm.bars ? `<span>${sm.bars} Takte</span>` : ''}</div>
       <div class="lib-title"><h3></h3><button class="icon-btn small rename" title="Titel ändern" aria-label="Titel ändern"><svg><use href="#i-pen"/></svg></button></div>
       <div class="lib-meta">${(sm.voices || []).join(', ')}${sm.drums ? ', Schlagzeug' : ''}</div>
       <div class="lib-meta">${fmtDate(it.updatedAt)}${it.dirty && S.library.cloud.user ? ' · wird synchronisiert' : ''}</div>
@@ -2550,6 +2555,7 @@ function itemCard(it) {
       },
     });
   });
+  if (S.sheet) S.sheet.decorateCard(card, it);
   if (canDrag()) {
     card.draggable = true;
     card.addEventListener('dragstart', (e) => {
@@ -2858,6 +2864,8 @@ async function installUpdate() {
 
 // Arrangement aus der Bibliothek öffnen: eigener Tab (oder der schon offene)
 async function openItem(id) {
+  const sheetItem = await S.library.get(id);
+  if (sheetItem && sheetItem.kind === 'sheet') return S.sheet.openItem(sheetItem);
   const open = S.tabs.find((t) => t.currentId === id || t.pendingId === id);
   if (open) {
     if (open !== S.tab && S.busy) return busyToast();
@@ -2885,16 +2893,8 @@ async function openItem(id) {
 // ---------------------------------------------------------------- Einstellungen
 function renderSettings() {
   const st = S.settings;
-  const n = st.defaultVoices.length;
-  renderVoiceCount($('#set-voice-count'), n, (k) => {
-    update({ defaultVoices: resizeVoices(st.defaultVoices, k) });
-    renderSettings();
-  });
-  $('#set-voice-count-name').textContent = ensembleName(n);
-  renderVoiceGrid($('#set-voices'), [...st.defaultVoices], (v) => {
-    update({ defaultVoices: [...v] });
-    fillSoloSelect($('#set-solo'), v, $('#set-solo').value);
-  });
+  // Besetzung: das aktive Schema bestimmt die Standardstimmen (bleibt für ältere Einstellungen in defaultVoices)
+  if (S.sheet) S.sheet.renderSchemes();
   fillSoloSelect($('#set-solo'), st.defaultVoices, st.defaultSolo);
   difficultyOptions($('#set-difficulty'), st.defaultDifficulty ?? 'auto');
   $('#set-form').value = st.form;
@@ -3190,8 +3190,23 @@ async function main() {
       showView(b.dataset.nav);
     }),
   );
-  const startView = (location.hash || '#arrange').slice(1);
-  if (['arrange', 'library', 'settings'].includes(startView)) showView(startView);
+  // Noten ändern / Start-Bildschirm / Bibliothek-Auswahl
+  S.sheet = createSheetUI({
+    $,
+    $$,
+    S,
+    toast,
+    progress,
+    download,
+    showView,
+    safeName,
+    openItem,
+    renderLibrary,
+    updateSettings: (patch) => update(patch),
+  });
+  S.sheet.mount();
+  const startView = (location.hash || '#home').slice(1);
+  showView(['home', 'sheet', 'arrange', 'library', 'settings'].includes(startView) ? startView : 'home');
 
   $$('#ensemble-tabs .seg').forEach((b) => b.addEventListener('click', () => setEnsemble(b.dataset.ens)));
 

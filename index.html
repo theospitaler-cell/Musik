@@ -21,12 +21,12 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="#arrange" data-nav="arrange" aria-label="NoteCode Startseite">
+      <a class="brand" href="#home" data-nav="home" aria-label="NoteCode Startseite">
         <img src="icon.svg" alt="" width="34" height="34" />
         <span class="wordmark">Note<span>Code</span></span>
       </a>
       <nav class="nav" aria-label="Hauptnavigation">
-        <button class="nav-btn active" data-nav="arrange"><svg><use href="#i-wand" /></svg><span>Arrangieren</span></button>
+        <button class="nav-btn active" data-nav="home"><svg><use href="#i-home" /></svg><span>Start</span></button>
         <button class="nav-btn" data-nav="library"><svg><use href="#i-library" /></svg><span>Bibliothek</span></button>
         <button class="nav-btn" data-nav="settings"><svg><use href="#i-settings" /></svg><span>Einstellungen</span></button>
       </nav>
@@ -40,8 +40,78 @@
     </header>
 
     <main>
+      <!-- ====================== START ====================== -->
+      <section class="view active" id="view-home">
+        <div class="page-head"><div><h1>Was möchtest du tun?</h1><p class="muted">Noten ändern oder neue Noten schreiben lassen</p></div></div>
+        <div class="home-grid">
+          <button class="home-card" id="home-edit" type="button">
+            <span class="home-plus"><svg><use href="#i-plus" /></svg></span>
+            <strong>Noten ändern</strong>
+            <span class="home-text">Notenblatt einscannen oder laden · Schlüssel wechseln · transponieren · für ein anderes Instrument umschreiben · Stimmen dazuschreiben</span>
+          </button>
+          <button class="home-card" id="home-write" type="button">
+            <span class="home-plus"><svg><use href="#i-plus" /></svg></span>
+            <strong>Noten schreiben</strong>
+            <span class="home-text">Aus MP3, MIDI, MusicXML oder ABC ein Arrangement erstellen (bisherige Version)</span>
+          </button>
+        </div>
+        <div class="home-recent" id="home-recent"></div>
+      </section>
+
+      <!-- ====================== NOTEN ÄNDERN ====================== -->
+      <section class="view" id="view-sheet">
+        <div class="page-head sheet-head">
+          <div>
+            <button class="btn ghost small back-home" data-nav="home" type="button"><svg><use href="#i-chevron-left" /></svg><span>Start</span></button>
+            <h1 id="sheet-title-h">Noten ändern</h1>
+            <p class="muted" id="sheet-sub">Notenblatt einscannen oder laden</p>
+          </div>
+        </div>
+        <div class="sheet-grid" id="sheet-grid">
+          <aside class="steps" id="sheet-steps">
+            <section class="card step" id="sheet-load">
+              <div class="step-head"><span class="step-num">1</span><div class="step-title"><h2>Notenblatt</h2><p>Foto, Scan, MusicXML, MIDI oder ABC</p></div></div>
+              <label class="dropzone" id="sheet-drop">
+                <input type="file" id="sheet-file" accept="image/*,.musicxml,.xml,.mxl,.mid,.midi,.kar,.abc,.txt" hidden multiple />
+                <svg class="dz-icon"><use href="#i-image" /></svg>
+                <strong>Notenblatt hierher ziehen oder tippen</strong>
+                <span>Bild (JPG, PNG, Foto) · MusicXML · MIDI · ABC</span>
+              </label>
+              <div class="sheet-load-row">
+                <label class="btn ghost small"><svg><use href="#i-camera" /></svg><span>Foto aufnehmen</span><input type="file" id="sheet-camera" accept="image/*" capture="environment" hidden /></label>
+                <button class="btn ghost small" id="sheet-from-lib" type="button"><svg><use href="#i-library" /></svg><span>Aus der Bibliothek</span></button>
+              </div>
+              <p class="muted small" id="sheet-engine"></p>
+            </section>
+            <div id="sheet-panels"></div>
+          </aside>
+          <section class="workspace card sheet-work" id="sheet-work">
+            <div class="empty-state" id="sheet-empty">
+              <div class="empty-art"><img src="icon.svg" alt="" /></div>
+              <h2>Noch kein Notenblatt</h2>
+              <p>Lade links ein Foto oder eine Datei. Die Seite bleibt, wie sie ist – nur die Noten ändern sich, wenn du Schlüssel, Tonart oder Instrument wechselst.</p>
+            </div>
+            <div class="sheet-view hidden" id="sheet-view">
+              <div class="score-toolbar">
+                <div class="segmented small" id="sheet-mode" role="radiogroup" aria-label="Ansicht">
+                  <button class="seg active" data-mode="original" type="button">Original-Seite</button>
+                  <button class="seg" data-mode="engraved" type="button">Neu gesetzt</button>
+                </div>
+                <div class="sheet-tools">
+                  <button class="icon-btn" id="sheet-undo" title="Rückgängig" aria-label="Rückgängig" type="button">↶</button>
+                  <button class="icon-btn" id="sheet-redo" title="Wiederholen" aria-label="Wiederholen" type="button">↷</button>
+                </div>
+              </div>
+              <div class="sheet-notice hidden" id="sheet-notice"></div>
+              <div class="pages sheet-pages" id="sheet-pages"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
       <!-- ====================== ARRANGIEREN ====================== -->
-      <section class="view active" id="view-arrange">
+      <section class="view" id="view-arrange">
+        <button class="btn ghost small back-home" data-nav="home" type="button"><svg><use href="#i-chevron-left" /></svg><span>Start</span></button>
         <!-- Geöffnete Lieder als Tabs -->
         <div class="song-tabs" id="song-tabs">
           <div class="song-tab-list" id="song-tab-list" role="tablist" aria-label="Geöffnete Projekte"></div>
@@ -313,10 +383,12 @@
           </div>
           <div class="head-actions" id="lib-actions">
             <button class="btn ghost" id="sync-now"><svg><use href="#i-sync" /></svg><span>Jetzt synchronisieren</span></button>
+            <button class="btn ghost" id="lib-select"><svg><use href="#i-layers" /></svg><span>Auswählen</span></button>
             <button class="btn ghost" id="lib-folder-new"><svg><use href="#i-folder-plus" /></svg><span>Neuer Ordner</span></button>
             <button class="btn primary" id="lib-new"><svg><use href="#i-plus" /></svg><span>Neues Arrangement</span></button>
           </div>
           <div class="head-actions hidden" id="folder-actions">
+            <button class="btn ghost" id="folder-select"><svg><use href="#i-layers" /></svg><span>Auswählen</span></button>
             <button class="btn primary" id="folder-new-arr"><svg><use href="#i-plus" /></svg><span>Neues Arrangement</span></button>
             <button class="btn ghost" id="folder-rename"><svg><use href="#i-pen" /></svg><span>Umbenennen</span></button>
             <button class="btn ghost" id="folder-keep"><svg><use href="#i-folder-plus" /></svg><span>Als eigenen Ordner behalten</span></button>
@@ -324,6 +396,12 @@
           </div>
         </div>
         <div class="library-grid" id="library-grid"></div>
+        <div class="lib-selbar hidden" id="lib-selbar" role="toolbar" aria-label="Auswahl">
+          <span id="lib-selcount">0 ausgewählt</span>
+          <button class="btn primary small" id="lib-merge-score" type="button"><svg><use href="#i-layers" /></svg><span>Zu einer Partitur</span></button>
+          <button class="btn ghost small" id="lib-merge-pdf" type="button"><svg><use href="#i-pdf" /></svg><span>Zu einem PDF</span></button>
+          <button class="btn ghost small" id="lib-select-off" type="button">Abbrechen</button>
+        </div>
       </section>
 
       <!-- ====================== EINSTELLUNGEN ====================== -->
@@ -336,13 +414,28 @@
             <p class="muted small" id="upd-status"></p>
             <div class="row-end"><button class="btn primary small" id="upd-check"><svg><use href="#i-sync" /></svg><span>Nach Updates suchen</span></button></div>
           </div>
+          <div class="card" id="scheme-card">
+            <h3>Besetzung (Schemas)</h3>
+            <p class="muted small">Maininstrument und 2.–6. Stimme. Diese Instrumente stehen überall als Vorlage: beim Noten schreiben, beim Dazuschreiben von Stimmen, in der Partitur und als Ziel beim Umschreiben.</p>
+            <div class="scheme-row">
+              <label class="field"><span>Aktives Schema</span><select id="scheme-select"></select></label>
+              <div class="scheme-actions">
+                <button class="btn ghost small" id="scheme-new" type="button"><svg><use href="#i-plus" /></svg><span>Neu</span></button>
+                <button class="btn ghost small" id="scheme-copy" type="button"><svg><use href="#i-layers" /></svg><span>Kopie</span></button>
+                <button class="btn ghost small" id="scheme-rename" type="button"><svg><use href="#i-pen" /></svg><span>Umbenennen</span></button>
+                <button class="btn ghost small danger" id="scheme-delete" type="button"><svg><use href="#i-trash" /></svg><span>Löschen</span></button>
+              </div>
+            </div>
+            <div class="scheme-slots" id="scheme-slots"></div>
+          </div>
+          <div class="card" id="omr-card">
+            <h3>Notenerkennung (Notenblatt-Scan)</h3>
+            <p class="stems-status muted small" id="omr-status">Wird geprüft …</p>
+            <p class="muted small">Die KI-Erkennung (homr) läuft in der Desktop-App auf deinem Computer: Foto oder Scan rein, MusicXML raus. Einmal einrichten mit <code>node scripts/setup-omr.mjs</code>. Ohne sie nutzt NoteCode die einfachere eingebaute Erkennung (saubere, gerade Drucke einstimmiger Stimmen) – auch auf dem Handy und im Browser.</p>
+            <div class="row-end"><button class="btn small" id="omr-recheck" type="button">Erneut prüfen</button></div>
+          </div>
           <div class="card">
             <h3>Standard für neue Arrangements</h3>
-            <div class="sub-block">
-              <div class="sub-label"><span>Anzahl Stimmen</span><span class="sub-note" id="set-voice-count-name">Quartett</span></div>
-              <div class="segmented count-seg" id="set-voice-count" role="radiogroup" aria-label="Anzahl Stimmen"></div>
-            </div>
-            <div class="voice-grid" id="set-voices"></div>
             <div class="field-grid">
               <label class="field"><span>Hauptsolo</span><select id="set-solo"></select></label>
               <label class="field"><span>Schwierigkeit</span><select id="set-difficulty"></select></label>
@@ -444,6 +537,20 @@
       </form>
     </dialog>
 
+    <dialog id="sheet-dialog" aria-labelledby="sheet-dialog-title">
+      <form method="dialog" class="move-form sheet-dialog-form" id="sheet-dialog-form">
+        <div class="move-head">
+          <div>
+            <h2 id="sheet-dialog-title">Dialog</h2>
+            <p class="muted small" id="sheet-dialog-sub"></p>
+          </div>
+          <button class="icon-btn" value="cancel" aria-label="Schließen"><svg><use href="#i-x" /></svg></button>
+        </div>
+        <div class="sheet-dialog-body" id="sheet-dialog-body"></div>
+        <div class="sheet-dialog-foot" id="sheet-dialog-foot"></div>
+      </form>
+    </dialog>
+
     <dialog id="move-dialog" aria-labelledby="move-title">
       <form method="dialog" class="move-form">
         <div class="move-head">
@@ -489,6 +596,8 @@
         <symbol id="i-pause" viewBox="0 0 24 24"><g fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2" /><rect x="14" y="5" width="4" height="14" rx="1.2" /></g></symbol>
         <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" /></symbol>
         <symbol id="i-sync" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5" /></symbol>
+        <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-camera" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.5" /></g></symbol>
         <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
         <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-wave" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 10v4M7 7v10M11 4v16M15 8v8M19 10v4M23 11v2" /></symbol>

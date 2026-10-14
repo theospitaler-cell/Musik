@@ -160,3 +160,37 @@ export async function xmlsToPdf(xmlList, { paper = 'A4', zoom = 1, title = 'Note
   }
   return new Uint8Array(pdf.output('arraybuffer'));
 }
+
+// ---- Notenblatt-Editor: SVG-Seiten und Scan-Seiten als Canvas bzw. PDF -------------------------------
+export async function svgPagesToCanvases(svgs, paper = 'A4') {
+  const P = PAPERS[paper] || PAPERS.A4;
+  const out = [];
+  for (const svg of svgs) out.push(await svgToCanvas(svg, Math.round(P.wMm * 9.84)));
+  return out;
+}
+
+// Seiten (Canvas) -> PDF; jede Seite hat die Breite des Papiers und ihr eigenes Seitenverhältnis
+// (Scans sind selten genau A4). original = Original-Seiten (verlustarm), sonst gesetzte Seiten.
+export async function canvasesToPdf(canvases, { title = 'NoteCode', name = 'Notenblatt.pdf', download = null, original = false, widthMm = 210 } = {}) {
+  const JsPDF = await loadJsPdf();
+  let pdf = null;
+  for (const c of canvases) {
+    const w = widthMm;
+    const hgt = Math.round((widthMm * c.height) / c.width * 100) / 100;
+    if (!pdf) {
+      pdf = new JsPDF({ unit: 'mm', format: [w, hgt], orientation: hgt >= w ? 'portrait' : 'landscape', compress: true });
+      pdf.setProperties({ title, creator: 'NoteCode' });
+    } else pdf.addPage([w, hgt], hgt >= w ? 'portrait' : 'landscape');
+    pdf.addImage(c.toDataURL(original ? 'image/png' : 'image/jpeg', 0.92), original ? 'PNG' : 'JPEG', 0, 0, w, hgt, undefined, 'FAST');
+    await tick();
+  }
+  const bytes = new Uint8Array(pdf.output('arraybuffer'));
+  if (download) download(name, bytes, 'application/pdf');
+  return bytes;
+}
+
+export async function xmlToPdf(xml, { paper = 'A4', part = true, zoom = 1, title = 'NoteCode', name = 'Notenblatt.pdf', download = null, onProgress = null } = {}) {
+  const bytes = await xmlsToPdf([{ xml, part }], { paper, zoom, title, onProgress });
+  if (download) download(name, bytes, 'application/pdf');
+  return bytes;
+}

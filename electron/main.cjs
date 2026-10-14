@@ -5,6 +5,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const stems = require('./stems.cjs');
+const omr = require('./omr.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const REPO = 'theospitaler-cell/Musik';
@@ -162,6 +163,36 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('stems:cancel', () => {
     if (stemJob) stemJob.abort();
+    return true;
+  });
+  // ---- Notenerkennung (homr): Notenblatt-Bild -> MusicXML
+  let omrStatus = null;
+  let omrStatusAt = 0;
+  ipcMain.handle('omr:status', async (_e, { refresh = false } = {}) => {
+    if (!refresh && omrStatus && Date.now() - omrStatusAt < 60000) return omrStatus;
+    omrStatus = await omr.status();
+    omrStatusAt = Date.now();
+    return omrStatus;
+  });
+  let omrJob = null;
+  ipcMain.handle('omr:recognize', async (e, { image, ext = 'png' }) => {
+    if (omrJob) throw new Error('Die Notenerkennung läuft bereits');
+    const ctl = new AbortController();
+    omrJob = ctl;
+    try {
+      const st = omrStatus || (omrStatus = await omr.status());
+      return await omr.recognize(new Uint8Array(image), {
+        ext,
+        exe: st.exe,
+        signal: ctl.signal,
+        onProgress: (frac, text) => e.sender.send('omr:progress', { frac, text }),
+      });
+    } finally {
+      omrJob = null;
+    }
+  });
+  ipcMain.handle('omr:cancel', () => {
+    if (omrJob) omrJob.abort();
     return true;
   });
   if (process.platform !== 'darwin') Menu.setApplicationMenu(null);

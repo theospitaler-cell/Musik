@@ -200,6 +200,45 @@ automatische Arrangement ist das ein sehr guter Entwurf, kein Ersatz für einen 
 Das Ergebnis ist eine Annäherung – am besten bei klar hörbarer Melodie. Die Analyse wird in
 der Bibliothek gespeichert (und synchronisiert), die Aufnahme selbst bleibt auf dem Gerät.
 
+### Noten ändern (Notenblatt-Editor, `src/sheet/`)
+
+Der Start-Bildschirm hat zwei große Plus-Knöpfe: **Noten ändern** (neu) und **Noten schreiben** (die bisherige
+Arrangier-Version). „Noten ändern“ nimmt ein Foto/Scan, MusicXML, MIDI oder ABC und ändert die Noten, ohne das
+Blatt anzufassen:
+
+- **Original-Seite behalten:** Hintergrund wird perfekt weiß (Beleuchtung ausgeglichen, Seite gerade gedreht),
+  Titel, Komponist, Akkordsymbole, Dynamik und alle Texte bleiben Pixel für Pixel erhalten. Nur die Notenzeilen
+  werden neu gesetzt – gleiche Stelle, gleicher Linienabstand, gleiche Taktstriche. Solange nichts geändert ist,
+  bleibt die Seite unberührt; „Neu gesetzt“ zeigt das Blatt komplett aus dem MusicXML.
+- **Änderungen:** Schlüssel per Knopfdruck (Violin, Bass, Alt, Tenor), Transponieren (Halbton, Zieltonart),
+  für ein Instrument umschreiben (Quelle „notiert für …“ → Ziel, Töne 1:1, Oktavlage im bequemen Bereich, passender
+  Schlüssel, Vorzeichen), Rückgängig/Wiederholen.
+- **Oktavieren:** eine Oktave rauf/runter per Knopfdruck für das **ganze Stück**, eine **Zeile**, **Takte** (von–bis,
+  oder im Blatt auf einen Takt tippen, Umschalt erweitert) oder **einzelne Töne** (Tonnamen antippen, auch über mehrere
+  Takte). Die Auswahl ist im Blatt markiert; Haltebögen zu Tönen in anderer Oktave fallen weg, am Rand des
+  Notenbereichs (Oktave 0–9) wird nichts verschoben (`src/sheet/octave.js`).
+- **Akkordsymbole im Bild:** wandern beim Transponieren mit (G → A, D7 → E7 …). Gefunden werden Grundton
+  (A–G mit ♯/♭) und Bass nach dem Schrägstrich; Zusätze wie „7“, „m“, „maj7“ bleiben als Bild und werden nur
+  verschoben. Titel, Tempoangaben („Allegretto“), Textzeilen, Rehearsal-Kästchen und Taktnummern werden dabei
+  nicht angefasst (`src/sheet/image/chords.js`). Abschaltbar unter „Akkordsymbole im Bild mitändern“; die
+  Anzeige nennt die erkannten Grundtöne zur Kontrolle.
+- **Stimmen dazuschreiben:** das Blatt ist die Hauptstimme (Töne 1:1); die weiteren Stimmen kommen aus dem
+  aktiven Schema und der Orchestrierung (Führung dynamisch/klassisch).
+- **Bibliothek:** „Auswählen“ → mehrere Notenblätter **zu einer Partitur** (Reihenfolge nach Schema) oder
+  **zu einem PDF** (Seiten umsortieren oder weglassen).
+- **Einstellungen → Besetzung (Schemas):** Maininstrument und 2.–6. Stimme, beliebig viele Schemas speichern und
+  wechseln; das aktive Schema ist Vorlage für neue Stimmen, die Besetzung beim Noten schreiben, die Reihenfolge in
+  der Partitur und das Zielinstrument.
+
+**Notenerkennung (Foto/Scan → MusicXML):** In der Desktop-App läuft **homr** (KI) lokal – einmal einrichten mit
+`node scripts/setup-omr.mjs` (eigene Python-Umgebung unter `~/.notecode/omr`, kein PyTorch nötig). Überall sonst
+(Browser, Android) nutzt NoteCode die **eingebaute Erkennung** (`src/sheet/image/recognize.js`): saubere, gerade
+Drucke einstimmiger Stimmen – Schlüssel, Vorzeichen, Noten, Pausen, Haltebögen, Taktstriche. An gerenderten
+Beispielblättern (`tests/fixtures/scans`) trifft sie rund 80 % der Takte exakt; für Fotos und dichte Sätze ist die
+KI deutlich besser. Grenzen: Liedtext und andere Texte im Bild bleiben unverändert (auch Instrumentennamen wie
+„Trp.“); Akkordsymbole werden nur an serifenlosen Grundtönen A–G erkannt (an den Beispielblättern ~98 % ohne
+falsche Treffer), Bögen/Verzierungen nur soweit erkannt, PDF-Scans bitte als Bild laden.
+
 ### Orchestrierungs-Engine (`src/engine/`, 1–15 Stimmen)
 
 Eigenständige Schicht, die Demucs-Stems (oder ein Lied aus ABC/MIDI/MusicXML) in eine spielbare

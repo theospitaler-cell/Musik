@@ -18,4 +18,13 @@ contextBridge.exposeInMainWorld('notecodeDesktop', {
     ipcRenderer.on('stems:progress', fn);
     return () => ipcRenderer.removeListener('stems:progress', fn);
   },
+  // Notenerkennung (homr): Notenblatt-Bild -> MusicXML
+  omrStatus: (refresh = false) => ipcRenderer.invoke('omr:status', { refresh }),
+  recognizeSheet: (image, ext = 'png') => ipcRenderer.invoke('omr:recognize', { image, ext }),
+  cancelOmr: () => ipcRenderer.invoke('omr:cancel'),
+  onOmrProgress: (cb) => {
+    const fn = (_e, p) => cb(p);
+    ipcRenderer.on('omr:progress', fn);
+    return () => ipcRenderer.removeListener('omr:progress', fn);
+  },
 });
