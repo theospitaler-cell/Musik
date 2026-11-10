@@ -356,7 +356,8 @@ function attackPlan(bar, ctx, hasLead, behavior) {
   const { geo } = ctx;
   const info = ctx.decode.bars[bar];
   const rhythmic = info && info.mode === 'rhythmic';
-  if (info && info.ostinato && info.pattern && (hasLead || info.density > 0)) {
+  // (auch in überbrückten Lücken des Musters ohne eigene Anschläge – das Muster läuft durch)
+  if (info && info.ostinato && info.pattern) {
     // Wiederkehrendes Begleitmuster der Vorlage (Ostinato, z. B. die Streicher-Akkorde in „Viva la Vida“):
     // genau so übernehmen – alle Begleitstimmen gemeinsam. Das Muster trägt den Wiedererkennungswert;
     // verschoben oder auf zwei Gruppen verteilt wäre es ein anderes Lied. Längen: bis zum nächsten Anschlag,

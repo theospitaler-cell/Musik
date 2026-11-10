@@ -116,9 +116,11 @@ export function validateArrangement(arr, { maxRunBars = 8, sharedMax = 0.65 } = 
   }
 
   // 7. Melodieübernahme: Lead pausiert ≥ 2 Zählzeiten -> eine Nebenstimme führt (dynamischer Modus)
+  // (bei Aufnahmen mit übernommener Textur ab einem Takt – siehe orchestrate)
   if (lead && N >= 2 && behavior.dynamic) {
     const line = sortEvents([...lead.events]);
-    for (const g of leadGaps(line, { beat })) {
+    const minBeats = (arr.engine && arr.engine.handoffMinBeats) || 2;
+    for (const g of leadGaps(line, { beat, minBeats })) {
       const filled = voices.some((x) => x !== lead && x.role !== 'double8' && x.role !== 'doubleU' && x.events.some((e) => e.role === 'answer' && e.start >= g.start && e.start < g.end));
       if (!filled) v('handoff', { gap: [g.start, g.end] });
     }

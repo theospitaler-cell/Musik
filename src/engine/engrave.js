@@ -377,7 +377,7 @@ export function buildArrangement(score, { title, composer = '', N, sections = nu
     form: { repeats: [], skip: null, segnoBar: null, toCodaBar: null, dsBar: null, codaBar: null },
     report: { notes: [...(material.report?.notes || []), ...score.report.notes] },
     options: { voices: N },
-    engine: { report: score.report, track: ctx.track, behavior: score.behavior || null },
+    engine: { report: score.report, track: ctx.track, behavior: score.behavior || null, handoffMinBeats: score.handoffMinBeats || 2 },
   };
   void chordAtList;
   return arr;

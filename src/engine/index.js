@@ -183,7 +183,11 @@ export function orchestrate(input, opts = {}) {
   if (N >= 2 && behavior.dynamic) {
     // Lücken -> Einwürfe/Läufe/Gegenmelodien (Call-and-Response), Haltetöne -> Bewegung darunter,
     // dazu Mini-Solos. Im klassischen Modus bleibt die Melodie ganz bei der Lead-Stimme.
-    applyHandoff(score, { minBeats: behavior.gapBeats, maxBars: behavior.answerBars });
+    // Aufnahmen mit übernommener Textur: Einwürfe nur in Melodiepausen ab einem Takt (gedruckte Sätze füllen
+    // nicht jede kurze Lücke – kurze Einwürfe in Begleitstimmen ließen deren Dynamik ständig wechseln)
+    const minBeats = useTexture ? Math.max(behavior.gapBeats, score.ctx.geo.nBeats) : behavior.gapBeats;
+    score.handoffMinBeats = Math.max(2, minBeats);
+    applyHandoff(score, { minBeats, maxBars: behavior.answerBars });
     applySustainCounters(score, behavior);
     applyMiniSolos(score, behavior, detectSections(score.ctx));
   }
