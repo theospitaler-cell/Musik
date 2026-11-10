@@ -80,17 +80,74 @@ export function prepare(material, opts = {}) {
   decode.fromChords = compRhythm.length >= 16;
   // nur aus echten Akkordanschlägen (Aufnahmen); Begleitstimmen allein sind kein Begleitrhythmus
   if (decode.fromChords) markOstinato(decode.bars, geo.mt);
+  // Nachschlag-Begleitung (Two-Beat/Swing: Horn und Posaune auf den „und“, Bass auf den Schlägen – „Puttin'
+  // on the Ritz“): ohne festes Muster, aber deutlich mehr Akkordanschläge zwischen den Schlägen als auf ihnen.
+  // Gemessen: Ritz 1,41; Lieder mit Anschlägen auf dem Schlag (Rocky, Bond) 0,55–0,69, Viva außerhalb des
+  // Ostinatos 1,14
+  decode.offbeat = decode.fromChords && !geo.compound && geo.beat % 2 === 0 ? offbeatComp(decode.bars, geo) : false;
   // Intro/Zwischenspiel ohne Gesang: läuft die „Melodie“ dort im Rhythmus des Begleitmusters, ist sie nur
   // dessen Oberstimme (die Tonerkennung nimmt mangels Gesang den obersten Begleitton). Gedruckte Sätze lassen
   // dort das Muster allein spielen – im Intro von „Viva la Vida“ pausieren Trompeten und Melodiestimmen
   const accompLead = decode.fromChords ? accompanimentLeadBars(lead, decode.bars, material.vocal, geo, M) : [];
-  if (accompLead.length) {
-    const set = new Set(accompLead);
+  const lowLead = decode.fromChords ? lowLeadBars(lead, geo, M).filter((b) => !accompLead.includes(b)) : [];
+  if (accompLead.length || lowLead.length) {
+    const set = new Set([...accompLead, ...lowLead]);
     const kept = lead.filter((n) => !set.has(Math.floor(n.start / geo.mt)));
     if (kept.length >= 8) lead = kept;
-    else accompLead.length = 0;
+    else {
+      accompLead.length = 0;
+      lowLead.length = 0;
+    }
   }
-  return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material, accompLead };
+  return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material, accompLead, lowLead };
+}
+
+// „Melodie“ weit unter ihrer Lage: liegen alle Töne eines Takts mindestens eine Oktave unter der Mitte der
+// Melodie des Stücks (nach Dauer gewichtet), ist es die Basslinie oder eine Begleitfigur, die die Erkennung
+// mangels Melodie genommen hat (die Tuba allein im Intro von „Puttin' on the Ritz“, eine Oktave höher gehört).
+// Nur Strecken ab zwei Takten.
+function lowLeadBars(lead, geo, M) {
+  if (lead.length < 32) return [];
+  const w = lead.map((n) => [n.midi, n.dur]).sort((a, b) => a[0] - b[0]);
+  const tot = w.reduce((a, x) => a + x[1], 0);
+  let acc = 0;
+  let mid = w[0][0];
+  for (const [p, d] of w) {
+    acc += d;
+    if (acc >= tot / 2) {
+      mid = p;
+      break;
+    }
+  }
+  const maxIn = new Array(M).fill(null);
+  for (const n of lead) {
+    const b = Math.floor(n.start / geo.mt);
+    if (b >= 0 && b < M) maxIn[b] = Math.max(maxIn[b] ?? -Infinity, n.midi);
+  }
+  const low = maxIn.map((m) => m !== null && m < mid - 12);
+  const out = [];
+  for (let b = 0; b < M; ) {
+    if (!low[b]) {
+      b++;
+      continue;
+    }
+    let z = b;
+    // Takte ohne Melodie dazwischen gehören zur Strecke
+    while (z < M && (low[z] || (maxIn[z] === null && z + 1 < M && low[z + 1]))) z++;
+    if (low.slice(b, z).filter(Boolean).length >= 2) for (let k = b; k < z; k++) if (low[k]) out.push(k);
+    b = z;
+  }
+  return out;
+}
+
+function offbeatComp(bars, geo) {
+  const free = bars.filter((b) => b.hits.length && !b.ostinato);
+  if (free.length < 16) return false;
+  const rate = (t) => free.filter((b) => b.hits.some((h) => Math.abs(h.t - t) <= 3)).length / free.length;
+  const ks = Array.from({ length: geo.nBeats }, (_, k) => k * geo.beat);
+  const on = ks.reduce((a, t) => a + rate(t), 0) / ks.length;
+  const and = ks.reduce((a, t) => a + rate(t + geo.beat / 2), 0) / ks.length;
+  return and >= 0.3 && and >= 1.3 * Math.max(0.05, on);
 }
 
 // Takte ohne Gesang, deren „Melodie“ im Begleitmuster mitläuft (≥ 60 % der Einsätze auf den Plätzen des
@@ -313,6 +370,11 @@ function attackPlan(bar, ctx, hasLead, behavior) {
     });
     return { kind: 'ostinato', A: list, B: list };
   }
+  // Nachschlag-Begleitung der Vorlage: kurze Klänge auf jedem „und“, alle Begleitstimmen gemeinsam
+  if (ctx.decode.fromChords && ctx.decode.offbeat && info && (hasLead || info.density > 0)) {
+    const list = Array.from({ length: geo.nBeats }, (_, k) => [k * geo.beat + geo.beat / 2, geo.beat / 2, 'stab']);
+    return { kind: 'stabs', together: true, offbeat: true, A: list, B: list };
+  }
   // Aufnahme ohne klares, wiederkehrendes Begleitmuster: die einzelnen Anschläge eines Takts sind zu unsicher,
   // um sie als Rhythmus auszuschreiben – die Begleitstimmen halten lange Töne (ruhig, gut spielbar; die
   // Bewegung kommt von Melodie und Bass). So stehen auch gedruckte Sätze, wenn eine Stimme die Melodie führt.
@@ -404,15 +466,17 @@ export function compose(material, N, opts = {}) {
   // Führung & Stimmendynamik: dynamisch/polyphon oder klassischer Solo-Lead (Aktivität 1–5)
   const behavior = opts.behavior || behaviorFor({ mode: opts.mode, activity: opts.activity });
   const report = { notes: [], voicings: [], fills: [], breaths: [], repairs: { friction: 0, perfects: 0, leaps: 0 } };
-  if (ctx.accompLead && ctx.accompLead.length) {
+  const barRuns = (list) => {
     const runs = [];
-    for (const b of ctx.accompLead) {
+    for (const b of list) {
       const r = runs[runs.length - 1];
       if (r && r[1] === b - 1) r[1] = b;
       else runs.push([b, b]);
     }
-    report.notes.push(`Ohne Gesang (${runs.map(([a, z]) => (a === z ? `Takt ${a + 1}` : `Takte ${a + 1}–${z + 1}`)).join(', ')}): die Oberstimme der Begleitung ist keine Melodie – dort spielt das Begleitmuster allein`);
-  }
+    return runs.map(([a, z]) => (a === z ? `Takt ${a + 1}` : `Takte ${a + 1}–${z + 1}`)).join(', ');
+  };
+  if (ctx.accompLead && ctx.accompLead.length) report.notes.push(`Ohne Gesang (${barRuns(ctx.accompLead)}): die Oberstimme der Begleitung ist keine Melodie – dort spielt das Begleitmuster allein`);
+  if (ctx.lowLead && ctx.lowLead.length) report.notes.push(`Keine Melodie in der Vorlage (${barRuns(ctx.lowLead)}): die gehörten Töne liegen eine Oktave und mehr unter der Melodie – Bass oder Begleitung, keine Melodiestimme`);
 
   // ---- Lead & Doppelungen
   const leadV = voices.find((v) => v.role === 'lead');
@@ -442,8 +506,10 @@ export function compose(material, N, opts = {}) {
     if (k.ostinato) parts.push(`im Begleitmuster der Vorlage (${k.ostinato} Takte)`);
     if (k.kick) parts.push(`nach dem Muster der Bassdrum (${k.kick} Takte)`);
     if (k.walk) parts.push(`in Vierteln wie die Bass-Spur (${k.walk} Takte)`);
+    if (k.oom) parts.push(`als Wechselbass auf jedem Schlag (${k.oom} Takte)`);
     if (k.held) parts.push(`ruhig in Halben (${k.held} Takte)`);
     report.notes.push(`Bass mit den Tönen der Bass-Spur: ${parts.join(', ')}`);
+    if (ctx.decode.offbeat) report.notes.push('Begleitung auf den Nachschlägen (wie in der Vorlage: Akkorde zwischen den Schlägen, Bass auf ihnen)');
   } else if (riff) report.notes.push('Bass: synkopierte Linie nach der Bassdrum bzw. einem Funk-Muster (wo die Vorlage Liegetöne hatte)');
   else if (!ctx.bassNotes.length) report.notes.push('Kein Bass-Stem: Basslinie aus den Akkorden abgeleitet');
   const bassVoices = voices.filter((v) => v.role === 'bass' || v.role === 'bass8vb');

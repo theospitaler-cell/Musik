@@ -205,3 +205,49 @@ test('Bass ohne Begleitmuster und Bassdrum: folgt den Vierteln der Bass-Spur, Ob
   }
   assert.ok(r.report.notes.some((n) => n.includes('in Vierteln wie die Bass-Spur')), r.report.notes.join(' | '));
 });
+
+test('Two-Beat: Akkorde der Vorlage zwischen den Schlägen -> Nachschläge, Bass kurz auf jedem Schlag; Intro-Bass ist keine Melodie', () => {
+  const bars = 24;
+  const compRhythm = [];
+  const bass = [];
+  const lead = [];
+  const roots = [41, 36, 41, 43];
+  for (let b = 0; b < bars; b++) {
+    const a0 = b * MT;
+    if (b >= 2) {
+      // Horn und Posaune auf den „und“ – so lückenhaft gehört wie in der Aufnahme (je Platz in ~45 % der
+      // Takte, zu wenig für ein festes Muster), dazu seltene Anschläge auf dem Schlag
+      for (const t of [12, 36, 60, 84]) if ((b * 7 + t / 12) % 9 < 4) for (const m of [56, 60]) compRhythm.push({ start: a0 + t, dur: 12, midi: m });
+      if (b % 5 === 0) for (const m of [56, 60]) compRhythm.push({ start: a0, dur: 12, midi: m });
+      // Melodie in ihrer Lage
+      lead.push({ start: a0, dur: 36, midi: 72 }, { start: a0 + 36, dur: 12, midi: 74 }, { start: a0 + 48, dur: 48, midi: 70 });
+    } else {
+      // Intro: nur die Tuba – die Erkennung hört ihre Linie (eine Oktave höher) als „Melodie“
+      for (let k = 0; k < 4; k++) lead.push({ start: a0 + k * 24, dur: 12, midi: 53 - b * 4 - k });
+    }
+    // Bass-Spur: nur in jedem zweiten Takt erkannt (die Tuba liegt großteils in der Begleitspur)
+    if (b % 2 === 0) bass.push({ start: a0, dur: 12, midi: roots[b % 4] }, { start: a0 + 48, dur: 12, midi: roots[b % 4] });
+  }
+  const m = { title: 'Ritz', meter: { beats: 4, beatType: 4 }, measureCount: bars, tempo: 120, lead, bass, comp: [], compRhythm, drums: [], report: { notes: [] } };
+  const r = orchestrate(m, { voices: 5, instruments: ['trumpet', 'trumpet', 'horn', 'trombone', 'tuba'], transpose: 0, title: 'Ritz' });
+  assert.deepEqual(r.report.violations, {});
+  assert.ok(r.report.notes.some((n) => n.startsWith('Begleitung auf den Nachschlägen')), r.report.notes.join(' | '));
+  assert.ok(r.report.notes.some((n) => n.startsWith('Keine Melodie in der Vorlage (Takte 1–2)')), r.report.notes.join(' | '));
+  const lead0 = r.arr.voices.find((v) => v.role === 'lead');
+  assert.equal(lead0.events.filter((e) => e.start < 2 * MT && e.role === 'melody').length, 0, 'Intro: keine Schein-Melodie');
+  // (eine Stimme verdoppelt zeitweise die Melodie – geprüft werden die Stimmen, die begleiten)
+  let accomp = 0;
+  for (const v of r.arr.voices.filter((x) => x.role === 'inner')) {
+    const comp = v.events.filter((e) => e.start >= 4 * MT && (e.role === 'stabs' || e.role === 'pad'));
+    if (comp.length < 8) continue;
+    accomp++;
+    assert.ok(comp.every((e) => e.start % 24 === 12 && e.dur <= 12), `${v.profile}: Nachschläge auf den „und“`);
+  }
+  assert.ok(accomp >= 2, `begleitende Stimmen: ${accomp}`);
+  const tuba = r.arr.voices.find((v) => v.role === 'bass');
+  for (let b = 4; b < 20; b++) {
+    const evs = tuba.events.filter((e) => e.start >= b * MT && e.start < (b + 1) * MT);
+    assert.ok(evs.length >= 3, `Takt ${b + 1}: Bass läuft durch (${evs.length})`);
+    assert.ok(evs.every((e) => e.start % 24 === 0 && e.dur <= 12), `Takt ${b + 1}: kurz auf den Schlägen`);
+  }
+});

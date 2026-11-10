@@ -4,7 +4,7 @@ import { mod, dynShift, dynIndex } from '../core/constants.js';
 import { spellingIssues } from './tonality.js';
 import { frictions, perfectIssues, chordPool } from './voicing.js';
 import { chordAt } from '../model/song.js';
-import { leadGaps } from './phrasing.js';
+import { leadGaps, patternedAt } from './phrasing.js';
 import { soundingAt, endOf, sortEvents } from './util.js';
 
 const isWind = (v) => v.inst.breath !== null && v.inst.breath !== undefined;
@@ -101,6 +101,8 @@ export function validateArrangement(arr, { maxRunBars = 8, sharedMax = 0.65 } = 
   for (const br of breaths) {
     const own = voices[br.voice];
     if (!inner.includes(own) || inner.length < 2) continue;
+    // (Begleitmuster der Vorlage haben ihre Pausen selbst – siehe interlock)
+    if (patternedAt(own, br.t0, mt) || inner.some((o) => o !== own && patternedAt(o, br.t0, mt))) continue;
     const holds = inner.some((o) => o !== own && !!soundingAt(sortEvents([...o.events]), br.t0));
     if (!holds) v('interlock', { voice: br.voice, t0: br.t0 });
   }

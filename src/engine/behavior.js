@@ -380,10 +380,13 @@ export function sourceBass(ctx, chordAt) {
   const out = [];
   const half = geo.compound ? (geo.nBeats >= 2 ? (mt / geo.nBeats) * Math.floor(geo.nBeats / 2) : mt) : geo.nBeats === 4 ? mt / 2 : mt;
   const kinds = { ostinato: 0, kick: 0, held: 0 };
+  const leadBars = new Set((ctx.lead || []).map((n) => Math.floor(n.start / mt)));
   for (let bar = 0; bar < M; bar++) {
     const a0 = bar * mt;
     const info = decode.bars[bar];
-    const present = hasStem ? barHas[bar] : !!chordAt(a0);
+    // im Two-Beat läuft der Bass durch, solange Begleitung oder Melodie spielen (die Erkennung verliert ihn
+    // stellenweise – Blechbläser-Bässe liegen oft in der Begleitspur)
+    const present = (hasStem ? barHas[bar] : !!chordAt(a0)) || (!!decode.offbeat && !!chordAt(a0) && ((info && info.hits.length > 0) || leadBars.has(bar)));
     let list = null;
     let kind = null;
     if (info && info.ostinato && info.pattern && (present || chordAt(a0))) {
@@ -405,11 +408,32 @@ export function sourceBass(ctx, chordAt) {
         if (Math.abs(n.start - a0 - k * geo.beat) <= 6 && k >= 0 && k < geo.nBeats) onBeats.add(k * geo.beat);
       }
       const beats = [...onBeats].sort((x, y) => x - y);
+      // Nachschlag-Begleitung (Two-Beat): der Bass ist das „Um“ zum „pa“ – kurz auf jedem Schlag
+      const oom = !!decode.offbeat && !geo.compound;
+      if (oom && beats.length < 3) {
+        const walk = [];
+        let rootPc = null;
+        for (let k = 0; k < geo.nBeats; k++) {
+          const t = k * geo.beat;
+          const cp = chordPc(a0 + t);
+          const s = pcAt(a0 + t, geo.beat * 2, geo.beat * 2, cp);
+          // auf 1 und 3 der Grundton, auf 2 und 4 die Quinte (Wechselbass) – wechselt der Akkord, sein Grundton
+          if (k % 2 === 0 || cp !== chordPc(a0 + t - geo.beat)) rootPc = s ? s.pc : cp;
+          if (rootPc == null) continue;
+          const pc = k % 2 === 1 && cp === chordPc(a0 + t - geo.beat) ? (rootPc + 7) % 12 : rootPc;
+          walk.push({ start: a0 + t, dur: geo.beat / 2, midi: place(pc), srcBass: true });
+        }
+        if (walk.length) {
+          kinds.oom = (kinds.oom || 0) + 1;
+          out.push(...walk);
+          continue;
+        }
+      }
       if (!geo.compound && beats.length >= 3) {
         const walk = [];
         let prevPc = null;
         beats.forEach((t, i) => {
-          const d = (beats[i + 1] ?? mt) - t;
+          const d = oom ? geo.beat / 2 : (beats[i + 1] ?? mt) - t;
           const cp = chordPc(a0 + t);
           const s = pcAt(a0 + t, geo.beat, geo.beat, cp);
           const pc = s ? s.pc : prevPc ?? cp;

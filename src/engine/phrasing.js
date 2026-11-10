@@ -214,6 +214,11 @@ export function applyBreaths(score, { target = 6, hard = 8 } = {}) {
   }
 }
 
+// Spielt die Stimme rund um t (im Takt davor bis danach) ein übernommenes Begleitmuster?
+export function patternedAt(v, t, mt) {
+  return v.events.some((e) => (e.ostinato || e.shared) && e.start >= t - mt && e.start < t + mt);
+}
+
 // Verzahnung: Wenn eine Mittelstimme atmet, hält mindestens eine andere die Harmonie
 export function interlock(score) {
   const { voices, ctx, report, chordAt } = score;
@@ -224,7 +229,10 @@ export function interlock(score) {
   for (const br of report.breaths) {
     const v = voices[br.voice];
     if (!innerVoices.includes(v) || innerVoices.length < 2) continue;
+    // Begleitmuster der Vorlage (Ostinato, gemeinsame Nachschläge): das Muster hat seine Pausen selbst – ein
+    // eingeschobener Liegeton würde es zerstören
     const others = innerVoices.filter((o) => o !== v);
+    if (patternedAt(v, br.t0, ctx.geo.mt) || others.some((o) => patternedAt(o, br.t0, ctx.geo.mt))) continue;
     const holds = (o) => !!soundingAt(sortEvents(o.events), br.t0);
     if (others.some(holds)) continue;
     // nächste Stimme der anderen Klasse hält einen Ton des Akkords
