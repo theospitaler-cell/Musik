@@ -139,7 +139,7 @@ export function articulate(score) {
       if (short && !onBeat && !e.art.includes('staccato')) e.art.push('staccato');
       if (e.role === 'stabs' && short && !e.art.includes('staccato')) e.art.push('staccato');
       if (sync && !e.art.includes('accent')) e.art.push('accent');
-      if (dynamic && (e.role === 'melody' || e.role === 'answer' || e.role === 'double')) {
+      if (dynamic && (e.role === 'melody' || e.role === 'answer' || e.role === 'double' || e.role === 'soli')) {
         // Fanfaren-Auftakte: Einsatz nach einer Pause wird betont, lange Phrasenschlüsse bekommen Tenuto
         const afterRest = !!prev && e.start - endOf(prev) >= beat;
         const next = evs[i + 1];
@@ -179,7 +179,7 @@ function kmeans1d(vals, k) {
   return centers;
 }
 
-const LEADISH = new Set(['melody', 'double']);
+const LEADISH = new Set(['melody', 'double', 'soli']);
 
 export function assignDynamics(score, blocks) {
   const { voices, ctx } = score;
@@ -263,7 +263,7 @@ function roleName(events) {
   const count = new Map();
   for (const e of events) count.set(e.role, (count.get(e.role) || 0) + 1);
   const top = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0];
-  if (top === 'melody' || top === 'double' || top === 'answer') return top === 'answer' ? 'counter' : 'melody';
+  if (top === 'melody' || top === 'double' || top === 'soli' || top === 'answer') return top === 'answer' ? 'counter' : 'melody';
   if (top === 'stabs') return 'stabs';
   if (top === 'pad') return 'pad';
   if (top === 'counter') return 'counter';

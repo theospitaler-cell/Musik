@@ -74,8 +74,34 @@ export function prepare(material, opts = {}) {
     }
     chords = normalizeChords(chords, total);
   }
-  const decode = decodeComping(comp, { measureTicks: geo.mt, measureCount: M });
-  return { geo, M, total, lead, bassNotes, comp, track, keyAt, globalKey, chords, decode, material };
+  // Begleitrhythmus: bevorzugt die echten Akkordanschläge der Vorlage (Audio-Analyse), sonst die Begleitstimmen
+  const compRhythm = (material.compRhythm || []).filter((n) => n.dur > 0 && n.start >= 0);
+  const decode = decodeComping(compRhythm.length >= 16 ? compRhythm : comp, { measureTicks: geo.mt, measureCount: M });
+  decode.fromChords = compRhythm.length >= 16;
+  markOstinato(decode.bars);
+  return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material };
+}
+
+// Takte mit einem wiederkehrenden Begleitrhythmus (gleiche Einsätze wie ein Nachbartakt, mindestens drei)
+export function markOstinato(bars) {
+  const sig = bars.map((b) => (b.mode === 'rhythmic' ? new Set(b.hits.map((h) => snap(h.t, 6))) : null));
+  const jac = (x, y) => {
+    let inter = 0;
+    for (const v of x) if (y.has(v)) inter++;
+    return inter / (x.size + y.size - inter);
+  };
+  bars.forEach((b, i) => {
+    b.ostinato = false;
+    const s = sig[i];
+    if (!s || s.size < 3) return;
+    for (const k of [i - 1, i + 1, i - 2, i + 2]) {
+      const o = sig[k];
+      if (o && o.size >= 3 && jac(s, o) >= 0.75) {
+        b.ostinato = true;
+        return;
+      }
+    }
+  });
 }
 
 // ---- Linien einpassen ---------------------------------------------------------------------------
@@ -139,11 +165,28 @@ function attackPlan(bar, ctx, hasLead, behavior) {
   const { geo } = ctx;
   const info = ctx.decode.bars[bar];
   const rhythmic = info && info.mode === 'rhythmic';
+  if (rhythmic && info.ostinato) {
+    // Wiederkehrendes Begleitmuster der Vorlage (Ostinato, z. B. die Streicher-Akkorde in „Viva la Vida“):
+    // genau so übernehmen – alle Begleitstimmen gemeinsam, mit den Längen der Vorlage. Das Muster trägt
+    // den Wiedererkennungswert; verschoben oder auf zwei Gruppen verteilt wäre es ein anderes Lied.
+    const ts = [...new Set(info.hits.map((h) => snap(h.t, 6)))].filter((t) => t < geo.mt).sort((a, b) => a - b);
+    const lenAt = (t, i) => {
+      const src = Math.max(...info.hits.filter((h) => snap(h.t, 6) === t).map((h) => h.dur));
+      const next = ts[i + 1] ?? geo.mt;
+      return Math.max(6, Math.min(snap(src, 6) || 12, next - t));
+    };
+    const list = ts.map((t, i) => {
+      const d = lenAt(t, i);
+      return [t, d, d <= geo.beat / 2 ? 'stab' : 'pad'];
+    });
+    return { kind: 'ostinato', A: list, B: list };
+  }
   if (rhythmic) {
-    // Einwürfe auf 2 und 4 werden zu 2+ und 4+ (Nachschlag); Zählzeit 1 und 3 bleiben, der Rest
-    // liegt ohnehin synkopiert
+    // Einsätze der Vorlage (echte Akkordanschläge) bleiben, wo sie sind. Ohne Akkordanschläge (nur
+    // Begleitstimmen bekannt) werden Einwürfe auf 2 und 4 zu 2+ und 4+ (Nachschlag)
     const place = (t) => {
       const s = snap(t, 6);
+      if (ctx.decode.fromChords) return s;
       return !geo.compound && s !== 0 && s % geo.beat === 0 && (s / geo.beat) % 2 === 1 ? s + geo.beat / 2 : s;
     };
     const ts = [...new Set(info.hits.map((h) => Math.min(geo.mt - 6, place(h.t))))].sort((a, b) => a - b);
@@ -166,6 +209,12 @@ function attackPlan(bar, ctx, hasLead, behavior) {
   // Wo die Vorlage selbst Klänge hält (Fanfaren, Chöre, Flächen), bleiben die Klänge stehen – mit einem
   // Nachschlag darüber (Stufe 1); die Offbeat-Achtel gehören den rhythmischen Takten der Vorlage.
   const held = info && info.mode === 'sustained';
+  // Hält die Vorlage ihre Klänge (Akkordanschläge bekannt, höchstens einer je Takt), bleiben die Begleitstimmen
+  // lange Töne – wie in gedruckten Arrangements, wenn eine Stimme die Melodie allein trägt
+  if (held && ctx.decode.fromChords) {
+    const p = padPattern(geo);
+    return { kind: 'pad', A: p.A.map(([t, d]) => [t, d, 'pad']), B: p.A.map(([t, d]) => [t, d, 'pad']) };
+  }
   const sp = stabsPlan(geo, held ? { ...behavior, stabs: Math.min(behavior.stabs, 1) } : behavior);
   if (sp) return sp;
   const p = padPattern(geo);
@@ -201,7 +250,7 @@ export function compose(material, N, opts = {}) {
   }));
   // Melodieanteil gesteuert (opts.melodyShare): Oktav-/Unisono-Doppler spielen Begleitung wie die Innenstimmen;
   // die Melodie kommt nur in dem gewählten Anteil dazu (applyMelodyShare)
-  if (Array.isArray(opts.melodyShare) || Array.isArray(opts.soloShare)) for (const v of voices) if (v.role === 'double8' || v.role === 'doubleU') v.role = 'inner';
+  if (Array.isArray(opts.melodyShare) || Array.isArray(opts.soloShare) || opts.textureAuto) for (const v of voices) if (v.role === 'double8' || v.role === 'doubleU') v.role = 'inner';
   const chordAt = (t) => chordAtList(chords, t);
   const scaleAtTick = (t) => {
     const k = ctx.keyAt(Math.max(0, Math.floor(t / geo.mt)));
@@ -338,7 +387,7 @@ export function compose(material, N, opts = {}) {
           }
           const dur = Math.min(at.dur, a0 + geo.mt - at.t);
           if (dur <= 0) return;
-          const e = makeEvent(at.t, dur, p, null, { role: at.kind === 'stab' ? 'stabs' : 'pad', template: s.template });
+          const e = makeEvent(at.t, dur, p, null, { role: at.kind === 'stab' ? 'stabs' : 'pad', template: s.template, ...(plan.kind === 'ostinato' ? { ostinato: true } : {}) });
           if (v.profile.staves > 1) {
             // Klavier: der ganze Satz dieses Moments – rechte Hand die Akkordtöne unter der Melodie,
             // linke Hand der Basston (Doppelsystem, Aufteilung beim Notensatz)

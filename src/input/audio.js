@@ -1441,9 +1441,13 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // Erkennung die Hälfte gewählt (150 als 75: die Sechzehntel wären 32tel) – Oktav-Korrektur auf das
   // doppelte Tempo. Echte langsame Lieder (Balladen mit Sechzehntel-Hi-Hat, Gitarrenzupfen) haben
   // kaum solche Ketten und bleiben unberührt.
-  if (aiRaw && aiRaw.length >= 32 && bpm >= 50 && bpm < 92 && bpm * 2 <= 190 && beats.length >= 8 && pulseRatio !== null && pulseRatio >= 0.6) {
-    const fc = fineChains(aiRaw, 60 / bpm);
-    if (fc.chains >= 3 && fc.notes >= 16 && fc.share >= 0.05) {
+  // Zweites Zeichen: Bass Drum/Snare liegen fast so stark zwischen den Schlägen wie auf ihnen (Rock-Beat im
+  // doppelten Tempo: Snare auf 2 und 4 fällt bei halbem Tempo auf die „und“). Gemessen: halb erkannte Stücke
+  // ≥ 0,8, echte langsame Lieder (Balladen, Lo-Fi, 81 BPM) 0,35–0,52.
+  const strongPulse = pulseRatio !== null && pulseRatio >= 0.75 && bpm < 85;
+  if (bpm >= 50 && bpm < 92 && bpm * 2 <= 190 && beats.length >= 8 && pulseRatio !== null && pulseRatio >= 0.6 && ((aiRaw && aiRaw.length >= 32) || strongPulse)) {
+    const fc = aiRaw && aiRaw.length >= 32 ? fineChains(aiRaw, 60 / bpm) : { chains: 0, notes: 0, share: 0 };
+    if ((fc.chains >= 3 && fc.notes >= 16 && fc.share >= 0.05) || strongPulse) {
       const dbl = [];
       for (let i = 0; i < beats.length; i++) {
         dbl.push(beats[i]);
@@ -1454,6 +1458,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       halfTimeFixed = true;
     }
   }
+  if (debug) debug({ tempo: { bpm, pulseRatio, halfTimeFixed, fine: aiRaw && aiRaw.length ? fineChains(aiRaw, 60 / bpm) : null, barLag } });
   // Schnelle, durchsynkopierte Stücke (fast die Hälfte aller Einsätze auf Sechzehntel-Zwischen-
   // zeiten bei Tempo 92–112): in gedruckten Noten stehen sie im doppelten Tempo mit Achteln
   // (Alla-breve-Gefühl) – viel leichter zu lesen als Ketten übergebundener Sechzehntel
@@ -1636,6 +1641,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // Mittelstimmen. Die Gesangslinie der Signalanalyse dient dabei als Hinweis.
   const aiTracks = [];
   let polyNotes = null;
+  let compHits = null;
   if (hasAi) {
     // Schnelle Läufe und Tonwiederholungen (16tel, Triolen, 32tel): Muster aus mindestens drei
     // gleichmäßigen Tönen auf dem Raster des Schlags, Wiederholungen mit echtem Anschlag. Ihre
@@ -1685,6 +1691,26 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       const notes = asTrack(line);
       if (notes.length >= 8) aiTracks.push({ id: `ai-inner${k + 1}`, name: `Mittelstimme ${k + 1} (KI)`, program: 0, mel: false, role: 'inner', notes });
     });
+    // Begleitrhythmus: Akkordanschläge der Begleitung (mindestens zwei Töne gleichzeitig, ohne Melodie,
+    // Bass und Gesang) – das Muster (Streicher-Ostinato, Gitarrenanschlag, Bläser-Einwürfe) trägt viel vom
+    // Wiedererkennungswert. Die Orchestrierung übernimmt es für die Begleitstimmen.
+    {
+      const taken = new Set([...vs.melody, ...vs.bass].map((n) => `${n.start}:${n.midi}`));
+      const byStart = new Map();
+      for (const n of poly) {
+        if (n.start < 0 || n.stem === 'vocals' || n.stem === 'bass' || taken.has(`${n.start}:${n.midi}`)) continue;
+        if (!byStart.has(n.start)) byStart.set(n.start, []);
+        byStart.get(n.start).push(n);
+      }
+      const hits = [];
+      for (const [start, ns] of [...byStart.entries()].sort((a, b) => a[0] - b[0])) {
+        const midis = [...new Set(ns.map((n) => n.midi))];
+        if (midis.length < 2) continue;
+        const dur = Math.max(...ns.map((n) => n.dur));
+        for (const midi of midis) hits.push({ start, dur, midi, vel: vel(ns.find((n) => n.midi === midi)) });
+      }
+      compHits = hits;
+    }
     // Harmonik & Tonart aus den gehörten Noten (der Bass zählt doppelt)
     pseudo.length = 0;
     for (const n of poly) if (n.start >= 0) pseudo.push({ start: n.start, dur: Math.min(n.dur, DIV * 2), midi: n.midi });
@@ -1736,6 +1762,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // Zeitbezug zur Datei: Schlag i liegt bei beatSec[i] Sekunden; Takt 1 beginnt bei Schlag firstDown
   fin.timing = { beatSec, firstBeat: firstDown, beatTicks: BT };
   if (aiTracks.length) fin.tracks = [{ id: 'ai-melody', name: 'Gesang / Melodie (KI)', program: 52, mel: true, notes: fin.melody.map((n) => ({ ...n, vel: 90 })) }, ...aiTracks];
+  if (compHits && compHits.length >= 16) fin.compHits = compHits.filter((n) => n.start < measureCount * mt);
   if (aiInfo) fin.warnings.push(`Lokale KI (Basic Pitch): ${aiInfo.notes} Noten gehört – Melodie, Bass${aiTracks.length > 1 ? ' und Mittelstimmen' : ''} als eigene Spuren.`);
   // Tempowechsel, rit./accel. aus den echten Schlagzeiten
   const tm = tempoMarksFromTiming(fin.timing, m, measureCount);
@@ -1744,7 +1771,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   if (tm.marks.length > 1 && fin.tempoMarks[0]) fin.tempo = fin.tempoMarks[0].bpm;
   if (tm.marks.length > 1) fin.warnings.push(`Tempo ändert sich im Stück (${tm.marks.filter((x) => x.kind !== 'tempo' || x.bar > 0).map((x) => `Takt ${x.bar + 1}: ${x.kind === 'rit' ? 'rit.' : x.kind === 'accel' ? 'accel.' : x.kind === 'atempo' ? 'a tempo' : (shuffle12 ? '♩. = ' + Math.round(x.bpm / 1.5) : '♩ = ' + x.bpm)}`).join(', ')}).`);
   if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
-  if (halfTimeFixed) fin.warnings.push(`Tempo auf ${Math.round(bpm)} korrigiert: bei der halben Geschwindigkeit wären die schnellen Noten 32tel gewesen (mit „Tempo ÷2“ im Projekt umkehrbar).`);
+  if (halfTimeFixed) fin.warnings.push(`Tempo auf ${Math.round(bpm)} verdoppelt: das Schlagzeug und die schnellen Noten passen zum doppelten Tempo (mit „Tempo ÷2“ im Projekt umkehrbar).`);
   fin.duration = mono.length / SR;
   // Stand der Analyse: ältere, gespeicherte Analysen lassen sich in der App neu berechnen
   fin.analysisVersion = ANALYSIS_VERSION;

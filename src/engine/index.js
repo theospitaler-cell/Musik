@@ -11,9 +11,10 @@ import { routeStems, analyzeStemAudio } from './stems.js';
 import { parseWav } from '../input/stems.js';
 import { compose, applySatzRegeln } from './compose.js';
 import { applyHandoff, applyBreaths, interlock, markPhraseEnds } from './phrasing.js';
-import { articulate, spellVoices, buildArrangement, exportScore, ensembleName, detectSections } from './engrave.js';
+import { articulate, spellVoices, buildArrangement, exportScore, ensembleName, detectSections, nameSections } from './engrave.js';
 import { behaviorFor, applySustainCounters, applyMiniSolos, applyMelodyShare, applySoloShare, MODES, ACTIVITY_NAMES } from './behavior.js';
 import { validateArrangement, summarize } from './validate.js';
+import { sourceTexture, applySourceTexture } from './texture.js';
 import { sourceLinesOf } from '../arrange/original.js';
 import { songMeasureTicks, transposeChordList } from '../model/song.js';
 import { transposeKey } from '../theory/keys.js';
@@ -78,6 +79,8 @@ export function materialFromSong(song, opts = {}) {
     lead: song.melody.filter((n) => n.start + lead >= 0).map(shift),
     bass: bassTrack.map(shift),
     comp: comp.map(shift),
+    // Akkordanschläge der Begleitung aus der Audio-Analyse (Begleitrhythmus), falls vorhanden
+    compRhythm: song.compHits && song.compHits.length ? song.compHits.filter((n) => n.start + lead >= 0).map(shift) : null,
     drums,
     chords: song.chords && !song.chordsDetected ? transposeChordList(song.chords, semis, key ? keyCenter(key) : null).map((c) => ({ ...c, start: c.start + lead })) : null,
     sections: song.sections && !song.sectionsDetected ? song.sections.map((s) => ({ ...s, start: s.start + (lead ? 1 : 0) })) : null,
@@ -129,9 +132,29 @@ export function orchestrate(input, opts = {}) {
   }
   const material = toMaterial(input, { ...opts, shift });
   const behavior = behaviorFor({ mode: opts.mode, activity: opts.activity });
-  const score = compose(material, N, { ...opts, behavior });
+  // Textur der Vorlage (bei „Automatisch“): Doppler spielen nicht dauernd mit, sondern nur, wo das Original
+  // die Melodie verdoppelt oder im Refrain – sonst begleiten sie (siehe texture.js)
+  // (nur bei Aufnahmen mit erkannten Akkordanschlägen – ohne sie gibt es keine verlässliche Textur der Vorlage)
+  const useTexture = N >= 3 && opts.texture !== false && !Array.isArray(opts.melodyShare) && !Array.isArray(opts.soloShare) && (opts.texture === true || (material.compRhythm && material.compRhythm.length >= 16));
+  const score = compose(material, N, { ...opts, behavior, textureAuto: useTexture });
   // Atem zuerst: die Lücken der Melodie stehen erst dann fest, wenn ihre Atempausen gesetzt sind
   applyBreaths(score);
+  // Textur der Vorlage: wo das Original die Melodie verdoppelt oder mehrstimmig setzt, tragen mehrere
+  // Instrumente sie (Unisono/Oktave bzw. Satz aus den Tönen der Vorlage); Solo-Stellen bleiben solo.
+  // Gilt bei „Automatisch“ – eigene Anteile (melodyShare/soloShare) gehen vor.
+  if (useTexture) {
+    let named = [];
+    try {
+      named = nameSections(detectSections(score.ctx));
+    } catch {
+      named = [];
+    }
+    const refrainBars = new Set();
+    for (const s of named) if (s.name === 'Refrain') for (let b = s.start; b < s.start + s.length; b++) refrainBars.add(b);
+    const tex = sourceTexture({ lead: score.ctx.lead, comp: [...score.ctx.comp, ...(score.ctx.compRhythm || [])], geo: score.ctx.geo, M: score.ctx.M, refrainBars, voices: N });
+    score.texture = tex;
+    applySourceTexture(score, tex);
+  }
   if (N >= 2 && behavior.dynamic) {
     // Lücken -> Einwürfe/Läufe/Gegenmelodien (Call-and-Response), Haltetöne -> Bewegung darunter,
     // dazu Mini-Solos. Im klassischen Modus bleibt die Melodie ganz bei der Lead-Stimme.

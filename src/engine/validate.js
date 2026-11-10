@@ -24,9 +24,11 @@ function leadDynAt(arr, t) {
 }
 
 // Anteil gemeinsamer Einsätze an den Einsätzen der spärlicheren Stimme
+// Übernommene Muster der Vorlage (Ostinato, verdoppelte Melodie, Satz) sind gewollt gemeinsam und zählen nicht
+const ownRhythm = (e) => !e.ostinato && e.role !== 'soli' && e.role !== 'double';
 export function sharedAttackRatio(a, b) {
-  const A = new Set(a.events.map((e) => e.start));
-  const B = new Set(b.events.map((e) => e.start));
+  const A = new Set(a.events.filter(ownRhythm).map((e) => e.start));
+  const B = new Set(b.events.filter(ownRhythm).map((e) => e.start));
   if (!A.size || !B.size) return 0;
   let n = 0;
   for (const t of A) if (B.has(t)) n++;

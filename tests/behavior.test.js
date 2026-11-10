@@ -72,7 +72,7 @@ test('Modus B: die Lead-Stimme hat Melodien, Läufe und Fills allein', () => {
     // keine Nebenstimme führt, solange die Lead-Stimme pausiert (sie bleibt still oder hält Akkordtöne)
     for (const v of r.arr.voices) {
       if (v === lead) continue;
-      for (const e of v.events) assert.ok(['double', 'counter', 'pad', 'stabs', 'bass', 'inner', 'melody'].includes(e.role) || e.role === 'double', `Rolle ${e.role}`);
+      for (const e of v.events) assert.ok(['double', 'soli', 'counter', 'pad', 'stabs', 'bass', 'inner', 'melody'].includes(e.role) || e.role === 'double', `Rolle ${e.role}`);
     }
   }
 });
