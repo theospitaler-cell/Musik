@@ -1446,7 +1446,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // (reuse: Zwischenergebnisse eines ersten Durchgangs – Spektrum, Anschläge, bereinigte KI-Noten)
   const detector = reuse ? reuse.detector : aiRaw && aiRaw.length ? makeAttackDetector(mono, SR) : null;
   const attack = detector ? detector.reattack : null;
-  const ai = reuse ? reuse.ai : aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack, rise: detector ? detector.onsetRise : null }) : aiRaw;
+  // (reuse.tidyMinSec: im Alla-breve-Durchgang steht das Tempo fest – staccato gespielte Viertel dauern bei
+  // ♩ ≈ 240 nur 70–100 ms und fielen an der 120-ms-Grenze als Fragment weg; dort gilt ein Viertel des Schlags)
+  const ai = reuse && !reuse.tidyMinSec ? reuse.ai : aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack, rise: detector ? detector.onsetRise : null, ...(reuse && reuse.tidyMinSec ? { minSec: reuse.tidyMinSec } : {}) }) : aiRaw;
   if (!reuse) onProgress('Spektrum wird analysiert', 0);
   const feat = reuse ? reuse.feat : analyzeFrames(mono, onProgress);
   onProgress('Tempo & Beats werden erkannt', 0.46);
@@ -1935,7 +1937,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       const and = [0, 1, 2, 3].reduce((a, k) => a + rate(k * DIV + DIV / 2), 0) / 4;
       if (debug) debug({ twoBeat: { on, and } });
       if (and >= 0.3 && and >= 1.3 * Math.max(0.05, on)) {
-        const again = transcribe(mono, { title, onProgress: (t, f) => onProgress(t, 0.9 + 0.1 * (f ?? 0)), ai: aiRaw, debug, forceDouble: true, cutTime: true, reuse: { detector, ai, feat, firstDown } });
+        const again = transcribe(mono, { title, onProgress: (t, f) => onProgress(t, 0.9 + 0.1 * (f ?? 0)), ai: aiRaw, debug, forceDouble: true, cutTime: true, reuse: { detector, ai, feat, firstDown, tidyMinSec: Math.max(0.06, Math.min(0.12, (0.25 * 60) / (2 * bpm))) } });
         again.warnings = again.warnings.filter((w) => !w.startsWith('Tempo auf'));
         again.warnings.push(`Alla breve (𝅗𝅥 = ${Math.round(again.tempo / 2)}): Bass auf den Schlägen, Akkorde dazwischen – ein Two-Beat; so stehen die Swing-Achtel als Achtel (mit „Tempo ÷2“ im Projekt umkehrbar).`);
         return again;

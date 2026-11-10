@@ -333,3 +333,35 @@ test('Melodieauswahl: echter Oktavsprung, leiser Oberton, Begleitton statt fehle
     assert.equal(at(o + 6)?.midi, 60, `Durchgang ${r + 1}: C4 statt leisem Oberton C5`);
   }
 });
+
+test('Melodieauswahl: gehaltene Melodienote bleibt, Begleitung darunter und Übersprechen der Gesangsspur nicht (Rocky-Thema)', () => {
+  // Echte Rohnoten der Brassband-Aufnahme von „Gonna Fly Now“ (Schlag 7–12, klingend): G4 auf 7¼ klingt bis 8,
+  // darunter ein G3; dann A4 drei Schläge gehalten (lautester Ton, auch laut Signalanalyse), darunter setzt die
+  // Begleitung neu ein (C4, A3, D3, F4); die Gesangsspur enthält nur Übersprechen (weak); H4 auf 11¼.
+  // Referenz-Kornett: A4 (punktierte Halbe) … H4 – vorher wurde daraus G3, A3, C4, A3, C4, A3, A3, D4.
+  const q = 24;
+  const poly = [];
+  const add = (beat, midi, amp, dur, extra = {}) => poly.push({ start: Math.round(beat * q), dur: Math.round(dur * q), midi, amp, stem: 'other', ...extra });
+  const raw = [
+    [4, 64, 0.58, 0.5], [4.5, 64, 0.43, 0.25], [4.75, 64, 0.43, 0.25], [5, 64, 0.4, 0.5], [5.75, 64, 0.44, 0.25], [6.5, 64, 0.4, 0.25],
+    [7, 64, 0.37, 0.75], [7, 52, 0.41, 0.75], [7.25, 67, 0.58, 0.75], [7.25, 48, 0.32, 0.5], [7.5, 55, 0.43, 0.5],
+    [8, 69, 0.73, 3], [8, 57, 0.55, 0.5], [8, 53, 0.45, 2.5], [8, 50, 0.4, 0.5], [8.25, 60, 0.46, 0.5], [8.5, 57, 0.55, 2], [8.5, 50, 0.44, 1],
+    [8.75, 65, 0.42, 0.25], [9.5, 50, 0.44, 0.5], [9.75, 60, 0.36, 0.5], [10, 81, 0.46, 0.25], [10, 50, 0.45, 0.75],
+    [11.25, 71, 0.62, 0.75], [11.75, 52, 0.48, 0.25], [12, 64, 0.63, 2.75], [12, 40, 0.57, 0.75], [12.25, 59, 0.49, 1.75],
+  ];
+  for (const [b, m, a, d] of raw) add(b, m, a, d);
+  add(10.5, 57, 0.44, 0.25, { stem: 'vocals', weak: true });
+  add(10.75, 57, 0.3, 0.5, { stem: 'vocals', weak: true });
+  add(11.5, 62, 0.34, 0.25, { stem: 'vocals', weak: true });
+  for (let b = 4; b < 14; b += 2) add(b, 38, 0.6, 1, { stem: 'bass' });
+  const hint = [
+    { start: 6.5 * q, dur: 0.75 * q, midi: 64 },
+    { start: 7.25 * q, dur: 0.75 * q, midi: 67 },
+    { start: 8 * q, dur: 3.25 * q, midi: 69 },
+    { start: 11.25 * q, dur: 0.75 * q, midi: 71 },
+    { start: 12 * q, dur: 2 * q, midi: 64 },
+  ];
+  const vs = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint });
+  const got = vs.melody.filter((n) => n.start >= 7.25 * q && n.start < 12 * q).map((n) => n.midi);
+  assert.deepEqual(got, [67, 69, 71], `G4, A4 (gehalten), H4 – erkannt: ${got}`);
+});

@@ -168,11 +168,15 @@ export function mergeStemNotes(parts, { bassMax = 60, bleedSec = 0.05, levels = 
   const vocals = tag(parts.vocals, 'vocals').map((n) => (weakVocals ? { ...n, weak: true } : n));
   const other = tag(parts.other, 'other');
   const near = (list, n) => list.some((m) => m.midi === n.midi && Math.abs(m.start - n.start) <= bleedSec);
-  // Vorrang: Bass (tiefe Töne) > Gesang > Rest
-  const bassSet = bass;
+  // Vorrang: Bass (tiefe Töne) > Gesang > Rest. Ab G3 gilt der Vorrang des Bass-Stems nicht, wenn derselbe Ton
+  // gleichzeitig in Gesang oder Begleitung klingt: so hoch ist es meist die Melodie, die in die Bass-Spur
+  // durchspricht (Trompeten-Galopp auf C4 in „Gonna Fly Now“) – dort bleibt der Ton der anderen Spur.
+  const HIGH = 55;
+  const bassKeep = bass.filter((n) => n.midi < HIGH || !(near(vocals, n) || near(other, n)));
+  const bassSet = bassKeep;
   const vocOk = vocals.filter((n) => !(n.midi <= bassMax && near(bassSet, n)));
   const othOk = other.filter((n) => !(n.midi <= bassMax && near(bassSet, n)) && !near(vocOk, n));
-  return [...bass, ...vocOk, ...othOk].sort((a, b) => a.start - b.start || a.midi - b.midi);
+  return [...bassKeep, ...vocOk, ...othOk].sort((a, b) => a.start - b.start || a.midi - b.midi);
 }
 
 // ---- WAV schreiben (16 Bit PCM, 1–2 Kanäle) – Eingabe für Demucs: so braucht es kein ffmpeg

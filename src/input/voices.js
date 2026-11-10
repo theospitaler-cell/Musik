@@ -252,10 +252,14 @@ function pickMelody(notes, beat, hint, step) {
     while (hi < hs.length - 1 && hs[hi + 1].start <= t + step / 2) hi++;
     while (hi > 0 && hs[hi].start > t + step / 2) hi--;
     const h = hs[hi];
-    return h && h.start <= t + step / 2 && h.start + h.dur > t ? h.midi : null;
+    if (!(h && h.start <= t + step / 2 && h.start + h.dur > t)) return null;
+    // gehalten: der Ton der Signalanalyse hat deutlich vor dieser Stelle begonnen
+    heldHint = h.start < t - step / 2;
+    return h.midi;
   };
+  let heldHint = false;
   const THRESH = 0.9;
-  const local = (g, k, h) => {
+  const local = (g, k, h, held = false) => {
     const n = g.notes[k];
     const dense = g.notes.length >= 4;
     let s = 0.5 * Math.min(1.5, n.amp / ampRef) + 0.2 * Math.min(1, n.dur / beat);
@@ -264,14 +268,23 @@ function pickMelody(notes, beat, hint, step) {
     s += leadBandScore(n.midi);
     // Spurentrennung: der Gesangs-Stem trägt die Melodie, der Bass-Stem nie
     // (nach Lautstärke gewichtet: leise Reste im Gesangs-Stem sind Durchsprechen, keine Melodie)
-    if (n.stem === 'vocals') s += 1.2 * Math.min(1, n.amp / ampRef);
+    // (nicht in Instrumental-Aufnahmen: dort enthält die Gesangsspur nur Übersprechen der Bläser – weak)
+    if (n.stem === 'vocals' && !n.weak) s += 1.2 * Math.min(1, n.amp / ampRef);
     else if (n.stem === 'bass') s -= 1;
     // Töne, die auch im Seitensignal (L−R) stehen, sind seitlich verteilte Gitarren/Streicher/Synths –
     // Gesang und Lead stehen in der Mitte. Kein Ausschluss, aber der Ton muss sich mehr beweisen.
     // (Nur im Vergleich innerhalb einer Gruppe: gibt es keinen Ton aus der Mitte, bleibt alles wie es war.)
     if (n.side && g.notes.some((m) => m !== n && !m.side)) s -= 0.3;
     else if (!n.side && g.notes.some((m) => m !== n && m.side)) s += 0.3;
-    if (h !== null) {
+    if (h !== null && held) {
+      // die Melodie hält ihren Ton (Signalanalyse): ein neuer Einsatz desselben Tons ist eine Wiederholung,
+      // ein deutlich tieferer Ton die Begleitung darunter („Gonna Fly Now“: A4 gehalten, A3/C4/D3 darunter)
+      // (die Signalanalyse fasst Tonwiederholungen oft zu einem langen Ton zusammen – derselbe Ton behält
+      // darum den vollen Bonus; nur die Oktave darunter bekommt keinen, deutlich tiefere Töne einen Abzug)
+      const d = n.midi - h;
+      if (d === 0) s += 0.9;
+      else if (d <= -3 && d % 12 !== 0 && !(n.stem === 'vocals' && !n.weak)) s -= 0.4;
+    } else if (h !== null) {
       const d = n.midi - h;
       // die Signalanalyse irrt sich oft um eine Oktave – die Oktavlage entscheidet die Linie
       if (d % 12 === 0) s += 0.9;
@@ -290,8 +303,13 @@ function pickMelody(notes, beat, hint, step) {
     // nach einer Pause sind Sprünge normal (neue Phrase)
     const w = gap >= 2 * beat ? 0.3 : 1;
     // Oktavsprung auf denselben Ton, der allein an seiner Stelle steht (kein anderer Ton zur Wahl): eine echte
-    // Melodiebewegung, kein Oktavfehler der Erkennung („Puttin' on the Ritz“: C5 – C4 – F4)
-    if (alone && d === 12) return -w * 0.1;
+    // Melodiebewegung, kein Oktavfehler der Erkennung („Puttin' on the Ritz“: C5 – C4 – F4) – aber nur, wenn der
+    // vorige Ton zu Ende ist (klingt er noch, ist der neue Ton eine andere Stimme)
+    if (alone && d === 12 && gap >= -step / 2) return -w * 0.1;
+    // Ton deutlich unter einem Melodieton, der noch mindestens einen Schlag weiterklingt: Begleitung unter einer
+    // gehaltenen Melodienote („Gonna Fly Now“: A4 drei Schläge, darunter C4, A3, D3 der Begleitung)
+    // (nicht bei Gesang: gesungene Töne klingen in den KI-Noten oft lang aus, der nächste Ton setzt darunter ein)
+    if (gap <= -beat && b.midi <= a.midi - 5 && !(b.stem === 'vocals' && !b.weak)) return -w * (0.09 * Math.max(0, d - 3) + (d >= 10 ? 0.5 : 0)) - 0.6;
     // Sprünge kosten: eine Melodie bleibt in ihrer Linie – das Hin und Her zu tiefen Akkordtönen
     // der Begleitung (Quinte abwärts und zurück) lohnt sich nur für deutlich gehörte Töne
     return -w * (0.09 * Math.max(0, d - 3) + (d >= 10 ? 0.5 : 0));
@@ -300,6 +318,7 @@ function pickMelody(notes, beat, hint, step) {
   for (const g of groups) {
     const cur = [];
     const h = hintAt(g.start);
+    const held = h !== null && heldHint;
     const opts = g.notes.slice(0, 4);
     // Oberton-Verdacht: ein Ton genau eine Oktave über einem deutlich lauteren Ton derselben Gruppe
     const ghost = new Set(g.notes.filter((n) => g.notes.some((m) => m.midi === n.midi - 12 && (n.amp ?? 0.5) < 0.75 * (m.amp ?? 0.5))));
@@ -308,7 +327,7 @@ function pickMelody(notes, beat, hint, step) {
     const realTop = (note) => !ghost.has(note) && !g.notes.some((m) => m !== note && !ghost.has(m) && m.stem !== 'bass' && m.midi > note.midi && (m.amp ?? 0.5) >= 0.6 * (note.amp ?? 0.5));
     for (let k = 0; k <= opts.length; k++) {
       const note = k < opts.length ? opts[k] : null;
-      const loc = note ? local(g, k, h) - (ghost.has(note) ? 0.5 : 0) : 0;
+      const loc = note ? local(g, k, h, held) - (ghost.has(note) ? 0.5 : 0) : 0;
       let best = null;
       for (const p of prev) {
         let s = p.score + loc;
@@ -326,6 +345,32 @@ function pickMelody(notes, beat, hint, step) {
     node = node.back;
   }
   out.reverse();
+  // Doppelerkennung einer gehaltenen Note: klingt der Melodieton laut KI noch mindestens einen Schlag über den
+  // nächsten Einsatz derselben Tonhöhe hinaus, ist dieser kein neuer Ton („Gonna Fly Now“: A4 drei Schläge, dazu
+  // A4-Einsätze auf ½ und ¾). Echte Wiederholungen (staccato „F F F“) sind kurz und bleiben getrennt.
+  // Ebenso lückenlose Stücke derselben Tonhöhe, die die Signalanalyse als einen durchgehenden Ton hört (die KI
+  // zerlegt gehaltene Blechbläser-Töne gern in Stücke) – ein Galopp auf einem Ton hat dort getrennte Töne.
+  // Zusammengefasst wird eine Folge solcher Stücke nur, wenn eines davon mindestens einen Schlag lang ist – ein
+  // Galopp besteht nur aus kurzen Tönen und bleibt, auch wenn die Signalanalyse ihn als einen Ton hört.
+  // (die Folge reicht nur so weit wie derselbe Ton der Signalanalyse – ein dort neu einsetzender Ton bleibt eigen)
+  for (let i = 0; i < out.length; i++) {
+    const h = hs.find((x) => (x.midi - out[i].midi) % 12 === 0 && x.start <= out[i].start + step / 2 && x.start + x.dur > out[i].start);
+    if (!h) continue;
+    let j = i;
+    while (j + 1 < out.length && out[j + 1].midi === out[i].midi && out[j + 1].start - (out[j].start + out[j].dur) <= step / 2 && out[j + 1].start + Math.min(out[j + 1].dur, beat) - step / 2 <= h.start + h.dur) j++;
+    if (j > i && out.slice(i, j + 1).some((n) => n.dur >= beat)) {
+      out[i].dur = out[j].start + out[j].dur - out[i].start;
+      out.splice(i + 1, j - i);
+    }
+  }
+  for (let i = 1; i < out.length; i++) {
+    const p = out[i - 1];
+    const n = out[i];
+    if (n.midi === p.midi && p.start + p.dur - n.start >= beat && !n.fast) {
+      p.dur = Math.max(p.dur, n.start + n.dur - p.start);
+      out.splice(i--, 1);
+    }
+  }
   // Begleitton statt Melodie: hat die KI an einer Stelle nur einen tiefen Begleitton gehört (die Melodie fehlt in
   // ihren Noten), die Signalanalyse aber deutlich darüber einen Melodieton, der zur Linie passt (höchstens eine
   // Oktave vom vorigen Melodieton), gilt der Ton der Signalanalyse („Puttin' on the Ritz“: A♭3 statt C5)
