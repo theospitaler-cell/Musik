@@ -118,8 +118,12 @@ Die Analyse läuft im Hintergrund.
 - **Melodieauswahl gegen Referenz-Noten geprüft** (Trompete 1 „Puttin' on the Ritz“, Ton für Ton): ein
   Oktavsprung auf den obersten echten Ton seiner Gruppe ist Melodie (C5 – C4 – F4), ein leiser Ton eine Oktave
   über einem lauteren ist Oberton, und wo die KI nur einen tiefen Begleitton hörte, gilt der deutlich höhere
-  Ton der Signalanalyse (keine reine Oktave). Thema 24/24 Töne. Grenzen: Töne, die die KI gar nicht hört
-  (Glissando-Achtel), und eine lautere Gegenstimme in derselben Lage (dort folgt die Erkennung dem Lauteren).
+  Ton der Signalanalyse (keine reine Oktave). Unter einem gehaltenen Melodieton (Signalanalyse) zählen neue
+  tiefere Einsätze als Begleitung; eine von der KI zerstückelte Haltenote wird wieder ein Ton. Gemessen
+  (Referenz-Noten von Hand gelesen): Ritz-Thema 23/24, Wiederholung 21/24, Rocky-Thema 8/10 (vorher 5/10).
+  Grenzen: Töne, die die KI gar nicht hört (Glissando-Achtel, Sechzehntel-Auftakt nach gehaltener Note),
+  eine lautere Gegenstimme in derselben Lage und eine lautere Oktavverdopplung (dort folgt die Erkennung dem
+  Lauteren – auch die Signalanalyse).
 - **Rhythmusfiguren**: dieselbe Sechzehntel-Figur (Galopp ♪♬, umgekehrt ♬♪) mindestens dreimal mit Lücken
   von höchstens drei Schlägen bleibt im Sechzehntel-Raster – sonst vereinfacht die Lesbarkeit sie zu Achteln
   (Einleitung von „Gonna Fly Now“). Zufällige Splitter wiederholen sich nicht so genau.
