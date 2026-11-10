@@ -327,7 +327,10 @@ export function sourceBass(ctx, chordAt) {
   }
   const kicks = (material.drums || []).filter((d) => d.kind === 'kick');
   const kp = kickPattern(kicks, geo, M);
-  const sorted = notes.map((n) => n.midi).sort((a, b) => a - b);
+  // Lage: Mitte der Töne ab einer Achtel im Bassbereich E1–C4 (Splitter und Oktavfehler der Erkennung –
+  // Untertöne um C1, Obertöne um C4 – zählen nicht; sie würden die ganze Linie verschieben)
+  const solid = notes.filter((n) => n.dur >= 12 && n.midi >= 28 && n.midi <= 60).map((n) => n.midi);
+  const sorted = (solid.length >= 8 ? solid : notes.map((n) => n.midi)).sort((a, b) => a - b);
   const ref = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 40;
   // Tonklasse der Bass-Spur im Fenster [t, t + max(d, Schlag)): Überlappung (ausklingende Töne von vorher
   // zählen halb) + Anschlag am Fensteranfang. attacked: ob ein Ton dieser Klasse dort neu angeschlagen wird
@@ -340,6 +343,9 @@ export function sourceBass(ctx, chordAt) {
     for (let i = lo; i < notes.length && notes[i].start < t + win; i++) {
       const n = notes[i];
       if (n.start + n.dur <= t - 6) continue;
+      // Töne weit über der Lage der Basslinie sind Obertöne oder Übersprechen (Streicher in der Bass-Spur
+      // im Intro von „Viva la Vida“) – sie bestimmen den Basston nicht
+      if (n.midi > ref + 9) continue;
       const ov = Math.max(0, Math.min(t + win, n.start + n.dur) - Math.max(t, n.start)) * (n.start < t - 6 ? 0.5 : 1);
       const k = mod(n.midi, 12);
       const hit = Math.abs(n.start - t) <= 6;
@@ -362,7 +368,9 @@ export function sourceBass(ctx, chordAt) {
   const place = (pc) => {
     const target = prev == null ? ref : prev;
     let best = null;
+    // nur innerhalb von ±10 Halbtönen um die Mitte: die Linie bleibt kompakt in einer Lage
     for (let p = pc; p <= 72; p += 12) {
+      if (Math.abs(p - ref) > 10) continue;
       const cost = Math.abs(p - target) + 0.5 * Math.abs(p - ref);
       if (best == null || cost < best.cost) best = { p, cost };
     }
@@ -388,6 +396,33 @@ export function sourceBass(ctx, chordAt) {
       list = ts.map((t, i) => [t, (ts[i + 1] ?? mt) - t]);
       kind = 'kick';
     } else {
+      // Viertel der Bass-Spur (Walking/Two-Beat, z. B. die Tuba in „Puttin' on the Ritz“): liegen mindestens
+      // drei Einsätze des Takts auf Schlägen, spielt der Bass diese Viertel mit dem Ton je Schlag
+      const onBeats = new Set();
+      for (const n of notes) {
+        if (n.start < a0 - 6 || n.start >= a0 + mt - 6) continue;
+        const k = Math.round((n.start - a0) / geo.beat);
+        if (Math.abs(n.start - a0 - k * geo.beat) <= 6 && k >= 0 && k < geo.nBeats) onBeats.add(k * geo.beat);
+      }
+      const beats = [...onBeats].sort((x, y) => x - y);
+      if (!geo.compound && beats.length >= 3) {
+        const walk = [];
+        let prevPc = null;
+        beats.forEach((t, i) => {
+          const d = (beats[i + 1] ?? mt) - t;
+          const cp = chordPc(a0 + t);
+          const s = pcAt(a0 + t, geo.beat, geo.beat, cp);
+          const pc = s ? s.pc : prevPc ?? cp;
+          if (pc == null) return;
+          prevPc = pc;
+          walk.push({ start: a0 + t, dur: d, midi: place(pc), srcBass: true });
+        });
+        if (walk.length) {
+          kinds.walk = (kinds.walk || 0) + 1;
+          out.push(...walk);
+          continue;
+        }
+      }
       list = half < mt ? [[0, half], [half, mt - half]] : [[0, mt]];
       kind = 'held';
     }

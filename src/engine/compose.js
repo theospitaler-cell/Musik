@@ -441,6 +441,7 @@ export function compose(material, N, opts = {}) {
     const parts = [];
     if (k.ostinato) parts.push(`im Begleitmuster der Vorlage (${k.ostinato} Takte)`);
     if (k.kick) parts.push(`nach dem Muster der Bassdrum (${k.kick} Takte)`);
+    if (k.walk) parts.push(`in Vierteln wie die Bass-Spur (${k.walk} Takte)`);
     if (k.held) parts.push(`ruhig in Halben (${k.held} Takte)`);
     report.notes.push(`Bass mit den Tönen der Bass-Spur: ${parts.join(', ')}`);
   } else if (riff) report.notes.push('Bass: synkopierte Linie nach der Bassdrum bzw. einem Funk-Muster (wo die Vorlage Liegetöne hatte)');

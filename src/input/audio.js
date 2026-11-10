@@ -1707,7 +1707,7 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
           const g = n.fast ? n.grid || 6 : GRID;
           const s0 = toTick(n.start, g);
           const d = Math.max(n.fast ? g : unit, toTick(n.end, g) - s0);
-          return { start: s0, dur: d, midi: n.midi, amp: n.amp ?? 0.5, ...(n.stem ? { stem: n.stem } : {}), ...(n.fast ? { fast: true, grid: g } : {}) };
+          return { start: s0, dur: d, midi: n.midi, amp: n.amp ?? 0.5, ...(n.stem ? { stem: n.stem } : {}), ...(n.weak ? { weak: true } : {}), ...(n.fast ? { fast: true, grid: g } : {}) };
         })
         .filter((n) => n.start >= -mt + BT && n.start < measureCount * mt),
       { step: unit },
@@ -1746,7 +1746,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     {
       const taken = new Set([...vs.melody, ...vs.bass].map((n) => `${n.start}:${n.midi}`));
       const stemmed = aiRaw.some((n) => n.stem);
-      const src = aiRaw.filter((n) => (stemmed ? n.stem === 'other' : true) && n.end - n.start >= 0.06).sort((a, b) => a.start - b.start);
+      // (Töne unter D3 zählen nicht: Akkorde liegen in der Mittellage – tiefe Töne in „other“ sind meist der
+      // Bass selbst, z. B. die Tuba eines Bläserquintetts, und würden das Muster der Begleitung verwischen)
+      const src = aiRaw.filter((n) => (stemmed ? n.stem === 'other' : true) && n.midi >= 50 && n.end - n.start >= 0.06).sort((a, b) => a.start - b.start);
       const amps = src.map((n) => n.amp ?? 0.5).sort((a, b) => a - b);
       const ampMin = (amps[Math.floor(amps.length / 2)] || 0.4) * 0.6;
       const groups = [];
@@ -1829,10 +1831,10 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   if (compHits && compHits.length >= 16) fin.compHits = compHits.filter((n) => n.start < measureCount * mt);
   // Gesang je Takt (Anteil des Takts mit Tönen der Gesangsspur, 0…1): zeigt Intro/Zwischenspiele ohne Gesang.
   // Nur mit Spurentrennung, und nur wenn überhaupt gesungen wird (mindestens jeder zehnte Takt)
-  if (polyNotes && polyNotes.some((n) => n.stem === 'vocals')) {
+  if (polyNotes && polyNotes.some((n) => n.stem === 'vocals' && !n.weak)) {
     const cov = new Array(measureCount).fill(0);
     for (const n of polyNotes) {
-      if (n.stem !== 'vocals' || n.start < 0) continue;
+      if (n.stem !== 'vocals' || n.weak || n.start < 0) continue;
       for (let t = n.start; t < n.start + n.dur; ) {
         const b = Math.floor(t / mt);
         if (b >= measureCount) break;

@@ -123,15 +123,19 @@ const levelRef = (lv) => {
   return s.length ? s[Math.floor(s.length * 0.9)] : 0;
 };
 
-// Schwelle je Spur: 35 dB unter ihrem lauten Pegel (90. Perzentil) und 45 dB unter der lautesten Spur –
-// so bleibt leiser Gesang, aber eine Spur, die fast nur Übersprechen enthält (Gesang in einem Bläserquintett),
-// liefert nur dort Töne, wo wirklich etwas in ihr klingt
-export function levelGates(levels, { ownDb = 35, globalDb = 45 } = {}) {
+// Gesperrt wird nur die Gesangsspur: dort erzeugt Übersprechen eine Schein-Melodie. Bass- und Begleitspur
+// bleiben ungesperrt – Demucs legt Blechbläser-Bässe oft größtenteils in „other“ (Tuba in „Puttin' on the
+// Ritz“: Bass-Spur 45 dB leiser als „other“), und der Bass wird nur aus der Bass-Spur gelesen.
+// Schwelle: 42 dB unter dem lauten Pegel der Spur (90. Perzentil) und 60 dB unter der lautesten Spur.
+// Gemessen: Übersprechen in der Gesangsspur −47…−62 dB („Viva la Vida“-Intro, Pausen in „Gonna Fly Now“),
+// leiser Gesang/Chor ab −30 dB. Eine Gesangsspur, die fast nur Übersprechen enthält (Bläserquintett), liefert
+// so nur dort Töne, wo wirklich etwas in ihr klingt.
+export function levelGates(levels, { stems = ['vocals'], ownDb = 42, globalDb = 60 } = {}) {
   const refs = {};
   for (const [k, lv] of Object.entries(levels || {})) if (lv && lv.rms && lv.rms.length) refs[k] = levelRef(lv);
   const top = Math.max(0, ...Object.values(refs));
   const gates = {};
-  for (const [k, r] of Object.entries(refs)) gates[k] = Math.max(r * 10 ** (-ownDb / 20), top * 10 ** (-globalDb / 20));
+  for (const k of stems) if (refs[k] > 0) gates[k] = Math.max(refs[k] * 10 ** (-ownDb / 20), top * 10 ** (-globalDb / 20));
   return gates;
 }
 
@@ -151,9 +155,17 @@ export function mergeStemNotes(parts, { bassMax = 60, bleedSec = 0.05, levels = 
     const gates = levelGates(levels);
     parts = Object.fromEntries(Object.entries(parts).map(([k, list]) => [k, gates[k] ? gateByLevel(list || [], levels[k], gates[k]) : list]));
   }
+  // Wird überhaupt gesungen? Echter Gesang ist fast so laut wie die lauteste Spur (Viva la Vida: −0,5 dB); in
+  // Instrumental-Aufnahmen enthält die Gesangsspur nur Übersprechen der Bläser (−34 bis −59 dB). Ihre Töne
+  // bleiben (oft die Melodie-Trompete), zählen aber nicht als Gesang (weak) – kein Gesangsanteil je Takt.
+  let weakVocals = false;
+  if (levels && levels.vocals && levels.vocals.rms && levels.vocals.rms.length) {
+    const refs = Object.values(levels).filter((lv) => lv && lv.rms && lv.rms.length).map(levelRef);
+    weakVocals = levelRef(levels.vocals) < Math.max(...refs) * 10 ** (-20 / 20);
+  }
   const tag = (list, stem) => (list || []).map((n) => ({ ...n, stem }));
   const bass = tag(parts.bass, 'bass').filter((n) => n.midi <= bassMax);
-  const vocals = tag(parts.vocals, 'vocals');
+  const vocals = tag(parts.vocals, 'vocals').map((n) => (weakVocals ? { ...n, weak: true } : n));
   const other = tag(parts.other, 'other');
   const near = (list, n) => list.some((m) => m.midi === n.midi && Math.abs(m.start - n.start) <= bleedSec);
   // Vorrang: Bass (tiefe Töne) > Gesang > Rest

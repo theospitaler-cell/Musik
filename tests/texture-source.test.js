@@ -148,6 +148,13 @@ test('Pegel der Spuren: Töne aus Übersprechen in einer stummen Spur zählen ni
   assert.equal(merged.filter((n) => n.stem === 'other').length, 1);
   // ohne Pegel: wie bisher
   assert.equal(mergeStemNotes(parts).filter((n) => n.stem === 'vocals').length, 2);
+  // Instrumental-Aufnahme: Gesangsspur insgesamt 40 dB leiser als die lauteste Spur – ihre Töne bleiben, zählen
+  // aber nicht als Gesang
+  const quiet = { vocals: stemLevels(tone(0, 4, 0.003), sr), other: stemLevels(tone(0, 4, 0.3), sr) };
+  const m2 = mergeStemNotes({ vocals: [{ start: 2.5, end: 3.0, midi: 69, amp: 0.5 }], other: [] }, { levels: quiet });
+  assert.equal(m2.length, 1);
+  assert.equal(m2[0].weak, true);
+  assert.ok(!merged.some((n) => n.weak), 'echter Gesang ist nicht schwach');
 });
 
 test('Galopp-Figur (♪♬) bleibt im Sechzehntel-Raster, vereinzelte Splitter nicht', () => {
@@ -169,4 +176,32 @@ test('Galopp-Figur (♪♬) bleibt im Sechzehntel-Raster, vereinzelte Splitter n
   mel.push({ start: 18, dur: 6, midi: 70 }, { start: 90, dur: 6, midi: 71 });
   const simp = simplifyLine(markFigures(mel, { beat: 24 }), { beat: 24, allowPush: true });
   assert.equal(simp.filter((n) => n.start % 12 !== 0).length, 0);
+});
+
+test('Bass ohne Begleitmuster und Bassdrum: folgt den Vierteln der Bass-Spur, Obertöne zählen nicht', () => {
+  // Begleitung ohne festes Muster, keine Bassdrum; Bass-Spur: absteigende Viertel-Linie (Two-Beat/Walking)
+  const bars = 16;
+  const compRhythm = [];
+  const bass = [];
+  const lead = [];
+  const line = [53, 51, 49, 48, 46, 44, 43, 47]; // F Es Des C B As G H
+  for (let b = 0; b < bars; b++) {
+    const a0 = b * MT;
+    for (const t of [(b * 7) % 96, (b * 13 + 30) % 96]) for (const m of [60, 64, 67]) compRhythm.push({ start: a0 + (t - (t % 6)), dur: 12, midi: m });
+    for (let k = 0; k < 4; k++) bass.push({ start: a0 + k * 24, dur: 20, midi: line[(b * 4 + k) % 8] - 12 });
+    // ein Oberton weit über der Basslinie (Übersprechen) mitten im Takt
+    bass.push({ start: a0 + 36, dur: 12, midi: 79 });
+    lead.push({ start: a0, dur: 48, midi: 72 }, { start: a0 + 48, dur: 48, midi: 74 });
+  }
+  const m = { title: 'Walk', meter: { beats: 4, beatType: 4 }, measureCount: bars, tempo: 120, lead, bass, comp: [], compRhythm, drums: [], report: { notes: [] } };
+  const r = orchestrate(m, { voices: 4, instruments: ['trumpet', 'horn', 'trombone', 'tuba'], transpose: 0, title: 'Walk' });
+  const tuba = r.arr.voices.find((v) => v.role === 'bass');
+  for (let b = 2; b < 14; b++) {
+    const evs = tuba.events.filter((e) => e.start >= b * MT && e.start < (b + 1) * MT);
+    // Viertel auf den Schlägen (die letzte darf für eine Atemstelle fehlen)
+    const ts = evs.map((e) => e.start - b * MT);
+    assert.ok(ts.length >= 3 && ts.every((t, i) => t === i * 24), `Takt ${b + 1}: Viertel (${ts})`);
+    evs.forEach((e, k) => assert.equal(((e.pitches[0] % 12) + 12) % 12, ((line[(b * 4 + k) % 8] % 12) + 12) % 12, `Takt ${b + 1}, Schlag ${k + 1}: Ton der Linie (ohne Oberton)`));
+  }
+  assert.ok(r.report.notes.some((n) => n.includes('in Vierteln wie die Bass-Spur')), r.report.notes.join(' | '));
 });
