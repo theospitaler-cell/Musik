@@ -332,6 +332,22 @@ export function sourceBass(ctx, chordAt) {
   const solid = notes.filter((n) => n.dur >= 12 && n.midi >= 28 && n.midi <= 60).map((n) => n.midi);
   const sorted = (solid.length >= 8 ? solid : notes.map((n) => n.midi)).sort((a, b) => a - b);
   const ref = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 40;
+  // Basslinie, die als „Melodie“ in Basslage gehört wurde (siehe prepare): füllt Takte ohne Bass-Spur, in die
+  // Lage der Basslinie versetzt (die Tuba allein im Intro von „Puttin' on the Ritz“)
+  const fill = (ctx.bassFill || []).filter((n) => {
+    const b = Math.floor(n.start / mt);
+    return b >= 0 && b < M && !barHas[b];
+  });
+  if (fill.length) {
+    for (const n of fill) {
+      let p = n.midi;
+      while (p > ref + 6) p -= 12;
+      while (p < ref - 6) p += 12;
+      notes.push({ ...n, midi: p });
+      barHas[Math.floor(n.start / mt)] = true;
+    }
+    notes.sort((a, b) => a.start - b.start);
+  }
   // Tonklasse der Bass-Spur im Fenster [t, t + max(d, Schlag)): Überlappung (ausklingende Töne von vorher
   // zählen halb) + Anschlag am Fensteranfang. attacked: ob ein Ton dieser Klasse dort neu angeschlagen wird
   let lo = 0;
@@ -381,12 +397,25 @@ export function sourceBass(ctx, chordAt) {
   const half = geo.compound ? (geo.nBeats >= 2 ? (mt / geo.nBeats) * Math.floor(geo.nBeats / 2) : mt) : geo.nBeats === 4 ? mt / 2 : mt;
   const kinds = { ostinato: 0, kick: 0, held: 0 };
   const leadBars = new Set((ctx.lead || []).map((n) => Math.floor(n.start / mt)));
+  // im Two-Beat läuft der Bass durch, solange Begleitung oder Melodie spielen, und über Lücken bis zwei Takte
+  // (die Erkennung verliert ihn stellenweise – Blechbläser-Bässe liegen oft in der Begleitspur)
+  const presentAt = Array.from({ length: M }, (_, bar) => {
+    const a0 = bar * mt;
+    const info = decode.bars[bar];
+    return (hasStem ? barHas[bar] : !!chordAt(a0)) || (!!decode.offbeat && !!chordAt(a0) && ((info && info.hits.length > 0) || leadBars.has(bar)));
+  });
+  if (decode.offbeat) {
+    for (let bar = 1; bar < M - 1; bar++) {
+      if (presentAt[bar] || !presentAt[bar - 1] || !chordAt(bar * mt)) continue;
+      const z = presentAt[bar + 1] ? bar + 1 : bar + 2 < M && presentAt[bar + 2] ? bar + 2 : -1;
+      if (z < 0) continue;
+      for (let k = bar; k < z; k++) presentAt[k] = true;
+    }
+  }
   for (let bar = 0; bar < M; bar++) {
     const a0 = bar * mt;
     const info = decode.bars[bar];
-    // im Two-Beat läuft der Bass durch, solange Begleitung oder Melodie spielen (die Erkennung verliert ihn
-    // stellenweise – Blechbläser-Bässe liegen oft in der Begleitspur)
-    const present = (hasStem ? barHas[bar] : !!chordAt(a0)) || (!!decode.offbeat && !!chordAt(a0) && ((info && info.hits.length > 0) || leadBars.has(bar)));
+    const present = presentAt[bar];
     let list = null;
     let kind = null;
     if (info && info.ostinato && info.pattern && (present || chordAt(a0))) {
@@ -394,7 +423,8 @@ export function sourceBass(ctx, chordAt) {
       list = ts.map((t, i) => [t, Math.max(6, Math.min(geo.beat, geo.beat - (t % geo.beat), (ts[i + 1] ?? mt) - t))]);
       kind = 'ostinato';
     } else if (!present) continue;
-    else if (kp && kp.fits[bar]) {
+    // (im Two-Beat hat das kurze „Um“ auf jedem Schlag Vorrang vor dem Bassdrum-Muster)
+    else if (kp && kp.fits[bar] && !decode.offbeat) {
       const ts = kp.pattern.filter((t) => t < mt);
       list = ts.map((t, i) => [t, (ts[i + 1] ?? mt) - t]);
       kind = 'kick';

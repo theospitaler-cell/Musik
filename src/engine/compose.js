@@ -90,6 +90,10 @@ export function prepare(material, opts = {}) {
   // dort das Muster allein spielen – im Intro von „Viva la Vida“ pausieren Trompeten und Melodiestimmen
   const accompLead = decode.fromChords ? accompanimentLeadBars(lead, decode.bars, material.vocal, geo, M) : [];
   const lowLead = decode.fromChords ? lowLeadBars(lead, geo, M).filter((b) => !accompLead.includes(b)) : [];
+  // die Töne der „Melodie“ in Basslage sind die Basslinie selbst (eine Oktave höher gehört) – sie füllen den
+  // Bass dort, wo die Bass-Spur nichts hat (Blechbläser-Bässe liegen oft in der Begleitspur)
+  const lowSet = new Set(lowLead);
+  const bassFill = lowLead.length ? lead.filter((n) => lowSet.has(Math.floor(n.start / geo.mt))).map((n) => ({ ...n })) : [];
   if (accompLead.length || lowLead.length) {
     const set = new Set([...accompLead, ...lowLead]);
     const kept = lead.filter((n) => !set.has(Math.floor(n.start / geo.mt)));
@@ -99,7 +103,7 @@ export function prepare(material, opts = {}) {
       lowLead.length = 0;
     }
   }
-  return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material, accompLead, lowLead };
+  return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material, accompLead, lowLead, bassFill: lowLead.length ? bassFill : [] };
 }
 
 // „Melodie“ weit unter ihrer Lage: liegen alle Töne eines Takts mindestens eine Oktave unter der Mitte der

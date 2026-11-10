@@ -251,3 +251,50 @@ test('Two-Beat: Akkorde der Vorlage zwischen den Schlägen -> Nachschläge, Bass
     assert.ok(evs.every((e) => e.start % 24 === 0 && e.dur <= 12), `Takt ${b + 1}: kurz auf den Schlägen`);
   }
 });
+
+test('Alla breve (2/2): Nachschläge auf 2 und 4, Bass auf 1 und 3, Export mit ¢ und Halbe-Metronom', () => {
+  // 48 Takte; Horn/Posaune auf 2 und 4 so lückenhaft gehört wie in der Aufnahme (je Platz in ~45 % der Takte,
+  // unregelmäßig – kein festes Muster), dazu seltene Anschläge auf dem Schlag
+  const bars = 48;
+  const compRhythm = [];
+  const bass = [];
+  const lead = [];
+  const heard = (b, t, p) => (b * 37 + t * 11 + (b * b) % 13) % 100 < p;
+  for (let b = 0; b < bars; b++) {
+    const a0 = b * MT;
+    for (const t of [24, 72]) if (heard(b, t, 45)) for (const m of [56, 60]) compRhythm.push({ start: a0 + t, dur: 24, midi: m });
+    if (heard(b, 1, 15)) for (const m of [56, 60]) compRhythm.push({ start: a0, dur: 24, midi: m });
+    lead.push({ start: a0, dur: 48, midi: 72 }, { start: a0 + 48, dur: 24, midi: 74 }, { start: a0 + 72, dur: 24, midi: 70 });
+    if (b % 2 === 0) bass.push({ start: a0, dur: 24, midi: 41 }, { start: a0 + 48, dur: 24, midi: 36 });
+  }
+  const m = { title: 'Ritz', meter: { beats: 2, beatType: 2 }, measureCount: bars, tempo: 240, lead, bass, comp: [], compRhythm, drums: [], report: { notes: [] } };
+  const r = orchestrate(m, { voices: 5, instruments: ['trumpet', 'trumpet', 'horn', 'trombone', 'tuba'], transpose: 0, title: 'Ritz' });
+  assert.deepEqual(r.report.violations, {});
+  let accomp = 0;
+  for (const v of r.arr.voices.filter((x) => x.role === 'inner')) {
+    const comp = v.events.filter((e) => e.start >= 4 * MT && (e.role === 'stabs' || e.role === 'pad'));
+    if (comp.length < 8) continue;
+    accomp++;
+    assert.ok(comp.every((e) => e.start % 48 === 24 && e.dur <= 24), `${v.profile}: Nachschläge auf 2 und 4`);
+  }
+  assert.ok(accomp >= 2);
+  const tuba = r.arr.voices.find((v) => v.role === 'bass');
+  const body = tuba.events.filter((e) => e.start >= 4 * MT && e.start < 44 * MT);
+  assert.ok(body.length >= 60 && body.every((e) => e.start % 48 === 0 && e.dur <= 24), `Bass kurz auf 1 und 3 (${body.length})`);
+  assert.ok(r.report.notes.some((n) => n.startsWith('Begleitung auf den Nachschlägen')), r.report.notes.join(' | '));
+  const xml = r.xml();
+  assert.match(xml, /<time symbol="cut">\s*<beats>2<\/beats>\s*<beat-type>2<\/beat-type>/);
+  assert.match(xml, /<beat-unit>half<\/beat-unit>\s*<per-minute>120<\/per-minute>/);
+});
+
+test('Tempoangabe am Anfang: erstes festes Tempo nach dem Vorlauf, Einschwingen davor ohne Zeichen', async () => {
+  const { settleOpeningTempo } = await import('../src/input/audio.js');
+  const song = { tempo: 139, tempoMarks: [{ bar: 0, kind: 'rit', bpm: 118 }, { bar: 2, kind: 'tempo', bpm: 127 }, { bar: 47, kind: 'tempo', bpm: 164 }] };
+  settleOpeningTempo(song);
+  assert.equal(song.tempo, 127);
+  assert.deepEqual(song.tempoMarks.map((x) => [x.bar, x.kind, x.bpm]), [[0, 'tempo', 127], [47, 'tempo', 164]]);
+  // ohne festes Tempo am Anfang: das erste Zeichen
+  const s2 = { tempo: 90, tempoMarks: [{ bar: 0, kind: 'accel', bpm: 96 }, { bar: 20, kind: 'tempo', bpm: 110 }] };
+  settleOpeningTempo(s2);
+  assert.equal(s2.tempo, 96);
+});

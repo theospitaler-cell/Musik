@@ -1379,6 +1379,21 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
 //   4: schnelle Läufe und Tonwiederholungen (Anschlag-Erkennung), Halbtempo-Korrektur ab 150 BPM
 export const ANALYSIS_VERSION = 4;
 
+// Tempoangabe am Anfang: das erste feste Tempo der ersten Takte (nach dem Entfernen des Vorlaufs – sonst
+// stammte sie aus den stillen Takten eines Titelbilds). Ein rit./accel. davor ist das Einschwingen der
+// Aufnahme, kein Zeichen. Gemessen: Bond-Medley 139 (Vorlauf) -> 127, Referenz ♩ = 126.
+export function settleOpeningTempo(song) {
+  const marks = song.tempoMarks || [];
+  if (!marks.length) return;
+  const steady = marks.find((x) => x.bar <= 4 && (x.kind === 'tempo' || x.kind === 'atempo'));
+  if (!steady) {
+    song.tempo = marks[0].bpm;
+    return;
+  }
+  song.tempo = steady.bpm;
+  song.tempoMarks = marks.filter((x) => x.bar >= steady.bar).map((x) => (x === steady ? { ...x, bar: 0, kind: 'tempo' } : x));
+}
+
 // Leere Takte vor dem ersten Ton entfernen (Melodie, Spuren, Akkordanschläge; das Schlagzeug allein zählt
 // nicht als Einzähler). Alle Zeiten rücken um ganze Takte vor, der Zeitbezug zur Datei bleibt erhalten.
 export function trimLeadingBars(song, mt, beatsPerBar) {
@@ -1425,7 +1440,7 @@ export function trimLeadingBars(song, mt, beatsPerBar) {
 }
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
-export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null, forceDouble = false, reuse = null } = {}) {
+export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null, forceDouble = false, cutTime = false, reuse = null } = {}) {
   // KI-Rohnoten: Fragmente unter 120 ms weg, Vibrato/kurze Abrisse zu gehaltenen Tönen – es sei
   // denn, zwischen den Teilen liegt ein echter Anschlag (Transient auf den Teiltönen dieses Tons)
   // (reuse: Zwischenergebnisse eines ersten Durchgangs – Spektrum, Anschläge, bereinigte KI-Noten)
@@ -1570,8 +1585,11 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     lowBass: bc.low || null,
     debug,
   });
-  const m = meterInfo.beats;
-  const firstDown = meterInfo.phase;
+  // Alla breve: die Schläge des ersten Durchgangs sind die Halben (gerade Plätze der verdoppelten Schlagliste),
+  // sein Taktanfang bleibt – sonst rutscht die Phase um eine Viertel (Bass auf 2 und 4, Akkorde auf 1 und 3)
+  const keepPhase = cutTime && reuse && Number.isInteger(reuse.firstDown);
+  const m = keepPhase ? 4 : meterInfo.beats;
+  const firstDown = keepPhase ? reuse.firstDown * 2 : meterInfo.phase;
   // Shuffle mit Schlägen auf allen Triolen-Achteln (z. B. Half-Time-Shuffle) -> 12/8-Notation
   const shuffle12 = detectShuffle(feat, beats) && m === 4;
   const BT = shuffle12 ? 36 : DIV; // Ticks je Grundschlag
@@ -1682,7 +1700,8 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   };
   tidyEnds(melody);
 
-  const meter = shuffle12 ? { beats: 3 * m, beatType: 8 } : { beats: m, beatType: 4 };
+  // Alla breve (zweiter Durchgang einer Two-Beat-Aufnahme): vier Viertel im doppelten Tempo = 2/2 (gleiche Ticks)
+  const meter = shuffle12 ? { beats: 3 * m, beatType: 8 } : cutTime && m === 4 ? { beats: 2, beatType: 2 } : { beats: m, beatType: 4 };
   // KI: Stimmen aus den mehrstimmig gehörten Noten – Melodie (Oberstimme), Bass und bis zu zwei
   // Mittelstimmen. Die Gesangslinie der Signalanalyse dient dabei als Hinweis.
   const aiTracks = [];
@@ -1782,7 +1801,28 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     for (const n of poly) if (n.start >= 0) pseudo.push({ start: n.start, dur: Math.min(n.dur, DIV * 2), midi: n.midi });
     for (const n of vs.bass) if (n.start >= 0) pseudo.push({ start: n.start, dur: Math.min(n.dur, DIV * 2), midi: n.midi });
   }
-  const key = detectKey([...pseudo, ...melody.filter((n) => n.start >= 0).map((n) => ({ midi: n.midi, dur: n.dur * 0.5 }))]);
+  // Schlusston von Melodie und Bass als Hinweis (wie die Orchestrierung): ein Medley in mehreren Tonarten
+  // (Bond: f-Moll, F-Dur, c-Moll) bekommt so die Tonart, mit der es beginnt und endet
+  const melEnd = melody.filter((n) => n.start >= 0);
+  const bassT = aiTracks.find((t) => t.role === 'bass');
+  const bassEnd = bassT && bassT.notes.length ? bassT.notes[bassT.notes.length - 1] : null;
+  // Mit KI-Stimmen zählen die gehörten Töne selbst (Melodie, Mittelstimmen, Bass doppelt) – das Spektrum-Chroma
+  // enthält Obertöne und verschiebt Dur/Moll (Bond-Medley: Chroma F-Dur, Stimmen und Partitur f-Moll)
+  const voiced = aiTracks.length ? [...melEnd, ...aiTracks.flatMap((t) => (t.role === 'bass' ? [...t.notes, ...t.notes] : t.notes))].map((n) => ({ midi: n.midi, dur: Math.min(n.dur, DIV * 2) })) : null;
+  let key = detectKey(voiced || [...pseudo, ...melEnd.map((n) => ({ midi: n.midi, dur: n.dur * 0.5 }))], {
+    finalPc: melEnd.length ? ((melEnd[melEnd.length - 1].midi % 12) + 12) % 12 : null,
+    bassFinalPc: bassEnd ? ((bassEnd.midi % 12) + 12) % 12 : null,
+  });
+  // Dur oder Moll auf demselben Grundton? Gedruckte Noten tragen die Tonart des Anfangs: entscheidet das ganze
+  // Stück nur das Geschlecht anders als die ersten 16 Takte (Medley: f-Moll am Anfang, F-Dur in der Mitte),
+  // gilt der Anfang. Ein anderer Grundton am Anfang (Einleitung in einer anderen Tonart) ändert nichts.
+  if (voiced) {
+    const earlyNotes = [...melEnd, ...aiTracks.flatMap((t) => (t.role === 'bass' ? [...t.notes, ...t.notes] : t.notes))].filter((n) => n.start >= 0 && n.start < 16 * mt).map((n) => ({ midi: n.midi, dur: Math.min(n.dur, DIV * 2) }));
+    if (earlyNotes.length >= 32) {
+      const k0 = detectKey(earlyNotes);
+      if (k0.tonicPc === key.tonicPc && k0.mode !== key.mode) key = k0;
+    }
+  }
   const chords = harmonize(pseudo, { meter, key, measureCount, melodyOnly: false });
   const pickupNotes = melody.filter((n) => n.start < 0);
   const song = {
@@ -1875,8 +1915,36 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
       return again;
     }
   }
+  // Two-Beat (Swing, Marsch, Show-Tune: Bass auf den Schlägen, Akkorde dazwischen auf den „und“) zwischen 100 und
+  // 135 BPM: der gehörte Schlag ist die Halbe eines Alla-breve-Takts. Gedruckt steht so ein Stück in 2/2 mit
+  // 𝅗𝅥 = Tempo („Puttin' on the Ritz“: Vivace 𝅗𝅥 = 120) – im 4/4 bei ♩ = 120 würden die Swing-Achtel zu
+  // Sechzehnteln und von der Lesbarkeits-Vereinfachung zusammengelegt. Zweiter Durchgang mit doppeltem Puls,
+  // notiert als 2/2. Kennzeichen: Akkordanschläge auf den Achtel-„und“ mindestens 1,3-mal so häufig wie auf den
+  // Schlägen (gemessen: Ritz 1,41; Rocky, Bond 0,55–0,69; Viva außerhalb des Ostinatos 1,14).
+  if (!forceDouble && !halfTimeFixed && !shuffle12 && !swing && m === 4 && BT === DIV && bpm >= 100 && bpm <= 135 && fin.compHits && fin.compHits.length >= 64) {
+    const bars = new Map();
+    for (const h of fin.compHits) {
+      const b = Math.floor(h.start / mt);
+      if (!bars.has(b)) bars.set(b, new Set());
+      bars.get(b).add(h.start - b * mt);
+    }
+    const list = [...bars.values()];
+    if (list.length >= 16) {
+      const rate = (t) => list.filter((s) => s.has(t)).length / list.length;
+      const on = [0, 1, 2, 3].reduce((a, k) => a + rate(k * DIV), 0) / 4;
+      const and = [0, 1, 2, 3].reduce((a, k) => a + rate(k * DIV + DIV / 2), 0) / 4;
+      if (debug) debug({ twoBeat: { on, and } });
+      if (and >= 0.3 && and >= 1.3 * Math.max(0.05, on)) {
+        const again = transcribe(mono, { title, onProgress: (t, f) => onProgress(t, 0.9 + 0.1 * (f ?? 0)), ai: aiRaw, debug, forceDouble: true, cutTime: true, reuse: { detector, ai, feat, firstDown } });
+        again.warnings = again.warnings.filter((w) => !w.startsWith('Tempo auf'));
+        again.warnings.push(`Alla breve (𝅗𝅥 = ${Math.round(again.tempo / 2)}): Bass auf den Schlägen, Akkorde dazwischen – ein Two-Beat; so stehen die Swing-Achtel als Achtel (mit „Tempo ÷2“ im Projekt umkehrbar).`);
+        return again;
+      }
+    }
+  }
   // Stille am Anfang der Aufnahme (Vorlauf, Titelbild eines Videos): leere Takte vor dem ersten Ton fallen weg
   trimLeadingBars(fin, mt, m);
+  settleOpeningTempo(fin);
   // Stand der Analyse: ältere, gespeicherte Analysen lassen sich in der App neu berechnen
   fin.analysisVersion = ANALYSIS_VERSION;
   fin.aiUsed = hasAi;

@@ -1564,7 +1564,7 @@ async function retimeSong(action) {
   const had = !!S.arr;
   const id = S.currentId;
   if (!(await setSource({ ...S.source, song }))) return;
-  toast(kind === 'shift' ? 'Taktanfang verschoben' : `Tempo jetzt ♩ = ${song.tempo}`, 'ok');
+  toast(kind === 'shift' ? 'Taktanfang verschoben' : `Tempo jetzt ${tempoLabel(song.meter, song.tempo)}`, 'ok');
   if (had) {
     S.currentId = id;
     await generate();
@@ -2081,7 +2081,7 @@ async function showResult(onProgress = null, { restore = false } = {}) {
   const chips = [
     [a.options?.drumMode === 'own' && a.drums ? 'Schlagzeug · eigener Rhythmus' : a.playAlong ? 'Playback 1:1' : a.options?.styleAuto ? `${a.style.name} (automatisch)` : a.style.name, 'accent'],
     [keyNameDe(a.key) + (a.transposeShift ? ` (${a.transposeShift > 0 ? '+' : ''}${a.transposeShift})` : ''), ''],
-    [`♩ = ${a.tempo}`, ''],
+    [tempoLabel(a.meter, a.tempo), ''],
     [`${S.printed.length} Takte gedruckt`, ''],
     [
       a.playAlong
@@ -3413,3 +3413,12 @@ main().catch((e) => {
   console.error(e);
   toast('Start fehlgeschlagen: ' + e.message, 'error');
 });
+
+// Metronomangabe wie in der Partitur: Tempo steht immer in Vierteln; 2/2 (alla breve) zeigt die Halbe,
+// 6/8 und 12/8 die punktierte Viertel
+function tempoLabel(meter, bpm) {
+  const m = meter || { beats: 4, beatType: 4 };
+  if (m.beatType === 2) return `𝅗𝅥 = ${Math.round(bpm / 2)}`;
+  if (m.beatType === 8 && m.beats % 3 === 0 && m.beats > 3) return `♩. = ${Math.round(bpm / 1.5)}`;
+  return `♩ = ${bpm}`;
+}

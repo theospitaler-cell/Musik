@@ -695,7 +695,8 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
         currentKey = { fifths: pk.fifths, mode: block.key.mode };
       }
       if (k === 0 || timeChanged) {
-        w.open('time');
+        // 2/2 als Alla-breve-Zeichen (¢)
+        w.open('time', meterHere.beats === 2 && meterHere.beatType === 2 ? { symbol: 'cut' } : {});
         w.el('beats', meterHere.beats);
         w.el('beat-type', meterHere.beatType);
         w.close('time');
@@ -832,14 +833,15 @@ function writeTempoHeading(w, arr) {
 }
 
 // Metronomangabe: Tempo ist immer in Vierteln gespeichert; zusammengesetzte Takte (6/8, 12/8)
-// zeigen die punktierte Viertel
+// zeigen die punktierte Viertel, Halbe-Takte (2/2 alla breve, 3/2) die Halbe
 function writeMetronome(w, arr, bpm, parentheses = false) {
   const m = arr.meter || { beats: 4, beatType: 4 };
   const compound = m.beatType === 8 && m.beats % 3 === 0 && m.beats > 3;
+  const halves = m.beatType === 2;
   w.open('metronome', parentheses ? { parentheses: 'yes' } : {});
-  w.el('beat-unit', 'quarter');
+  w.el('beat-unit', halves ? 'half' : 'quarter');
   if (compound) w.el('beat-unit-dot');
-  w.el('per-minute', compound ? Math.round(bpm / 1.5) : bpm);
+  w.el('per-minute', compound ? Math.round(bpm / 1.5) : halves ? Math.round(bpm / 2) : bpm);
   w.close('metronome');
 }
 
@@ -1261,7 +1263,8 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle
         w.close('key');
       }
       if (k === 0 || timeChanged) {
-        w.open('time');
+        // 2/2 als Alla-breve-Zeichen (¢)
+        w.open('time', meterHere.beats === 2 && meterHere.beatType === 2 ? { symbol: 'cut' } : {});
         w.el('beats', meterHere.beats);
         w.el('beat-type', meterHere.beatType);
         w.close('time');

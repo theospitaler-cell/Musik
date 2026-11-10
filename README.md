@@ -108,6 +108,13 @@ Die Analyse läuft im Hintergrund.
   Bass oder Mittelstimmen ≥ 35 %), war das Tempo halb erkannt – ein zweiter Durchgang mit doppeltem Tempo
   (Spektrum und KI-Noten werden wiederverwendet). Ein langsames Lied hat vielleicht Läufe im Gesang, aber
   nie einen Sechzehntel-Bass (gemessen: halb erkanntes Bond-Medley 0,63/0,65, richtige Lieder ≤ 0,15/0,01).
+- **Alla breve**: Two-Beat-Aufnahmen zwischen 100 und 135 BPM (Akkordanschläge auf den Achtel-„und“ ≥ 1,3× der
+  Schläge, Bass auf den Schlägen) stehen in 2/2 mit 𝅗𝅥 = Tempo – zweiter Durchgang mit doppeltem Puls, der
+  Taktanfang des ersten bleibt (sonst rutscht die Phase um eine Viertel). So bleiben Swing-Achtel Achtel
+  („Puttin' on the Ritz“: Referenz Vivace 𝅗𝅥 = 120, erkannt 𝅗𝅥 = 122). Export mit ¢ und Halbe-Metronom.
+- **Tempo- und Tonartangabe am Anfang**: das erste feste Tempo nach dem entfernten Vorlauf (ein Einschwingen
+  davor ohne Zeichen); Tonart aus den gehörten Stimmen, bei Dur/Moll auf demselben Grundton gilt der Anfang
+  (Medley: f-Moll am Anfang, F-Dur in der Mitte → f-Moll wie die Partitur).
 - **Rhythmusfiguren**: dieselbe Sechzehntel-Figur (Galopp ♪♬, umgekehrt ♬♪) mindestens dreimal mit Lücken
   von höchstens drei Schlägen bleibt im Sechzehntel-Raster – sonst vereinfacht die Lesbarkeit sie zu Achteln
   (Einleitung von „Gonna Fly Now“). Zufällige Splitter wiederholen sich nicht so genau.
