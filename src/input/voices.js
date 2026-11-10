@@ -482,6 +482,62 @@ export function simplifyLine(line, { beat = DIV, allowPush = false, mergeRepeats
   return res.filter((n) => n.dur > 0);
 }
 
+// Wiederkehrende Rhythmusfiguren mit Sechzehnteln (Galopp „♪♬“, umgekehrt „♬♪“, „♪.♬“): dieselbe Figur in
+// vielen Schlägen kurz hintereinander ist gewollt – zufällige Splitter einer Aufnahme wiederholen sich nicht
+// so genau. Die Erkennung verliert in solchen Figuren einzelne Einsätze; darum zählt die Figur, wenn sie
+// mindestens dreimal mit Lücken von höchstens drei Schlägen vorkommt (und in mindestens 40 % der Schläge
+// dieser Strecke). Ihre Sechzehntel behalten das Sechzehntel-Raster (fast, grid), die Vereinfachung ins
+// Achtel-Raster lässt sie stehen – auch in den Schlägen dazwischen, wo nur ein Teil der Figur gehört wurde.
+// Gleichmäßige Sechzehntel-Ketten erkennt schon markFastNotes.
+// (Beispiel: die Einleitung von „Gonna Fly Now“ – Trompeten im Galopp auf einem Ton.)
+export function markFigures(line, { beat = DIV, minCount = 3, maxGap = 3, minShare = 0.4 } = {}) {
+  const S = beat / 4;
+  if (S !== Math.round(S) || line.length < 6) return line;
+  const byBeat = new Map();
+  for (const n of line) {
+    const b = Math.floor(n.start / beat);
+    if (!byBeat.has(b)) byBeat.set(b, []);
+    byBeat.get(b).push(n);
+  }
+  // Sechzehntel-Plätze der Einsätze je Schlag (nur Schläge, deren Einsätze alle auf dem Raster liegen)
+  const posOf = new Map();
+  for (const [b, ns] of byBeat) {
+    const rel = ns.map((n) => n.start - b * beat);
+    if (rel.some((r) => r % S !== 0) || ns.some((n) => n.dur < S * 0.66)) continue;
+    posOf.set(b, new Set(rel.map((r) => r / S)));
+  }
+  // Kandidaten: Figuren mit mindestens drei Einsätzen und einer echten Sechzehntel (Platz 1 oder 3)
+  const byFig = new Map();
+  for (const [b, ps] of posOf) {
+    if (ps.size < 3 || ![...ps].some((p) => p % 2 === 1)) continue;
+    const k = [...ps].sort((x, y) => x - y).join(',');
+    if (!byFig.has(k)) byFig.set(k, []);
+    byFig.get(k).push(b);
+  }
+  const keep = new Set();
+  for (const [k, bs] of byFig) {
+    const odd = k.split(',').map(Number).filter((p) => p % 2 === 1);
+    bs.sort((x, y) => x - y);
+    for (let i = 0; i < bs.length; ) {
+      let j = i;
+      while (j + 1 < bs.length && bs[j + 1] - bs[j] <= maxGap) j++;
+      const count = j - i + 1;
+      const span = bs[j] - bs[i] + 1;
+      if (count >= minCount && count / span >= minShare) {
+        for (let b = bs[i]; b <= bs[j]; b++) {
+          for (const n of byBeat.get(b) || []) {
+            const p = (n.start - b * beat) / S;
+            if (odd.includes(p) && n.dur >= S * 0.66) keep.add(n);
+          }
+        }
+      }
+      i = j + 1;
+    }
+  }
+  if (!keep.size) return line;
+  return line.map((n) => (keep.has(n) && !n.fast ? { ...n, fast: true, grid: S } : n));
+}
+
 // notes: gereinigte Noten (cleanPoly). hint: Melodie der Signalanalyse (optional, gleiche Ticks)
 export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint = null } = {}) {
   if (!notes.length) return { melody: [], bass: [], inner: [[], []], bassTop: 0 };

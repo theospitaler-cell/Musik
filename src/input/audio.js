@@ -13,7 +13,7 @@ import { detectKey } from '../theory/keys.js';
 import { drumNMF, drumHitsFromActivations } from './drums-nmf.js';
 import { tempoMarksFromTiming } from './tempo-marks.js';
 import { fuseMelody } from './ai-pitch.js';
-import { cleanPoly, separateVoices, simplifyLine, tidyAiNotes, withFastNotes } from './voices.js';
+import { cleanPoly, separateVoices, simplifyLine, markFigures, tidyAiNotes, withFastNotes } from './voices.js';
 import { makeAttackDetector, markFastNotes, markSingleNotes, fineChains } from './fast.js';
 import { barFeatures, audioSections } from './form.js';
 
@@ -1721,8 +1721,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     // Lesbarkeit: im mittleren Tempo stehen die Stimmen im Achtel-Raster (nur echte Synkopen
     // bleiben als Sechzehntel). Langsame Stücke und Shuffle/Swing behalten ihr Raster.
     if (GRID === 6 && !swing && !shuffle12 && bpm >= 72) {
-      vs.melody = simplifyLine(vs.melody, { beat: BT, allowPush: true });
-      vs.bass = simplifyLine(vs.bass, { beat: BT });
+      // wiederkehrende Sechzehntel-Figuren (Galopp) sind gewollt und bleiben im Sechzehntel-Raster
+      vs.melody = simplifyLine(markFigures(vs.melody, { beat: BT }), { beat: BT, allowPush: true });
+      vs.bass = simplifyLine(markFigures(vs.bass, { beat: BT }), { beat: BT });
       vs.inner = vs.inner.map((l) => simplifyLine(l, { beat: BT, mergeRepeats: true }));
     }
     const vel = (n) => Math.round(40 + 80 * Math.min(1, n.amp || 0.5));

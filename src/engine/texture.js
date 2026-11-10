@@ -167,7 +167,9 @@ export function applySourceTexture(score, texture, { doubling = true, soli = tru
   const byFit = [...others].sort((a, b) => Math.abs(center(a) - leadCenter) - Math.abs(center(b) - leadCenter));
   const doublers = [];
   if (nDouble >= 1) doublers.push(byFit[0]);
-  // die zweite Verdopplung eine Oktave tiefer: die Stimme, die am nächsten an Melodie − 12 liegt
+  // weitere Stimmen derselben Lage spielen im Unisono mit (gedruckte Sätze führen ein Thema in der Gruppe:
+  // alle Kornette, 1.–3. Trompete) – erst dann eine Oktave tiefer: die Stimme am nächsten an Melodie − 12
+  for (const v of byFit.slice(1)) if (doublers.length < nDouble && Math.abs(center(v) - leadCenter) <= 5) doublers.push(v);
   const lowFit = [...others].filter((v) => !doublers.includes(v)).sort((a, b) => Math.abs(center(a) - (leadCenter - 12)) - Math.abs(center(b) - (leadCenter - 12)));
   for (const v of lowFit) if (doublers.length < nDouble) doublers.push(v);
   const out = { doubled: 0, soli: 0 };

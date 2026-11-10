@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { orchestrate, defaultVoices } from '../src/engine/index.js';
 import { prepare, markOstinato } from '../src/engine/compose.js';
 import { mergeStemNotes, stemLevels } from '../src/input/stems.js';
+import { markFigures, simplifyLine } from '../src/input/voices.js';
 import { PROFILES } from '../src/engine/profiles.js';
 
 const MT = 96;
@@ -147,4 +148,25 @@ test('Pegel der Spuren: Töne aus Übersprechen in einer stummen Spur zählen ni
   assert.equal(merged.filter((n) => n.stem === 'other').length, 1);
   // ohne Pegel: wie bisher
   assert.equal(mergeStemNotes(parts).filter((n) => n.stem === 'vocals').length, 2);
+});
+
+test('Galopp-Figur (♪♬) bleibt im Sechzehntel-Raster, vereinzelte Splitter nicht', () => {
+  // zwei Takte Galopp auf einem Ton, die Erkennung hat in zwei Schlägen eine Sechzehntel verloren
+  const line = [];
+  for (let b = 0; b < 8; b++) {
+    const t = b * 24;
+    line.push({ start: t, dur: 12, midi: 60 }, { start: t + 12, dur: 6, midi: 60 });
+    if (b !== 2 && b !== 5) line.push({ start: t + 18, dur: 6, midi: 60 });
+  }
+  const out = simplifyLine(markFigures(line, { beat: 24 }), { beat: 24, allowPush: true });
+  const sixteenths = out.filter((n) => n.start % 24 === 18);
+  assert.equal(sixteenths.length, 6, 'jede gehörte Galopp-Sechzehntel bleibt');
+  // wo beide Sechzehntel gehört wurden, ist auch die erste kurz (sonst wird sie zur Achtel)
+  for (const s of sixteenths) assert.equal(out.find((n) => n.start === s.start - 6).dur, 6, `Schlag ${Math.floor(s.start / 24) + 1}`);
+  // Gegenprobe: einzelne Sechzehntel-Splitter in einer Achtel-Melodie entfallen weiter
+  const mel = [];
+  for (let k = 0; k < 16; k++) mel.push({ start: k * 12, dur: 12, midi: 60 + (k % 5) });
+  mel.push({ start: 18, dur: 6, midi: 70 }, { start: 90, dur: 6, midi: 71 });
+  const simp = simplifyLine(markFigures(mel, { beat: 24 }), { beat: 24, allowPush: true });
+  assert.equal(simp.filter((n) => n.start % 12 !== 0).length, 0);
 });

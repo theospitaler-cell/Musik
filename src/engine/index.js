@@ -157,6 +157,24 @@ export function orchestrate(input, opts = {}) {
     // Refrain und die lautesten Formteile der Aufnahme (relative Lautstärke ≥ 0,7): dort wird die Melodie verdoppelt
     for (const s of named) if (s.name === 'Refrain') for (let b = s.start; b < s.start + s.length; b++) refrainBars.add(b);
     for (const s of material.loudness || []) if (s.energy >= 0.7) for (let b = s.start; b < s.start + s.length; b++) refrainBars.add(b);
+    // Instrumentalteile eines Lieds mit Gesang (Intro-Fanfare, Zwischenspiel): ihr Thema spielt im Original eine
+    // Instrumentengruppe – gedruckte Sätze verdoppeln es ebenso (alle Kornette im Galopp bei „Gonna Fly Now“).
+    // Nur zusammenhängende Strecken ab zwei Takten mit Melodie.
+    if (Array.isArray(material.vocal)) {
+      const mt = score.ctx.geo.mt;
+      const leadBars = new Set(score.ctx.lead.map((n) => Math.floor(n.start / mt)));
+      const inst = (b) => (material.vocal[b] ?? 1) < 0.1 && leadBars.has(b);
+      for (let b = 0; b < score.ctx.M; ) {
+        if (!inst(b)) {
+          b++;
+          continue;
+        }
+        let z = b;
+        while (z < score.ctx.M && inst(z)) z++;
+        if (z - b >= 2) for (let k = b; k < z; k++) refrainBars.add(k);
+        b = z;
+      }
+    }
     const ostinatoBars = new Set(score.ctx.decode.bars.filter((b) => b.ostinato).map((b) => b.bar));
     const tex = sourceTexture({ lead: score.ctx.lead, comp: score.ctx.compRhythm || [], geo: score.ctx.geo, M: score.ctx.M, refrainBars, voices: N, ostinatoBars });
     score.texture = tex;
