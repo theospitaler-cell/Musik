@@ -18,7 +18,7 @@ import { decodeComping } from './stems.js';
 import { ensembleFor, profileInstrument, getProfile, fitPitch, inRange } from './profiles.js';
 import { buildSonority, counterLine, fixPerfects, frictions, isFriction } from './voicing.js';
 import { makeEvent, meterGeometry, monoClean, soundingAt, lastBefore, endOf, sortEvents } from './util.js';
-import { behaviorFor, riffBass, stabsPlan, harmonicCounter } from './behavior.js';
+import { behaviorFor, riffBass, sourceBass, stabsPlan, harmonicCounter } from './behavior.js';
 
 const snap = (x, step = 6) => Math.round(x / step) * step;
 
@@ -80,7 +80,51 @@ export function prepare(material, opts = {}) {
   decode.fromChords = compRhythm.length >= 16;
   // nur aus echten Akkordanschlägen (Aufnahmen); Begleitstimmen allein sind kein Begleitrhythmus
   if (decode.fromChords) markOstinato(decode.bars, geo.mt);
-  return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material };
+  // Intro/Zwischenspiel ohne Gesang: läuft die „Melodie“ dort im Rhythmus des Begleitmusters, ist sie nur
+  // dessen Oberstimme (die Tonerkennung nimmt mangels Gesang den obersten Begleitton). Gedruckte Sätze lassen
+  // dort das Muster allein spielen – im Intro von „Viva la Vida“ pausieren Trompeten und Melodiestimmen
+  const accompLead = decode.fromChords ? accompanimentLeadBars(lead, decode.bars, material.vocal, geo, M) : [];
+  if (accompLead.length) {
+    const set = new Set(accompLead);
+    const kept = lead.filter((n) => !set.has(Math.floor(n.start / geo.mt)));
+    if (kept.length >= 8) lead = kept;
+    else accompLead.length = 0;
+  }
+  return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material, accompLead };
+}
+
+// Takte ohne Gesang, deren „Melodie“ im Begleitmuster mitläuft (≥ 60 % der Einsätze auf den Plätzen des
+// Musters). Nur zusammenhängende Strecken mit mindestens zwei solchen Takten; Takte ohne Melodie oder mit
+// halber Übereinstimmung dazwischen gehören zur Strecke.
+function accompanimentLeadBars(lead, bars, vocal, geo, M) {
+  if (!Array.isArray(vocal)) return [];
+  const mt = geo.mt;
+  const state = new Array(M).fill(0); // 0 = nein, 1 = verträglich, 2 = eindeutig
+  for (let b = 0; b < M; b++) {
+    const info = bars[b];
+    if (!info || !info.ostinato || !info.pattern || (vocal[b] ?? 0) >= 0.1) continue;
+    const a0 = b * mt;
+    const ns = lead.filter((n) => n.start >= a0 && n.start < a0 + mt);
+    if (!ns.length) {
+      state[b] = 1;
+      continue;
+    }
+    const on = ns.filter((n) => info.pattern.some((p) => Math.abs(n.start - a0 - p) <= 6)).length / ns.length;
+    state[b] = ns.length >= 2 && on >= 0.6 ? 2 : on >= 0.5 ? 1 : 0;
+  }
+  const out = [];
+  for (let b = 0; b < M; ) {
+    if (!state[b]) {
+      b++;
+      continue;
+    }
+    let z = b;
+    while (z < M && state[z]) z++;
+    const sure = state.slice(b, z).filter((s) => s === 2).length;
+    if (sure >= 2) for (let k = b; k < z; k++) out.push(k);
+    b = z;
+  }
+  return out;
 }
 
 // Wiederkehrender Begleitrhythmus (Ostinato): Einzelne Takte einer Aufnahme sind verrauscht – über das ganze
@@ -89,18 +133,15 @@ export function prepare(material, opts = {}) {
 // (häufigster Platz in ≥ 50 % der Takte, Quote der Muster-Plätze ≥ 1,8 × der übrigen, höchstens 10 von 16
 // Plätzen). Ostinato-Takte sind die, deren eigene Anschläge überwiegend auf dem Muster liegen; kurze Lücken
 // dazwischen (bis zwei Takte) laufen mit, damit der Rhythmus nicht abreißt.
-export function markOstinato(bars, mt = 96) {
-  const slots = Math.max(1, Math.round(mt / 6));
-  for (const b of bars) {
-    b.ostinato = false;
-    b.pattern = null;
-  }
-  const slotOf = (h) => Math.min(slots - 1, Math.round(h.t / 6));
-  const active = bars.filter((b) => b.hits.length);
-  if (active.length < 8) return null;
+// Viele Begleitmuster laufen über zwei Takte (Viva la Vida: „𝄾♪𝄾♪♩♩ | ♩♩♩♪♪“) – übereinandergelegt ergäben
+// beide Takte zusammen ein falsches, zu dichtes Muster. Darum wird das Muster zusätzlich getrennt für gerade und
+// ungerade Takte bestimmt; sind beide klar und verschieden, gilt das Zwei-Takt-Muster. Welcher Takt welche
+// Hälfte spielt, entscheidet ein Viterbi-Lauf (Wechsel A/B bevorzugt, Phasensprung an Formgrenzen möglich).
+function patternOf(list, slots, slotOf, minBars = 8) {
+  if (list.length < minBars) return null;
   const cnt = new Array(slots).fill(0);
-  for (const b of active) for (const k of new Set(b.hits.map(slotOf))) cnt[k]++;
-  const rate = cnt.map((c) => c / active.length);
+  for (const b of list) for (const k of new Set(b.hits.map(slotOf))) cnt[k]++;
+  const rate = cnt.map((c) => c / list.length);
   const top = Math.max(...rate);
   if (top < 0.5) return null;
   const inPat = rate.map((x) => x >= Math.max(0.3, 0.55 * top));
@@ -110,15 +151,76 @@ export function markOstinato(bars, mt = 96) {
     const v = rate.filter((_, k) => inPat[k] === pick);
     return v.length ? v.reduce((p, c) => p + c, 0) / v.length : 0;
   };
-  if (mean(true) / Math.max(0.01, mean(false)) < 1.8) return null;
+  const contrast = mean(true) / Math.max(0.01, mean(false));
+  if (contrast < 1.8) return null;
   const pattern = [];
   inPat.forEach((on, k) => on && pattern.push(k * 6));
+  return { inPat, pattern, contrast };
+}
+
+const jaccardSets = (a, b) => {
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  const uni = a.size + b.size - inter;
+  return uni ? inter / uni : 1;
+};
+
+export function markOstinato(bars, mt = 96) {
+  const slots = Math.max(1, Math.round(mt / 6));
+  for (const b of bars) {
+    b.ostinato = false;
+    b.pattern = null;
+  }
+  const slotOf = (h) => Math.min(slots - 1, Math.round(h.t / 6));
+  const active = bars.filter((b) => b.hits.length);
+  if (active.length < 8) return null;
+  const one = patternOf(active, slots, slotOf);
+  const p0 = patternOf(bars.filter((b, i) => b.hits.length && i % 2 === 0), slots, slotOf, 6);
+  const p1 = patternOf(bars.filter((b, i) => b.hits.length && i % 2 === 1), slots, slotOf, 6);
+  let two = null;
+  if (p0 && p1) {
+    const s0 = new Set(p0.pattern);
+    const s1 = new Set(p1.pattern);
+    if (jaccardSets(s0, s1) <= 0.6 && Math.min(p0.contrast, p1.contrast) > (one ? one.contrast : 0)) two = [p0, p1];
+  }
+  if (!one && !two) return null;
+  const cands = two || [one];
+  const inAny = (k) => cands.some((p) => p.inPat[k]);
   const fits = bars.map((b) => {
     if (!b.hits.length) return false;
     const ks = [...new Set(b.hits.map(slotOf))];
-    const on = ks.filter((k) => inPat[k]).length;
-    return on >= 2 && on / ks.length >= 0.5;
+    // passt, wenn die Anschläge überwiegend auf einem der Muster liegen
+    return cands.some((p) => {
+      const on = ks.filter((k) => p.inPat[k]).length;
+      return on >= 2 && on / ks.length >= 0.5;
+    }) || (two && ks.filter(inAny).length / ks.length >= 0.7);
   });
+  let pattern = one ? one.pattern : two[0].pattern;
+  const which = new Array(bars.length).fill(0);
+  if (two) {
+    // Viterbi über die Takte: Zustand = Hälfte A/B; Wechsel kostet nichts, Wiederholung 0,8
+    const sets = two.map((p) => new Set(p.pattern.map((t) => t / 6)));
+    const emit = (b, s) => (b.hits.length ? 1 - jaccardSets(new Set(b.hits.map(slotOf)), sets[s]) : 0);
+    let cost = [emit(bars[0], 0), emit(bars[0], 1)];
+    const back = [];
+    for (let i = 1; i < bars.length; i++) {
+      const nc = [0, 0];
+      const bk = [0, 0];
+      for (let s = 0; s < 2; s++) {
+        const fromAlt = cost[1 - s];
+        const fromSame = cost[s] + 0.8;
+        bk[s] = fromAlt <= fromSame ? 1 - s : s;
+        nc[s] = Math.min(fromAlt, fromSame) + emit(bars[i], s);
+      }
+      back.push(bk);
+      cost = nc;
+    }
+    let s = cost[0] <= cost[1] ? 0 : 1;
+    for (let i = bars.length - 1; i >= 0; i--) {
+      which[i] = s;
+      if (i > 0) s = back[i - 1][s];
+    }
+  }
   // Lücken bis zwei Takte zwischen passenden Takten schließen
   for (let i = 0; i < bars.length; i++) {
     if (fits[i]) continue;
@@ -130,9 +232,10 @@ export function markOstinato(bars, mt = 96) {
   bars.forEach((b, i) => {
     if (!fits[i]) return;
     b.ostinato = true;
-    b.pattern = pattern;
+    b.pattern = two ? two[which[i]].pattern : pattern;
+    if (two) b.patternHalf = which[i];
   });
-  return pattern;
+  return two ? two.map((p) => p.pattern) : pattern;
 }
 
 // ---- Linien einpassen ---------------------------------------------------------------------------
@@ -155,7 +258,7 @@ function fitMelody(notes, profile, role = 'melody', { transposeOct = 0 } = {}) {
 function fitBass(notes, profile, role = 'bass') {
   const inst = profileInstrument(profile.key);
   const sh = bassOctave(notes.map((n) => ({ midi: n.midi, dur: n.dur })), inst);
-  const evs = notes.map((n) => evFromNote({ ...n, midi: n.midi + sh }, role));
+  const evs = notes.map((n) => evFromNote({ ...n, midi: n.midi + sh }, role, { ...(n.ostinato ? { ostinato: true } : {}), ...(n.srcBass ? { srcBass: true } : {}) }));
   stepFold(evs, profile);
   return evs;
 }
@@ -203,7 +306,9 @@ function attackPlan(bar, ctx, hasLead, behavior) {
     // höchstens eine Zählzeit.
     const ts = info.pattern.filter((t) => t < geo.mt);
     const list = ts.map((t, i) => {
-      const d = Math.max(6, Math.min(geo.beat, (ts[i + 1] ?? geo.mt) - t));
+      // höchstens bis zum nächsten Anschlag und nie über die Zählzeit hinaus (keine Überbindungen im Muster)
+      const toBeat = geo.beat - (t % geo.beat);
+      const d = Math.max(6, Math.min(geo.beat, toBeat, (ts[i + 1] ?? geo.mt) - t));
       return [t, d, d <= geo.beat / 2 ? 'stab' : 'pad'];
     });
     return { kind: 'ostinato', A: list, B: list };
@@ -213,7 +318,7 @@ function attackPlan(bar, ctx, hasLead, behavior) {
   // Bewegung kommt von Melodie und Bass). So stehen auch gedruckte Sätze, wenn eine Stimme die Melodie führt.
   if (ctx.decode.fromChords && info && (hasLead || info.density > 0)) {
     const p = padPattern(geo);
-    return { kind: 'pad', A: p.A.map(([t, d]) => [t, d, 'pad']), B: p.A.map(([t, d]) => [t, d, 'pad']) };
+    return { kind: 'pad', together: true, A: p.A.map(([t, d]) => [t, d, 'pad']), B: p.A.map(([t, d]) => [t, d, 'pad']) };
   }
   if (rhythmic) {
     // Einsätze der Vorlage (echte Akkordanschläge) bleiben, wo sie sind. Ohne Akkordanschläge (nur
@@ -247,7 +352,7 @@ function attackPlan(bar, ctx, hasLead, behavior) {
   // lange Töne – wie in gedruckten Arrangements, wenn eine Stimme die Melodie allein trägt
   if (held && ctx.decode.fromChords) {
     const p = padPattern(geo);
-    return { kind: 'pad', A: p.A.map(([t, d]) => [t, d, 'pad']), B: p.A.map(([t, d]) => [t, d, 'pad']) };
+    return { kind: 'pad', together: true, A: p.A.map(([t, d]) => [t, d, 'pad']), B: p.A.map(([t, d]) => [t, d, 'pad']) };
   }
   const sp = stabsPlan(geo, held ? { ...behavior, stabs: Math.min(behavior.stabs, 1) } : behavior);
   if (sp) return sp;
@@ -285,6 +390,9 @@ export function compose(material, N, opts = {}) {
   // Melodieanteil gesteuert (opts.melodyShare): Oktav-/Unisono-Doppler spielen Begleitung wie die Innenstimmen;
   // die Melodie kommt nur in dem gewählten Anteil dazu (applyMelodyShare)
   if (Array.isArray(opts.melodyShare) || Array.isArray(opts.soloShare) || opts.textureAuto) for (const v of voices) if (v.role === 'double8' || v.role === 'doubleU') v.role = 'inner';
+  // Aufnahme mit durchgehendem Begleitmuster: die Bariton-Schicht spielt das Muster mit (wie Tenorsax, Bariton
+  // und Euphonium in gedruckten Sätzen) statt einer erfundenen Gegenmelodie, die es im Original nicht gibt
+  if (opts.textureAuto && N >= 9 && ctx.decode.bars.filter((b) => b.ostinato).length >= 0.4 * M) for (const v of voices) if (v.role === 'counter') v.role = 'inner';
   const chordAt = (t) => chordAtList(chords, t);
   const scaleAtTick = (t) => {
     const k = ctx.keyAt(Math.max(0, Math.floor(t / geo.mt)));
@@ -296,6 +404,15 @@ export function compose(material, N, opts = {}) {
   // Führung & Stimmendynamik: dynamisch/polyphon oder klassischer Solo-Lead (Aktivität 1–5)
   const behavior = opts.behavior || behaviorFor({ mode: opts.mode, activity: opts.activity });
   const report = { notes: [], voicings: [], fills: [], breaths: [], repairs: { friction: 0, perfects: 0, leaps: 0 } };
+  if (ctx.accompLead && ctx.accompLead.length) {
+    const runs = [];
+    for (const b of ctx.accompLead) {
+      const r = runs[runs.length - 1];
+      if (r && r[1] === b - 1) r[1] = b;
+      else runs.push([b, b]);
+    }
+    report.notes.push(`Ohne Gesang (${runs.map(([a, z]) => (a === z ? `Takt ${a + 1}` : `Takte ${a + 1}–${z + 1}`)).join(', ')}): die Oberstimme der Begleitung ist keine Melodie – dort spielt das Begleitmuster allein`);
+  }
 
   // ---- Lead & Doppelungen
   const leadV = voices.find((v) => v.role === 'lead');
@@ -315,9 +432,18 @@ export function compose(material, N, opts = {}) {
 
   // ---- Bass
   // lebendige Basslinie (dynamisch): folgt der Bassdrum bzw. einem Funk-Muster, wo die Vorlage nur hält
-  const riff = riffBass(ctx, behavior, chordAt);
-  const bassSrc = riff || (ctx.bassNotes.length ? ctx.bassNotes : bassFromChords(chords, geo, ctx.total));
-  if (riff) report.notes.push('Bass: synkopierte Linie nach der Bassdrum bzw. einem Funk-Muster (wo die Vorlage Liegetöne hatte)');
+  // Aufnahmen: Bass als klares Muster mit den Tönen der Bass-Spur (Begleitmuster / Bassdrum / ruhig)
+  const srcBass = opts.textureAuto ? sourceBass(ctx, chordAt) : null;
+  const riff = srcBass ? null : riffBass(ctx, behavior, chordAt);
+  const bassSrc = srcBass ? srcBass.notes : riff || (ctx.bassNotes.length ? ctx.bassNotes : bassFromChords(chords, geo, ctx.total));
+  if (srcBass) {
+    const k = srcBass.kinds;
+    const parts = [];
+    if (k.ostinato) parts.push(`im Begleitmuster der Vorlage (${k.ostinato} Takte)`);
+    if (k.kick) parts.push(`nach dem Muster der Bassdrum (${k.kick} Takte)`);
+    if (k.held) parts.push(`ruhig in Halben (${k.held} Takte)`);
+    report.notes.push(`Bass mit den Tönen der Bass-Spur: ${parts.join(', ')}`);
+  } else if (riff) report.notes.push('Bass: synkopierte Linie nach der Bassdrum bzw. einem Funk-Muster (wo die Vorlage Liegetöne hatte)');
   else if (!ctx.bassNotes.length) report.notes.push('Kein Bass-Stem: Basslinie aus den Akkorden abgeleitet');
   const bassVoices = voices.filter((v) => v.role === 'bass' || v.role === 'bass8vb');
   let foundation = null;
@@ -388,10 +514,10 @@ export function compose(material, N, opts = {}) {
       if (b && t - endOf(b) <= 2 * geo.mt) return b.pitches[0];
       return nx ? nx.pitches[0] : b ? b.pitches[0] : 67;
     };
-    const sonorityAt = (t) => {
-      if (son.has(t)) return son.get(t);
+    const sonorityAt = (t, key = t, topOverride = null) => {
+      if (son.has(key)) return son.get(key);
       const chord = chordAt(t) || buildChord(0, 'major');
-      const s = buildSonority({ top: leadPitchAt(t), chord, voices: innerProfiles, bass: bassAt(t), prev, style });
+      const s = buildSonority({ top: topOverride ?? leadPitchAt(t), chord, voices: innerProfiles, bass: bassAt(t), prev, style });
       if (s) {
         prev = s.pitches;
         report.voicings.push({ t, template: s.template, closed: s.closed, open: s.open, chord: chord.symbol, pitches: s.pitches, roles: s.roles });
@@ -408,24 +534,56 @@ export function compose(material, N, opts = {}) {
       plan.A.forEach(([t, d, kind]) => attacks.push({ t: a0 + t, dur: d, kind, grp: 0 }));
       plan.B.forEach(([t, d, kind]) => attacks.push({ t: a0 + t, dur: d, kind, grp: 1 }));
       attacks.sort((x, y) => x.t - y.t);
+      // Begleitmuster: ein Klang je Abschnitt (Takthälfte bzw. Akkord), unter der Melodie dieses Abschnitts
+      // (nach Dauer gewichteter Median – ein kurzer Ausflug nach unten zieht nicht den ganzen Klang mit) –
+      // jede Stimme wiederholt ihren Ton, statt im Muster zwischen Lagen zu springen
+      const half = geo.nBeats === 4 && !geo.compound ? geo.mt / 2 : geo.mt;
+      const segOf = (t) => {
+        const h0 = a0 + (t - a0 >= half ? half : 0);
+        const c = chords.find((x) => x.start <= t && t < x.start + x.dur);
+        const s0 = Math.max(h0, c ? c.start : h0);
+        const s1 = Math.min(h0 + half, c ? c.start + c.dur : h0 + half);
+        const w = [];
+        for (const e of leadLine) {
+          if (e.start >= s1) break;
+          if (endOf(e) <= s0) continue;
+          w.push([e.pitches[0], Math.min(endOf(e), s1) - Math.max(e.start, s0)]);
+        }
+        let mid = null;
+        if (w.length) {
+          w.sort((x, y) => x[0] - y[0]);
+          const tot = w.reduce((a, x) => a + x[1], 0);
+          let acc = 0;
+          for (const [p, d] of w) {
+            acc += d;
+            if (acc >= tot / 2) {
+              mid = p;
+              break;
+            }
+          }
+        }
+        return { key: `o${s0}`, t: s0, top: mid ?? leadPitchAt(s0) };
+      };
       for (const at of attacks) {
-        const s = sonorityAt(at.t);
+        const seg = plan.kind === 'ostinato' ? segOf(at.t) : null;
+        const s = seg ? sonorityAt(seg.t, seg.key, seg.top) : sonorityAt(at.t);
         if (!s) continue;
-        const top = leadPitchAt(at.t);
+        const top = seg ? seg.top : leadPitchAt(at.t);
         inner.forEach((v, i) => {
           if (i % 2 !== at.grp) return;
           let p = s.pitches[i];
+          if (p === null || p === undefined) return; // kein Platz in der Lage dieser Stimme: sie pausiert
           if (p >= top) {
             if (inRange(p - 12, v.profile)) p -= 12;
             else return;
           }
           const dur = Math.min(at.dur, a0 + geo.mt - at.t);
           if (dur <= 0) return;
-          const e = makeEvent(at.t, dur, p, null, { role: at.kind === 'stab' ? 'stabs' : 'pad', template: s.template, ...(plan.kind === 'ostinato' ? { ostinato: true } : {}) });
+          const e = makeEvent(at.t, dur, p, null, { role: at.kind === 'stab' ? 'stabs' : 'pad', template: s.template, ...(plan.kind === 'ostinato' ? { ostinato: true } : {}), ...(plan.together ? { shared: true } : {}) });
           if (v.profile.staves > 1) {
             // Klavier: der ganze Satz dieses Moments – rechte Hand die Akkordtöne unter der Melodie,
             // linke Hand der Basston (Doppelsystem, Aufteilung beim Notensatz)
-            const ps = new Set(s.pitches.filter((x) => x < top && inRange(x, v.profile)));
+            const ps = new Set(s.pitches.filter((x) => x !== null && x < top && inRange(x, v.profile)));
             const b = bassAt(at.t);
             if (b !== null && inRange(b, v.profile)) ps.add(b);
             if (ps.size) {

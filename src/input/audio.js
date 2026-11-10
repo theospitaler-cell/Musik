@@ -1396,6 +1396,7 @@ export function trimLeadingBars(song, mt, beatsPerBar) {
   if (song.tracks) song.tracks = song.tracks.map((t) => ({ ...t, notes: move(t.notes) }));
   if (song.compHits) song.compHits = move(song.compHits);
   if (song.drumNotes) song.drumNotes = move(song.drumNotes);
+  if (song.vocal) song.vocal = song.vocal.slice(k);
   if (song.chords) {
     song.chords = song.chords
       .filter((c) => c.start + c.dur > sh)
@@ -1424,14 +1425,15 @@ export function trimLeadingBars(song, mt, beatsPerBar) {
 }
 
 // mono: Float32Array (22050 Hz, siehe resampleMono)
-export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null } = {}) {
+export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null, forceDouble = false, reuse = null } = {}) {
   // KI-Rohnoten: Fragmente unter 120 ms weg, Vibrato/kurze Abrisse zu gehaltenen Tönen – es sei
   // denn, zwischen den Teilen liegt ein echter Anschlag (Transient auf den Teiltönen dieses Tons)
-  const detector = aiRaw && aiRaw.length ? makeAttackDetector(mono, SR) : null;
+  // (reuse: Zwischenergebnisse eines ersten Durchgangs – Spektrum, Anschläge, bereinigte KI-Noten)
+  const detector = reuse ? reuse.detector : aiRaw && aiRaw.length ? makeAttackDetector(mono, SR) : null;
   const attack = detector ? detector.reattack : null;
-  const ai = aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack, rise: detector ? detector.onsetRise : null }) : aiRaw;
-  onProgress('Spektrum wird analysiert', 0);
-  const feat = analyzeFrames(mono, onProgress);
+  const ai = reuse ? reuse.ai : aiRaw && aiRaw.length ? tidyAiNotes(aiRaw, { attack, rise: detector ? detector.onsetRise : null }) : aiRaw;
+  if (!reuse) onProgress('Spektrum wird analysiert', 0);
+  const feat = reuse ? reuse.feat : analyzeFrames(mono, onProgress);
   onProgress('Tempo & Beats werden erkannt', 0.46);
   // Onset-Hüllkurve: Spektralfluss + Tiefband (Bass Drum hat nur wenige Bins)
   const lowNorm = bandNorm(feat.lowF);
@@ -1489,9 +1491,9 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   // doppelten Tempo: Snare auf 2 und 4 fällt bei halbem Tempo auf die „und“). Gemessen: halb erkannte Stücke
   // ≥ 0,8, echte langsame Lieder (Balladen, Lo-Fi, 81 BPM) 0,35–0,52.
   const strongPulse = pulseRatio !== null && pulseRatio >= 0.75 && bpm < 85;
-  if (bpm >= 50 && bpm < 92 && bpm * 2 <= 190 && beats.length >= 8 && pulseRatio !== null && pulseRatio >= 0.6 && ((aiRaw && aiRaw.length >= 32) || strongPulse)) {
-    const fc = aiRaw && aiRaw.length >= 32 ? fineChains(aiRaw, 60 / bpm) : { chains: 0, notes: 0, share: 0 };
-    if ((fc.chains >= 3 && fc.notes >= 16 && fc.share >= 0.05) || strongPulse) {
+  if (forceDouble || (bpm >= 50 && bpm < 92 && bpm * 2 <= 190 && beats.length >= 8 && pulseRatio !== null && pulseRatio >= 0.6 && ((aiRaw && aiRaw.length >= 32) || strongPulse))) {
+    const fc = !forceDouble && aiRaw && aiRaw.length >= 32 ? fineChains(aiRaw, 60 / bpm) : { chains: 0, notes: 0, share: 0 };
+    if (forceDouble || (fc.chains >= 3 && fc.notes >= 16 && fc.share >= 0.05) || strongPulse) {
       const dbl = [];
       for (let i = 0; i < beats.length; i++) {
         dbl.push(beats[i]);
@@ -1824,6 +1826,23 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   fin.timing = { beatSec, firstBeat: firstDown, beatTicks: BT };
   if (aiTracks.length) fin.tracks = [{ id: 'ai-melody', name: 'Gesang / Melodie (KI)', program: 52, mel: true, notes: fin.melody.map((n) => ({ ...n, vel: 90 })) }, ...aiTracks];
   if (compHits && compHits.length >= 16) fin.compHits = compHits.filter((n) => n.start < measureCount * mt);
+  // Gesang je Takt (Anteil des Takts mit Tönen der Gesangsspur, 0…1): zeigt Intro/Zwischenspiele ohne Gesang.
+  // Nur mit Spurentrennung, und nur wenn überhaupt gesungen wird (mindestens jeder zehnte Takt)
+  if (polyNotes && polyNotes.some((n) => n.stem === 'vocals')) {
+    const cov = new Array(measureCount).fill(0);
+    for (const n of polyNotes) {
+      if (n.stem !== 'vocals' || n.start < 0) continue;
+      for (let t = n.start; t < n.start + n.dur; ) {
+        const b = Math.floor(t / mt);
+        if (b >= measureCount) break;
+        const z = Math.min(n.start + n.dur, (b + 1) * mt);
+        cov[b] += z - t;
+        t = z;
+      }
+    }
+    const vocal = cov.map((c) => Math.round(Math.min(1, c / mt) * 100) / 100);
+    if (vocal.filter((x) => x >= 0.2).length >= 0.1 * measureCount) fin.vocal = vocal;
+  }
   if (aiInfo) fin.warnings.push(`Lokale KI (Basic Pitch): ${aiInfo.notes} Noten gehört – Melodie, Bass${aiTracks.length > 1 ? ' und Mittelstimmen' : ''} als eigene Spuren.`);
   // Tempowechsel, rit./accel. aus den echten Schlagzeiten
   const tm = tempoMarksFromTiming(fin.timing, m, measureCount);
@@ -1834,6 +1853,25 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
   if (halfTimeFixed) fin.warnings.push(`Tempo auf ${Math.round(bpm)} verdoppelt: das Schlagzeug und die schnellen Noten passen zum doppelten Tempo (mit „Tempo ÷2“ im Projekt umkehrbar).`);
   fin.duration = mono.length / SR;
+  // Nachprüfung im Notenbild: stehen Melodie UND Bass/Begleitung überwiegend in Sechzehnteln (und kürzer),
+  // war das Tempo halb erkannt – ein langsames Lied hat vielleicht schnelle Läufe im Gesang, aber nie einen
+  // Sechzehntel-Bass. Gemessen: halb erkannter Bond-Medley-Satz (63 statt 126) Melodie 0,63 / Bass 0,65 /
+  // Mittelstimmen 0,75; richtig erkannte Lieder Melodie ≤ 0,15, Bass/Mittelstimmen ≤ 0,01. Dann noch ein
+  // Durchgang mit doppeltem Tempo (Spektrum und KI-Noten werden wiederverwendet).
+  if (!forceDouble && !halfTimeFixed && bpm < 90 && bpm * 2 <= 190 && hasAi) {
+    const share16 = (list) => (list && list.length >= 32 ? list.filter((n) => n.dur <= DIV / 4).length / list.length : 0);
+    const bassT = aiTracks.find((t) => t.role === 'bass');
+    const innerN = aiTracks.filter((t) => t.role === 'inner').flatMap((t) => t.notes);
+    const sm = share16(fin.melody);
+    const sb = Math.max(share16(bassT ? bassT.notes : null), share16(innerN));
+    if (debug) debug({ density: { melody: sm, accomp: sb } });
+    if (sm >= 0.4 && sb >= 0.35) {
+      const again = transcribe(mono, { title, onProgress: (t, f) => onProgress(t, 0.9 + 0.1 * (f ?? 0)), ai: aiRaw, debug, forceDouble: true, reuse: { detector, ai, feat } });
+      again.warnings = again.warnings.filter((w) => !w.startsWith('Tempo auf'));
+      again.warnings.push(`Tempo auf ${again.tempo} verdoppelt: im halben Tempo stünden Melodie und Begleitung fast nur in Sechzehnteln (mit „Tempo ÷2“ im Projekt umkehrbar).`);
+      return again;
+    }
+  }
   // Stille am Anfang der Aufnahme (Vorlauf, Titelbild eines Videos): leere Takte vor dem ersten Ton fallen weg
   trimLeadingBars(fin, mt, m);
   // Stand der Analyse: ältere, gespeicherte Analysen lassen sich in der App neu berechnen

@@ -100,7 +100,57 @@ export function parseWav(bytes) {
 //  - Durchsprechen: dieselbe Tonhöhe fast gleichzeitig in mehreren Stems -> der „zuständige“ Stem
 //    behält sie (Bass-Stem für tiefe Töne, sonst vocals vor other)
 // Rückgabe: Noten mit stem: 'vocals' | 'other' | 'bass', nach Einsatz sortiert.
-export function mergeStemNotes(parts, { bassMax = 60, bleedSec = 0.05 } = {}) {
+// ---- Pegel der Spuren: Übersprechen erkennen
+// Basic Pitch gleicht die Lautstärke aus und hört darum auch in einer praktisch stummen Spur Töne (z. B. die
+// Streicher, die mit −60 dB in die Gesangsspur durchsprechen – im Intro von „Viva la Vida“ wurden sie so zur
+// „Melodie“). levels: RMS je 50 ms; ein Ton zählt nur, wenn seine Spur währenddessen wirklich klingt.
+export function stemLevels(audio, sampleRate = 22050, hopSec = 0.05) {
+  const hop = Math.max(1, Math.round(sampleRate * hopSec));
+  const n = Math.ceil(audio.length / hop);
+  const rms = new Float32Array(n);
+  for (let f = 0; f < n; f++) {
+    const a = f * hop;
+    const z = Math.min(audio.length, a + hop);
+    let e = 0;
+    for (let i = a; i < z; i++) e += audio[i] * audio[i];
+    rms[f] = Math.sqrt(e / Math.max(1, z - a));
+  }
+  return { hopSec, rms };
+}
+
+const levelRef = (lv) => {
+  const s = Array.from(lv.rms).filter((x) => x > 1e-7).sort((a, b) => a - b);
+  return s.length ? s[Math.floor(s.length * 0.9)] : 0;
+};
+
+// Schwelle je Spur: 35 dB unter ihrem lauten Pegel (90. Perzentil) und 45 dB unter der lautesten Spur –
+// so bleibt leiser Gesang, aber eine Spur, die fast nur Übersprechen enthält (Gesang in einem Bläserquintett),
+// liefert nur dort Töne, wo wirklich etwas in ihr klingt
+export function levelGates(levels, { ownDb = 35, globalDb = 45 } = {}) {
+  const refs = {};
+  for (const [k, lv] of Object.entries(levels || {})) if (lv && lv.rms && lv.rms.length) refs[k] = levelRef(lv);
+  const top = Math.max(0, ...Object.values(refs));
+  const gates = {};
+  for (const [k, r] of Object.entries(refs)) gates[k] = Math.max(r * 10 ** (-ownDb / 20), top * 10 ** (-globalDb / 20));
+  return gates;
+}
+
+export function gateByLevel(notes, lv, floor) {
+  if (!lv || !lv.rms || !lv.rms.length || !(floor > 0)) return notes;
+  return notes.filter((n) => {
+    const a = Math.max(0, Math.floor(n.start / lv.hopSec));
+    const z = Math.min(lv.rms.length - 1, Math.ceil(n.end / lv.hopSec));
+    let m = 0;
+    for (let f = a; f <= z; f++) if (lv.rms[f] > m) m = lv.rms[f];
+    return m >= floor;
+  });
+}
+
+export function mergeStemNotes(parts, { bassMax = 60, bleedSec = 0.05, levels = null } = {}) {
+  if (levels) {
+    const gates = levelGates(levels);
+    parts = Object.fromEntries(Object.entries(parts).map(([k, list]) => [k, gates[k] ? gateByLevel(list || [], levels[k], gates[k]) : list]));
+  }
   const tag = (list, stem) => (list || []).map((n) => ({ ...n, stem }));
   const bass = tag(parts.bass, 'bass').filter((n) => n.midi <= bassMax);
   const vocals = tag(parts.vocals, 'vocals');

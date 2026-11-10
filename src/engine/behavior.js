@@ -268,6 +268,158 @@ export function riffBass(ctx, b, chordAt) {
   return changed ? out.sort((x, y) => x.start - y.start) : null;
 }
 
+// ---- Bass einer Aufnahme ---------------------------------------------------------------------
+// Gedruckte Sätze schreiben den Bass einer Band-Aufnahme nicht Anschlag für Anschlag ab (die erkannten
+// Einsätze der Bass-Spur sind verrauscht: verschluckte Tonwiederholungen, Oktavfehler, Fragmente),
+// sondern als klares Muster mit den Tönen des Originals:
+//   1. Takte mit Begleitmuster der Vorlage (Ostinato): der Bass spielt das Muster mit (wie Tuba und
+//      Bassstimme in „Viva la Vida“ – alle Begleiter im Streicher-Rhythmus), auch wo das Original dort
+//      keinen Bass hat
+//   2. sonst das wiederkehrende Muster der Bassdrum (über das ganze Stück übereinandergelegt; z. B. 1, 3, 4+
+//      in „Gonna Fly Now“) – nur wo die Bass-Spur in dem Takt klingt
+//   3. sonst ruhig: Halbe bzw. ein Ton je Takthälfte, gleiche Töne zusammengezogen
+// Tonhöhe je Anschlag: die Tonklasse der Bass-Spur mit dem größten Anteil im Anschlagsfenster (sonst der
+// Basston des Akkords), in die Oktave, die dem vorigen Ton am nächsten liegt – keine erfundenen Sprünge.
+export function kickPattern(kicks, geo, M) {
+  const step = 12; // Achtel-Raster
+  const slots = Math.max(1, Math.round(geo.mt / step));
+  const bars = Array.from({ length: M }, () => new Set());
+  for (const d of kicks) {
+    const bar = Math.floor(d.start / geo.mt);
+    if (bar < 0 || bar >= M) continue;
+    bars[bar].add(Math.min(slots - 1, Math.round((d.start - bar * geo.mt) / step)));
+  }
+  const active = bars.filter((s) => s.size);
+  if (active.length < 8) return null;
+  const rate = Array.from({ length: slots }, (_, k) => active.filter((s) => s.has(k)).length / active.length);
+  const top = Math.max(...rate);
+  if (top < 0.5) return null;
+  const inPat = rate.map((x) => x >= Math.max(0.3, 0.55 * top));
+  const nIn = inPat.filter(Boolean).length;
+  if (nIn < 1 || nIn > Math.round(slots * 0.625)) return null;
+  const mean = (pick) => {
+    const v = rate.filter((_, k) => inPat[k] === pick);
+    return v.length ? v.reduce((p, c) => p + c, 0) / v.length : 0;
+  };
+  if (mean(true) / Math.max(0.01, mean(false)) < 1.8) return null;
+  const pattern = [];
+  inPat.forEach((on, k) => on && pattern.push(k * step));
+  if (!pattern.includes(0)) pattern.unshift(0);
+  const fits = bars.map((s) => {
+    if (!s.size) return false;
+    const on = [...s].filter((k) => inPat[k]).length;
+    return on >= 1 && on / s.size >= 0.5;
+  });
+  for (let i = 1; i + 1 < M; i++) if (!fits[i] && fits[i - 1] && (fits[i + 1] || (i + 2 < M && fits[i + 2]))) fits[i] = 'gap';
+  return { pattern, fits };
+}
+
+export function sourceBass(ctx, chordAt) {
+  const { geo, material, bassNotes, decode, M } = ctx;
+  const mt = geo.mt;
+  const notes = [...bassNotes].sort((a, b) => a.start - b.start);
+  const hasStem = notes.length >= 8;
+  const barHas = new Array(M).fill(false);
+  for (const n of notes) {
+    const b0 = Math.floor(n.start / mt);
+    const b1 = Math.floor((n.start + n.dur - 1) / mt);
+    for (let b = Math.max(0, b0); b <= Math.min(M - 1, b1); b++) barHas[b] = true;
+  }
+  const kicks = (material.drums || []).filter((d) => d.kind === 'kick');
+  const kp = kickPattern(kicks, geo, M);
+  const sorted = notes.map((n) => n.midi).sort((a, b) => a - b);
+  const ref = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 40;
+  // Tonklasse der Bass-Spur im Fenster [t, t + max(d, Schlag)): Überlappung (ausklingende Töne von vorher
+  // zählen halb) + Anschlag am Fensteranfang. attacked: ob ein Ton dieser Klasse dort neu angeschlagen wird
+  let lo = 0;
+  const pcAt = (t, d, minWin = geo.beat, prefer = null) => {
+    const win = Math.max(d, minWin);
+    while (lo < notes.length && notes[lo].start + notes[lo].dur + mt < t) lo++;
+    const w = new Map();
+    const att = new Set();
+    for (let i = lo; i < notes.length && notes[i].start < t + win; i++) {
+      const n = notes[i];
+      if (n.start + n.dur <= t - 6) continue;
+      const ov = Math.max(0, Math.min(t + win, n.start + n.dur) - Math.max(t, n.start)) * (n.start < t - 6 ? 0.5 : 1);
+      const k = mod(n.midi, 12);
+      const hit = Math.abs(n.start - t) <= 6;
+      if (hit) att.add(k);
+      w.set(k, (w.get(k) || 0) + ov + (hit ? win : 0));
+    }
+    let best = null;
+    for (const [k, x] of w) if (!best || x > best.x) best = { k, x };
+    if (!best || best.x < 0.3 * win) return null;
+    // Basston des Akkords, wenn er im Fenster fast so stark ist (Obertöne – Quinte, Terz – sind häufige
+    // Fehlgriffe der Erkennung)
+    if (prefer != null && prefer !== best.k && (w.get(prefer) || 0) >= 0.5 * best.x) return { pc: prefer, attacked: att.has(prefer) };
+    return { pc: best.k, attacked: att.has(best.k) };
+  };
+  const chordPc = (t) => {
+    const c = chordAt(t);
+    return c ? c.bassPc ?? c.rootPc : null;
+  };
+  let prev = null;
+  const place = (pc) => {
+    const target = prev == null ? ref : prev;
+    let best = null;
+    for (let p = pc; p <= 72; p += 12) {
+      const cost = Math.abs(p - target) + 0.5 * Math.abs(p - ref);
+      if (best == null || cost < best.cost) best = { p, cost };
+    }
+    prev = best.p;
+    return best.p;
+  };
+  const out = [];
+  const half = geo.compound ? (geo.nBeats >= 2 ? (mt / geo.nBeats) * Math.floor(geo.nBeats / 2) : mt) : geo.nBeats === 4 ? mt / 2 : mt;
+  const kinds = { ostinato: 0, kick: 0, held: 0 };
+  for (let bar = 0; bar < M; bar++) {
+    const a0 = bar * mt;
+    const info = decode.bars[bar];
+    const present = hasStem ? barHas[bar] : !!chordAt(a0);
+    let list = null;
+    let kind = null;
+    if (info && info.ostinato && info.pattern && (present || chordAt(a0))) {
+      const ts = info.pattern.filter((t) => t < mt);
+      list = ts.map((t, i) => [t, Math.max(6, Math.min(geo.beat, geo.beat - (t % geo.beat), (ts[i + 1] ?? mt) - t))]);
+      kind = 'ostinato';
+    } else if (!present) continue;
+    else if (kp && kp.fits[bar]) {
+      const ts = kp.pattern.filter((t) => t < mt);
+      list = ts.map((t, i) => [t, (ts[i + 1] ?? mt) - t]);
+      kind = 'kick';
+    } else {
+      list = half < mt ? [[0, half], [half, mt - half]] : [[0, mt]];
+      kind = 'held';
+    }
+    // ein Grundton je Takthälfte (wie gedruckte Basslinien): über die ganze Hälfte entschieden; die zweite
+    // Hälfte wechselt nur, wo die Bass-Spur dort neu anschlägt oder der Akkord wechselt
+    const halves = half < mt ? [0, half] : [0];
+    const hp = [];
+    for (let h = 0; h < halves.length; h++) {
+      const h0 = halves[h];
+      const len = (halves[h + 1] ?? mt) - h0;
+      const cp = chordPc(a0 + h0);
+      const s = pcAt(a0 + h0, len, len, cp);
+      let pc = s ? s.pc : cp;
+      if (h > 0 && hp[0] != null && pc !== hp[0] && !(s && s.attacked) && cp === chordPc(a0)) pc = hp[0];
+      hp.push(pc ?? (h > 0 ? hp[0] : null));
+    }
+    const barOut = [];
+    for (const [t, d] of list) {
+      const pc = hp[t >= half && hp.length > 1 ? 1 : 0];
+      if (pc == null) continue;
+      const midi = place(pc);
+      const last = barOut[barOut.length - 1];
+      // ruhige Takte: gleicher Ton auf beiden Takthälften = ein langer Ton
+      if (kind === 'held' && last && last.midi === midi && last.start + last.dur === a0 + t) last.dur += d;
+      else barOut.push({ start: a0 + t, dur: d, midi, srcBass: true, ...(kind === 'ostinato' ? { ostinato: true } : {}) });
+    }
+    if (barOut.length) kinds[kind]++;
+    out.push(...barOut);
+  }
+  return out.length ? { notes: out, kinds, kick: kp ? kp.pattern : null } : null;
+}
+
 // ---- Begleitung --------------------------------------------------------------------------------
 // Nachschläge (4/4): Position in Ticks je Takt für die beiden Stimmgruppen A und B
 // [Position, Dauer, Art]: 'stab' = kurzer Einwurf, 'pad' = gehaltener Klang

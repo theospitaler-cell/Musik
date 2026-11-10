@@ -1,6 +1,6 @@
 // Audio-Datei -> Song: Dekodieren (Browser) + Analyse im Web-Worker, mit Fortschritt je Aufgabe.
 import { effortOf } from '../core/effort.js';
-import { resolveStemPlan, encodeWav16, TONAL_STEMS } from '../input/stems.js';
+import { resolveStemPlan, encodeWav16, stemLevels, TONAL_STEMS } from '../input/stems.js';
 
 export async function decodeAudio(bytes) {
   const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -192,7 +192,10 @@ export async function analyzeAudio(data, { title, effort = 3, onStage = () => {}
     if (sacts) {
       const transfer = [];
       for (const a of Object.values(sacts.acts)) transfer.push(a.frames.buffer, a.onsets.buffer);
-      const song = (await callWorker({ ...base, task: 'analyze', ai: false, stemActs: sacts.acts, aiMeta: { ...sacts.meta, ...meta } }, { onStage, transfer, signal })).song;
+      // Pegel je Spur (RMS je 50 ms) – damit zählen Töne aus Übersprechen in stummen Spuren nicht
+      const levels = {};
+      for (const n of Object.keys(stems)) levels[n] = stemLevels(stems[n]);
+      const song = (await callWorker({ ...base, task: 'analyze', ai: false, stemActs: sacts.acts, stemLevels: levels, aiMeta: { ...sacts.meta, ...meta } }, { onStage, transfer, signal })).song;
       song.stems = meta;
       return song;
     }

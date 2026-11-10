@@ -102,7 +102,8 @@ export function buildSonority({ top, chord, voices, bass = null, prev = null, te
       const closed = closedStack(top, sub.map((p) => p.pc), dbl, k);
       const open = applyDrop(closed, tpl);
       // je Stimme in ihren Bereich (stufenweise Oktavversetzung)
-      const assigned = open.slice(1, k + 1).map((p, i) => fitPitch(p, voices[i]));
+      const fitted = open.slice(1, k + 1).map((p, i) => fitPitch(p, voices[i]));
+      const assigned = k >= 5 ? registerFit(fitted, voices, top, bass, [...new Set([...sub.map((p) => p.pc), ...dbl])]) : fitted;
       const cost = sonorityCost(top, assigned, voices, bass, prev, sub);
       if (!best || cost < best.cost) best = { cost, pitches: assigned, template: tpl, closed, open, pcs: sub.map((p) => p.pc), roles: sub.map((p) => p.role) };
     }
@@ -110,16 +111,56 @@ export function buildSonority({ top, chord, voices, bass = null, prev = null, te
   return best;
 }
 
+// Großer Satz (ab 5 Innenstimmen): ein enger Stapel unter der Melodie reicht weit unter den Bass – zehn
+// Stimmen unter F4 enden bei F1. Gedruckte Sätze verdoppeln stattdessen Akkordtöne in der Lage jedes
+// Instruments: jede Stimme rückt oktavweise in ihren Sweet Spot (unter der Melodie, über dem Bass); danach
+// werden die Töne absteigend auf die Stimmen verteilt, sofern jede dabei in ihrem Bereich bleibt.
+// Findet eine Stimme in ihrer Lage keinen Platz für ihren Ton, nimmt sie einen anderen Akkordton dort; gibt es
+// gar keinen Platz (Melodie sehr tief), pausiert sie (null) – lieber als zwei Oktaven unter ihrer Lage.
+function registerFit(pitches, voices, top, bass, pcs) {
+  const floor = bass !== null && bass !== undefined ? bass + 3 : -Infinity;
+  const octaveInto = (p, lo, hi) => {
+    let q = p;
+    while (q < lo) q += 12;
+    while (q > hi) q -= 12;
+    return q >= lo && q <= hi ? q : null;
+  };
+  const out = pitches.map((p, i) => {
+    const v = voices[i];
+    const lo = Math.max(v.sweet[0], floor);
+    const hi = Math.min(v.sweet[1], top - 1);
+    if (p >= lo && p <= hi) return p;
+    if (hi >= lo) {
+      const q = octaveInto(p, lo, hi);
+      if (q !== null) return q;
+      let best = null;
+      for (let x = lo; x <= hi; x++) if (pcs.includes(mod(x, 12)) && (best === null || Math.abs(x - (lo + hi) / 2) < Math.abs(best - (lo + hi) / 2))) best = x;
+      if (best !== null) return best;
+    }
+    // Lage zu eng: im ganzen Umfang (über dem Bass, unter der Melodie)
+    return octaveInto(p, Math.max(v.range[0], floor), Math.min(v.range[1], top - 1));
+  });
+  if (out.some((p) => p === null)) return out;
+  const sorted = [...out].sort((a, b) => b - a);
+  return sorted.every((p, i) => inRange(p, voices[i])) ? sorted : out;
+}
+
 function sonorityCost(top, inner, voices, bass, prev, sub) {
   let c = 0;
-  const all = [top, ...inner];
+  const big = inner.length >= 5;
+  const all = [top, ...inner.filter((p) => p !== null)];
   for (let i = 0; i < inner.length; i++) {
     const p = inner[i];
     const v = voices[i];
+    if (p === null) {
+      // Stimme pausiert (kein Platz in ihrer Lage) – im großen Satz verkraftbar
+      c += 12;
+      continue;
+    }
     if (!inRange(p, v)) c += 1000;
     if (p < v.sweet[0]) c += (v.sweet[0] - p) * 1.0;
     if (p > v.sweet[1]) c += (p - v.sweet[1]) * 1.5;
-    if (prev && prev[i] !== undefined) c += 0.35 * Math.abs(p - prev[i]);
+    if (prev && prev[i] !== undefined && prev[i] !== null) c += 0.35 * Math.abs(p - prev[i]);
     if (bass !== null && bass !== undefined) {
       if (isFriction(p, bass)) c += 120;
       if (p < bass + 3) c += 25;
@@ -127,7 +168,8 @@ function sonorityCost(top, inner, voices, bass, prev, sub) {
   }
   for (let i = 1; i < all.length; i++) {
     const d = all[i - 1] - all[i];
-    if (d === 0) c += 60;
+    // im großen Satz sind Unisono-Verdopplungen zweier Instrumente üblich (Tenorsax + Horn), nur nicht mit der Melodie
+    if (d === 0) c += big && i > 1 ? 3 : 60;
     else if (d < 0) c += 30; // Stimmenkreuzung
     else if (d === 1) c += 8;
     else if (d === 2) c += Math.min(all[i - 1], all[i]) < C3 ? 120 : 1.5;
@@ -264,6 +306,9 @@ export function fixPerfects(lead, bass, { chordAt, bassProfile, maxLeap = 12, ga
       const idx = bass.findIndex((e) => e.start === is.t);
       if (idx < 0) continue;
       const e = bass[idx];
+      // Grundton aus der Bass-Spur einer Aufnahme bleibt (Wiedererkennung; gedruckte Band-Sätze führen den
+      // Grundton auch in verdeckter Oktave zur Melodie)
+      if (e.srcBass) continue;
       const prevB = bass[idx - 1];
       const nextB = bass[idx + 1];
       const chord = chordAt(is.t);

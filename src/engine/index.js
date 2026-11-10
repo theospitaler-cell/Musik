@@ -86,6 +86,8 @@ export function materialFromSong(song, opts = {}) {
     sections: song.sections && !song.sectionsDetected ? song.sections.map((s) => ({ ...s, start: s.start + (lead ? 1 : 0) })) : null,
     // Lautstärke der Formteile aus der Aufnahme (auch wenn die Form selbst neu bestimmt wird)
     loudness: song.sections ? song.sections.filter((s) => typeof s.energy === 'number').map((s) => ({ start: s.start + (lead ? 1 : 0), length: s.length, energy: s.energy })) : null,
+    // Gesang je Takt (0…1) aus der Spurentrennung – zeigt Intro/Zwischenspiele ohne Gesang
+    vocal: Array.isArray(song.vocal) ? [...(lead ? [song.vocal[0] ?? 0] : []), ...song.vocal] : null,
     key: song.keyDetected ? null : key,
     transposeShift: semis,
     drumNotes: opts.drums ? (song.drumNotes || []).map((d) => ({ ...d, start: d.start + lead })) : null,

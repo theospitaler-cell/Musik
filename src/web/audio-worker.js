@@ -12,7 +12,7 @@
 // Fortschritt: { type: 'progress', stage, frac, text } – stage: prep | ai | spec | melody | grid | drums
 import { resampleMono, transcribe } from '../input/audio.js';
 import { effortOf } from '../core/effort.js';
-import { mergeStemNotes, TONAL_STEMS } from '../input/stems.js';
+import { mergeStemNotes, stemLevels, TONAL_STEMS } from '../input/stems.js';
 
 const post = (stage, frac, text = '') => self.postMessage({ type: 'progress', stage, frac, text });
 
@@ -69,7 +69,7 @@ async function prepare({ channels, sampleRate, hpss = true }) {
   self.postMessage({ type: 'prepared', mid, harm, side }, transfer);
 }
 
-async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes = null, aiActs = null, aiSideActs = null, aiMeta = null, aiBackend = null, effort = 3, stemActs = null, stemAudio = null, stemNote = null }) {
+async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes = null, aiActs = null, aiSideActs = null, aiMeta = null, aiBackend = null, effort = 3, stemActs = null, stemAudio = null, stemNote = null, stemLevels: levels = null }) {
   const cfg = effortOf(effort).analysis;
   // Spurentrennung: Noten je Stem (Gesang, Begleitung/Bläser, Bass) – die Schlagzeug-Spur zählt nicht
   if (stemActs && !aiNotes) {
@@ -77,7 +77,8 @@ async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes 
     const m = await import('../input/ai-pitch.js');
     const parts = {};
     for (const n of TONAL_STEMS) if (stemActs[n]) parts[n] = m.activationsToNotes(stemActs[n]);
-    aiNotes = mergeStemNotes(parts);
+    // Pegel der Spuren (im Hauptfenster gemessen): Übersprechen in stummen Spuren zählt nicht
+    aiNotes = mergeStemNotes(parts, { levels });
     post('conv', 1, '');
   }
   if (stemAudio && !aiNotes && useAi) {
@@ -96,7 +97,9 @@ async function analyze({ channels, sampleRate, title, ai: useAi = true, aiNotes 
         });
         parts[n] = out.notes;
       }
-      aiNotes = mergeStemNotes(parts);
+      const lv = {};
+      for (const n of names) lv[n] = stemLevels(stemAudio[n]);
+      aiNotes = mergeStemNotes(parts, { levels: lv });
     } catch (err) {
       post('ai', 1, 'KI nicht verfügbar – Analyse ohne KI');
       void err;

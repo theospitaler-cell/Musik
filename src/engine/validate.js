@@ -24,8 +24,9 @@ function leadDynAt(arr, t) {
 }
 
 // Anteil gemeinsamer Einsätze an den Einsätzen der spärlicheren Stimme
-// Übernommene Muster der Vorlage (Ostinato, verdoppelte Melodie, Satz) sind gewollt gemeinsam und zählen nicht
-const ownRhythm = (e) => !e.ostinato && e.role !== 'soli' && e.role !== 'double';
+// Übernommene Muster der Vorlage (Ostinato, verdoppelte Melodie, Satz, gemeinsame Liegeklänge einer Aufnahme)
+// sind gewollt gemeinsam und zählen nicht
+const ownRhythm = (e) => !e.ostinato && !e.shared && e.role !== 'soli' && e.role !== 'double';
 export function sharedAttackRatio(a, b) {
   const A = new Set(a.events.filter(ownRhythm).map((e) => e.start));
   const B = new Set(b.events.filter(ownRhythm).map((e) => e.start));
@@ -69,7 +70,11 @@ export function validateArrangement(arr, { maxRunBars = 8, sharedMax = 0.65 } = 
   for (const f of frictions(voices.map((x) => x.events))) v('friction', { t: f.t, voices: [f.a, f.b], pitches: [f.pa, f.pb] });
 
   // 4. verdeckte Quinten/Oktaven Lead-Bass
-  if (lead && foundation) for (const p of perfectIssues(lead.events, foundation.events)) v('hidden-perfect', p);
+  // (ausgenommen: Grundtöne aus der Bass-Spur einer Aufnahme – sie bleiben bewusst, siehe fixPerfects)
+  if (lead && foundation) {
+    const keep = new Set(foundation.events.filter((e) => e.srcBass).map((e) => e.start));
+    for (const p of perfectIssues(lead.events, foundation.events)) if (!keep.has(p.t)) v('hidden-perfect', p);
+  }
 
   // 5. Atem: kein Bläser spielt mehr als maxRunBars Takte ohne Pause von mindestens einer Zählzeit
   voices.forEach((x, i) => {
