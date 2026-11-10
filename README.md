@@ -115,6 +115,11 @@ Die Analyse läuft im Hintergrund.
 - **Tempo- und Tonartangabe am Anfang**: das erste feste Tempo nach dem entfernten Vorlauf (ein Einschwingen
   davor ohne Zeichen); Tonart aus den gehörten Stimmen, bei Dur/Moll auf demselben Grundton gilt der Anfang
   (Medley: f-Moll am Anfang, F-Dur in der Mitte → f-Moll wie die Partitur).
+- **Melodieauswahl gegen Referenz-Noten geprüft** (Trompete 1 „Puttin' on the Ritz“, Ton für Ton): ein
+  Oktavsprung auf den obersten echten Ton seiner Gruppe ist Melodie (C5 – C4 – F4), ein leiser Ton eine Oktave
+  über einem lauteren ist Oberton, und wo die KI nur einen tiefen Begleitton hörte, gilt der deutlich höhere
+  Ton der Signalanalyse (keine reine Oktave). Thema 24/24 Töne. Grenzen: Töne, die die KI gar nicht hört
+  (Glissando-Achtel), und eine lautere Gegenstimme in derselben Lage (dort folgt die Erkennung dem Lauteren).
 - **Rhythmusfiguren**: dieselbe Sechzehntel-Figur (Galopp ♪♬, umgekehrt ♬♪) mindestens dreimal mit Lücken
   von höchstens drei Schlägen bleibt im Sechzehntel-Raster – sonst vereinfacht die Lesbarkeit sie zu Achteln
   (Einleitung von „Gonna Fly Now“). Zufällige Splitter wiederholen sich nicht so genau.
