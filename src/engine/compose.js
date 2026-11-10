@@ -453,9 +453,9 @@ export function compose(material, N, opts = {}) {
   // Melodieanteil gesteuert (opts.melodyShare): Oktav-/Unisono-Doppler spielen Begleitung wie die Innenstimmen;
   // die Melodie kommt nur in dem gewählten Anteil dazu (applyMelodyShare)
   if (Array.isArray(opts.melodyShare) || Array.isArray(opts.soloShare) || opts.textureAuto) for (const v of voices) if (v.role === 'double8' || v.role === 'doubleU') v.role = 'inner';
-  // Aufnahme mit durchgehendem Begleitmuster: die Bariton-Schicht spielt das Muster mit (wie Tenorsax, Bariton
-  // und Euphonium in gedruckten Sätzen) statt einer erfundenen Gegenmelodie, die es im Original nicht gibt
-  if (opts.textureAuto && N >= 9 && ctx.decode.bars.filter((b) => b.ostinato).length >= 0.4 * M) for (const v of voices) if (v.role === 'counter') v.role = 'inner';
+  // Aufnahme: die Bariton-Schicht begleitet mit (Begleitmuster bzw. Klänge – wie Tenorsax, Bariton und
+  // Euphonium in gedruckten Sätzen) statt einer erfundenen Gegenmelodie, die es im Original nicht gibt
+  if (opts.textureAuto && N >= 9) for (const v of voices) if (v.role === 'counter') v.role = 'inner';
   const chordAt = (t) => chordAtList(chords, t);
   const scaleAtTick = (t) => {
     const k = ctx.keyAt(Math.max(0, Math.floor(t / geo.mt)));
