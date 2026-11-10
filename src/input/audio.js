@@ -1379,6 +1379,50 @@ export function transcribeDrums(feat, beatFrames, firstDown, meterBeats, measure
 //   4: schnelle Läufe und Tonwiederholungen (Anschlag-Erkennung), Halbtempo-Korrektur ab 150 BPM
 export const ANALYSIS_VERSION = 4;
 
+// Leere Takte vor dem ersten Ton entfernen (Melodie, Spuren, Akkordanschläge; das Schlagzeug allein zählt
+// nicht als Einzähler). Alle Zeiten rücken um ganze Takte vor, der Zeitbezug zur Datei bleibt erhalten.
+export function trimLeadingBars(song, mt, beatsPerBar) {
+  const starts = [];
+  for (const n of song.melody || []) starts.push(n.start);
+  for (const t of song.tracks || []) for (const n of t.notes || []) starts.push(n.start);
+  for (const n of song.compHits || []) starts.push(n.start);
+  if (!starts.length) return 0;
+  const first = Math.min(...starts);
+  const k = Math.floor(first / mt);
+  if (k < 1 || k >= song.measureCount - 1) return 0;
+  const sh = k * mt;
+  const move = (list) => (list || []).filter((n) => n.start >= sh).map((n) => ({ ...n, start: n.start - sh }));
+  song.melody = move(song.melody);
+  if (song.tracks) song.tracks = song.tracks.map((t) => ({ ...t, notes: move(t.notes) }));
+  if (song.compHits) song.compHits = move(song.compHits);
+  if (song.drumNotes) song.drumNotes = move(song.drumNotes);
+  if (song.chords) {
+    song.chords = song.chords
+      .filter((c) => c.start + c.dur > sh)
+      .map((c) => {
+        const s = Math.max(0, c.start - sh);
+        return { ...c, start: s, dur: c.start + c.dur - sh - s };
+      });
+  }
+  if (song.sections) {
+    song.sections = song.sections
+      .filter((s) => s.start + s.length > k)
+      .map((s) => {
+        const a = Math.max(0, s.start - k);
+        return { ...s, start: a, length: s.start + s.length - k - a };
+      });
+  }
+  if (song.tempoMarks) {
+    const marks = song.tempoMarks.map((x) => ({ ...x, bar: Math.max(0, x.bar - k) }));
+    // mehrere Zeichen, die auf Takt 1 zusammenfallen: das letzte gilt
+    song.tempoMarks = marks.filter((x, i) => !(x.bar === 0 && marks.some((y, j) => j > i && y.bar === 0)));
+  }
+  if (song.timing) song.timing = { ...song.timing, firstBeat: song.timing.firstBeat + k * beatsPerBar };
+  song.measureCount -= k;
+  song.trimmedBars = k;
+  return k;
+}
+
 // mono: Float32Array (22050 Hz, siehe resampleMono)
 export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}, ai: aiRaw = null, debug = null } = {}) {
   // KI-Rohnoten: Fragmente unter 120 ms weg, Vibrato/kurze Abrisse zu gehaltenen Tönen – es sei
@@ -1694,20 +1738,37 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     // Begleitrhythmus: Akkordanschläge der Begleitung (mindestens zwei Töne gleichzeitig, ohne Melodie,
     // Bass und Gesang) – das Muster (Streicher-Ostinato, Gitarrenanschlag, Bläser-Einwürfe) trägt viel vom
     // Wiedererkennungswert. Die Orchestrierung übernimmt es für die Begleitstimmen.
+    // Grundlage sind die rohen KI-Noten (die Bereinigung für Melodielinien dünnt Akkorde zu stark aus):
+    // Töne, die innerhalb von 50 ms gemeinsam einsetzen, bilden einen Anschlag.
     {
       const taken = new Set([...vs.melody, ...vs.bass].map((n) => `${n.start}:${n.midi}`));
-      const byStart = new Map();
-      for (const n of poly) {
-        if (n.start < 0 || n.stem === 'vocals' || n.stem === 'bass' || taken.has(`${n.start}:${n.midi}`)) continue;
-        if (!byStart.has(n.start)) byStart.set(n.start, []);
-        byStart.get(n.start).push(n);
+      const stemmed = aiRaw.some((n) => n.stem);
+      const src = aiRaw.filter((n) => (stemmed ? n.stem === 'other' : true) && n.end - n.start >= 0.06).sort((a, b) => a.start - b.start);
+      const amps = src.map((n) => n.amp ?? 0.5).sort((a, b) => a - b);
+      const ampMin = (amps[Math.floor(amps.length / 2)] || 0.4) * 0.6;
+      const groups = [];
+      for (const n of src) {
+        if ((n.amp ?? 0.5) < ampMin) continue;
+        const g = groups[groups.length - 1];
+        if (g && n.start - g.t <= 0.05) g.notes.push(n);
+        else groups.push({ t: n.start, notes: [n] });
       }
       const hits = [];
-      for (const [start, ns] of [...byStart.entries()].sort((a, b) => a[0] - b[0])) {
-        const midis = [...new Set(ns.map((n) => n.midi))];
+      const seen = new Set();
+      for (const g of groups) {
+        const start = toTick(g.t, GRID);
+        if (start < 0 || start >= measureCount * mt) continue;
+        const midis = [...new Set(g.notes.map((n) => n.midi))].filter((m) => !taken.has(`${start}:${m}`));
         if (midis.length < 2) continue;
-        const dur = Math.max(...ns.map((n) => n.dur));
-        for (const midi of midis) hits.push({ start, dur, midi, vel: vel(ns.find((n) => n.midi === midi)) });
+        const ends = g.notes.map((n) => n.end).sort((a, b) => a - b);
+        const dur = Math.max(unit, toTick(ends[Math.floor(ends.length / 2)], GRID) - start);
+        for (const midi of midis) {
+          const k = `${start}:${midi}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          const amp = Math.max(...g.notes.filter((n) => n.midi === midi).map((n) => n.amp ?? 0.5));
+          hits.push({ start, dur, midi, vel: vel({ amp }) });
+        }
       }
       compHits = hits;
     }
@@ -1773,6 +1834,8 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
   if (halfTimeFixed) fin.warnings.push(`Tempo auf ${Math.round(bpm)} verdoppelt: das Schlagzeug und die schnellen Noten passen zum doppelten Tempo (mit „Tempo ÷2“ im Projekt umkehrbar).`);
   fin.duration = mono.length / SR;
+  // Stille am Anfang der Aufnahme (Vorlauf, Titelbild eines Videos): leere Takte vor dem ersten Ton fallen weg
+  trimLeadingBars(fin, mt, m);
   // Stand der Analyse: ältere, gespeicherte Analysen lassen sich in der App neu berechnen
   fin.analysisVersion = ANALYSIS_VERSION;
   fin.aiUsed = hasAi;

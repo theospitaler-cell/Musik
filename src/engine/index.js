@@ -151,7 +151,8 @@ export function orchestrate(input, opts = {}) {
     }
     const refrainBars = new Set();
     for (const s of named) if (s.name === 'Refrain') for (let b = s.start; b < s.start + s.length; b++) refrainBars.add(b);
-    const tex = sourceTexture({ lead: score.ctx.lead, comp: [...score.ctx.comp, ...(score.ctx.compRhythm || [])], geo: score.ctx.geo, M: score.ctx.M, refrainBars, voices: N });
+    const ostinatoBars = new Set(score.ctx.decode.bars.filter((b) => b.ostinato).map((b) => b.bar));
+    const tex = sourceTexture({ lead: score.ctx.lead, comp: score.ctx.compRhythm || [], geo: score.ctx.geo, M: score.ctx.M, refrainBars, voices: N, ostinatoBars });
     score.texture = tex;
     applySourceTexture(score, tex);
   }

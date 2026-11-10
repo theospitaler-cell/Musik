@@ -78,30 +78,61 @@ export function prepare(material, opts = {}) {
   const compRhythm = (material.compRhythm || []).filter((n) => n.dur > 0 && n.start >= 0);
   const decode = decodeComping(compRhythm.length >= 16 ? compRhythm : comp, { measureTicks: geo.mt, measureCount: M });
   decode.fromChords = compRhythm.length >= 16;
-  markOstinato(decode.bars);
+  // nur aus echten Akkordanschlägen (Aufnahmen); Begleitstimmen allein sind kein Begleitrhythmus
+  if (decode.fromChords) markOstinato(decode.bars, geo.mt);
   return { geo, M, total, lead, bassNotes, comp, compRhythm, track, keyAt, globalKey, chords, decode, material };
 }
 
-// Takte mit einem wiederkehrenden Begleitrhythmus (gleiche Einsätze wie ein Nachbartakt, mindestens drei)
-export function markOstinato(bars) {
-  const sig = bars.map((b) => (b.mode === 'rhythmic' ? new Set(b.hits.map((h) => snap(h.t, 6))) : null));
-  const jac = (x, y) => {
-    let inter = 0;
-    for (const v of x) if (y.has(v)) inter++;
-    return inter / (x.size + y.size - inter);
-  };
-  bars.forEach((b, i) => {
+// Wiederkehrender Begleitrhythmus (Ostinato): Einzelne Takte einer Aufnahme sind verrauscht – über das ganze
+// Stück übereinandergelegt tritt das Muster hervor. Gezählt wird, in wie vielen Takten ein Anschlag auf jedem
+// Sechzehntel-Platz liegt; Plätze mit hoher Quote bilden das Muster. Es gilt nur, wenn es sich klar abhebt
+// (häufigster Platz in ≥ 50 % der Takte, Quote der Muster-Plätze ≥ 1,8 × der übrigen, höchstens 10 von 16
+// Plätzen). Ostinato-Takte sind die, deren eigene Anschläge überwiegend auf dem Muster liegen; kurze Lücken
+// dazwischen (bis zwei Takte) laufen mit, damit der Rhythmus nicht abreißt.
+export function markOstinato(bars, mt = 96) {
+  const slots = Math.max(1, Math.round(mt / 6));
+  for (const b of bars) {
     b.ostinato = false;
-    const s = sig[i];
-    if (!s || s.size < 3) return;
-    for (const k of [i - 1, i + 1, i - 2, i + 2]) {
-      const o = sig[k];
-      if (o && o.size >= 3 && jac(s, o) >= 0.75) {
-        b.ostinato = true;
-        return;
-      }
-    }
+    b.pattern = null;
+  }
+  const slotOf = (h) => Math.min(slots - 1, Math.round(h.t / 6));
+  const active = bars.filter((b) => b.hits.length);
+  if (active.length < 8) return null;
+  const cnt = new Array(slots).fill(0);
+  for (const b of active) for (const k of new Set(b.hits.map(slotOf))) cnt[k]++;
+  const rate = cnt.map((c) => c / active.length);
+  const top = Math.max(...rate);
+  if (top < 0.5) return null;
+  const inPat = rate.map((x) => x >= Math.max(0.3, 0.55 * top));
+  const nIn = inPat.filter(Boolean).length;
+  if (nIn < 3 || nIn > Math.round(slots * 0.625)) return null;
+  const mean = (pick) => {
+    const v = rate.filter((_, k) => inPat[k] === pick);
+    return v.length ? v.reduce((p, c) => p + c, 0) / v.length : 0;
+  };
+  if (mean(true) / Math.max(0.01, mean(false)) < 1.8) return null;
+  const pattern = [];
+  inPat.forEach((on, k) => on && pattern.push(k * 6));
+  const fits = bars.map((b) => {
+    if (!b.hits.length) return false;
+    const ks = [...new Set(b.hits.map(slotOf))];
+    const on = ks.filter((k) => inPat[k]).length;
+    return on >= 2 && on / ks.length >= 0.5;
   });
+  // Lücken bis zwei Takte zwischen passenden Takten schließen
+  for (let i = 0; i < bars.length; i++) {
+    if (fits[i]) continue;
+    let a = i - 1;
+    let z = i + 1;
+    while (z < bars.length && !fits[z] && z - i < 2) z++;
+    if (a >= 0 && fits[a] && z < bars.length && fits[z]) for (let k = i; k < z; k++) fits[k] = 'gap';
+  }
+  bars.forEach((b, i) => {
+    if (!fits[i]) return;
+    b.ostinato = true;
+    b.pattern = pattern;
+  });
+  return pattern;
 }
 
 // ---- Linien einpassen ---------------------------------------------------------------------------
@@ -165,21 +196,24 @@ function attackPlan(bar, ctx, hasLead, behavior) {
   const { geo } = ctx;
   const info = ctx.decode.bars[bar];
   const rhythmic = info && info.mode === 'rhythmic';
-  if (rhythmic && info.ostinato) {
+  if (info && info.ostinato && info.pattern && (hasLead || info.density > 0)) {
     // Wiederkehrendes Begleitmuster der Vorlage (Ostinato, z. B. die Streicher-Akkorde in „Viva la Vida“):
-    // genau so übernehmen – alle Begleitstimmen gemeinsam, mit den Längen der Vorlage. Das Muster trägt
-    // den Wiedererkennungswert; verschoben oder auf zwei Gruppen verteilt wäre es ein anderes Lied.
-    const ts = [...new Set(info.hits.map((h) => snap(h.t, 6)))].filter((t) => t < geo.mt).sort((a, b) => a - b);
-    const lenAt = (t, i) => {
-      const src = Math.max(...info.hits.filter((h) => snap(h.t, 6) === t).map((h) => h.dur));
-      const next = ts[i + 1] ?? geo.mt;
-      return Math.max(6, Math.min(snap(src, 6) || 12, next - t));
-    };
+    // genau so übernehmen – alle Begleitstimmen gemeinsam. Das Muster trägt den Wiedererkennungswert;
+    // verschoben oder auf zwei Gruppen verteilt wäre es ein anderes Lied. Längen: bis zum nächsten Anschlag,
+    // höchstens eine Zählzeit.
+    const ts = info.pattern.filter((t) => t < geo.mt);
     const list = ts.map((t, i) => {
-      const d = lenAt(t, i);
+      const d = Math.max(6, Math.min(geo.beat, (ts[i + 1] ?? geo.mt) - t));
       return [t, d, d <= geo.beat / 2 ? 'stab' : 'pad'];
     });
     return { kind: 'ostinato', A: list, B: list };
+  }
+  // Aufnahme ohne klares, wiederkehrendes Begleitmuster: die einzelnen Anschläge eines Takts sind zu unsicher,
+  // um sie als Rhythmus auszuschreiben – die Begleitstimmen halten lange Töne (ruhig, gut spielbar; die
+  // Bewegung kommt von Melodie und Bass). So stehen auch gedruckte Sätze, wenn eine Stimme die Melodie führt.
+  if (ctx.decode.fromChords && info && (hasLead || info.density > 0)) {
+    const p = padPattern(geo);
+    return { kind: 'pad', A: p.A.map(([t, d]) => [t, d, 'pad']), B: p.A.map(([t, d]) => [t, d, 'pad']) };
   }
   if (rhythmic) {
     // Einsätze der Vorlage (echte Akkordanschläge) bleiben, wo sie sind. Ohne Akkordanschläge (nur

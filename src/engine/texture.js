@@ -18,10 +18,33 @@ const KINDS = ['solo', 'doubled', 'harmonized', 'tutti'];
 // -> { bars: [{ bar, kind, n, doubled, harmonized }], at: Map(start -> { pcs: [..], midis: [..], doubled }) }
 // refrainBars: Takte des Refrains – dort trägt ab 5 Stimmen eine zweite Stimme die Melodie mit (wie in
 // gedruckten Arrangements: Strophe solo, Refrain verdoppelt), auch wenn das Original sie nicht verdoppelt
-export function sourceTexture({ lead, comp, geo, M, cluster = 3, refrainBars = null, voices = 0 }) {
+// ostinatoBars: Takte mit eigenem Begleitmuster – dort begleitet die Vorlage, sie setzt die Melodie nicht aus
+export function sourceTexture({ lead, comp, geo, M, cluster = 3, refrainBars = null, voices = 0, ostinatoBars = null }) {
   const byStart = [...(comp || [])].filter((n) => n.dur > 0).sort((a, b) => a.start - b.start);
   const at = new Map();
-  const per = Array.from({ length: M }, (_, b) => ({ bar: b, n: 0, doubled: 0, harmonized: 0 }));
+  const per = Array.from({ length: M }, (_, b) => ({ bar: b, n: 0, doubled: 0, harmonized: 0, compOn: 0, compWith: 0 }));
+  // Begleitanschläge je Takt und wie viele davon mit einem Melodieton zusammenfallen (Satz im Rhythmus der
+  // Melodie) – eine Begleitung mit eigenem Rhythmus trifft die Melodie nur zufällig
+  const leadStarts = lead.map((m) => m.start);
+  const nearLead = (t) => {
+    let lo = 0;
+    let hi = leadStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (leadStarts[mid] < t - cluster) lo = mid + 1;
+      else hi = mid;
+    }
+    return leadStarts.length > 0 && Math.abs(leadStarts[lo] - t) <= cluster;
+  };
+  let lastHit = -Infinity;
+  for (const n of byStart) {
+    if (n.start - lastHit <= cluster) continue;
+    lastHit = n.start;
+    const b = Math.floor(n.start / geo.mt);
+    if (b < 0 || b >= M) continue;
+    per[b].compOn++;
+    if (nearLead(n.start)) per[b].compWith++;
+  }
   let j = 0;
   for (const m of lead) {
     while (j < byStart.length && byStart[j].start < m.start - cluster) j++;
@@ -34,15 +57,16 @@ export function sourceTexture({ lead, comp, geo, M, cluster = 3, refrainBars = n
     if (b < 0 || b >= M) continue;
     per[b].n++;
     if (doubled) per[b].doubled++;
-    // „mehrstimmig gesetzt“: mindestens zwei weitere Töne gleichzeitig, oder einer bei sehr kurzen Werten
-    if (pcsUnder.length >= 2 || (pcsUnder.length === 1 && m.dur <= geo.beat)) per[b].harmonized++;
+    // „mehrstimmig gesetzt“: mindestens zwei weitere Töne setzen gleichzeitig ein
+    if (pcsUnder.length >= 2) per[b].harmonized++;
     at.set(m.start, { pcs: pcsUnder, midis: under.map((n) => n.midi).sort((x, y) => y - x), doubled });
   }
   // Takt-Art, dann über Phrasen (je 2 Takte Nachbarschaft) glätten – einzelne Ausreißer kippen nichts
   const raw = per.map((p) => {
     if (p.n < 2) return null;
     const d = p.doubled / p.n >= 0.5;
-    const h = p.harmonized / p.n >= 0.5;
+    // Satz: die meisten Melodietöne sind ausgesetzt UND die Begleitung geht mit der Melodie (kein eigenes Muster)
+    const h = p.harmonized / p.n >= 0.6 && p.compOn > 0 && p.compWith / p.compOn >= 0.7 && !(ostinatoBars && ostinatoBars.has(p.bar));
     return d && h ? 'tutti' : h ? 'harmonized' : d ? 'doubled' : 'solo';
   });
   const bars = per.map((p, b) => {

@@ -281,7 +281,9 @@ test('Dynamik: Einwürfe und Solo mindestens mf, die Begleitung tritt währendde
       if (o === v || o === lead) continue;
       for (const x of o.events) {
         if (x.role === 'answer' || x.start >= endOf(e) || endOf(x) <= e.start) continue;
-        const want = level - (o.role === 'bass' ? 1 : 2);
+        // der Einwurf steht immer über der Begleitung; um zwei Stufen tritt sie nur bei Einwürfen ab einem Takt
+        // zurück (kurze Einwürfe würden sonst von Schlag zu Schlag neue Lautstärkezeichen verlangen)
+        const want = level - (o.role === 'bass' ? 0 : 1);
         assert.ok(dynIndex(dynAt(o, x.start)) <= Math.max(0, want), `${o.inst.name} bei ${x.start}: ${dynAt(o, x.start)} unter dem Einwurf (${level})`);
         compared++;
       }

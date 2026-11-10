@@ -217,7 +217,17 @@ export function assignDynamics(score, blocks) {
   // tritt währenddessen auf p zurück (zwei Stufen unter dem Einwurf)
   const answers = [];
   for (const v of voices) for (const e of v.events) if (e.role === 'answer') answers.push([e.start, endOf(e)]);
-  const answerAt = (t0, t1) => answers.some(([a, z]) => a < t1 && z > t0);
+  // Ruhiges Notenbild: nur Einwürfe, die (zusammenhängend) mindestens einen Takt dauern, lassen die Begleitung
+  // zurücktreten – kurze Einwürfe ließen sie sonst von Schlag zu Schlag p – mp – mf wechseln
+  answers.sort((x, y) => x[0] - y[0]);
+  const spans = [];
+  for (const [a, z] of answers) {
+    const last = spans[spans.length - 1];
+    if (last && a - last[1] <= mt / 4) last[1] = Math.max(last[1], z);
+    else spans.push([a, z]);
+  }
+  const long = spans.filter(([a, z]) => z - a >= mt);
+  const answerAt = (t0, t1) => long.some(([a, z]) => a < t1 && z > t0);
   const MF = dynIndex('mf');
   for (const v of voices) {
     v.dirs = v.dirs.filter((d) => d.kind !== 'dyn');
