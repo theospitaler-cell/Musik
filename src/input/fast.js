@@ -246,11 +246,13 @@ export function markFastNotes(notes, beatSec, { attack = null, tune = null, why 
     const bl = blen(c[0].start);
     // Rasterstufe: Abstand ≈ 1/per Schlag (±15 %); jede Stufe hat ihre eigenen Anforderungen
     let grid = null;
-    for (const gr of GRIDS) {
+    // sehr schneller Schlag (alla breve, ♩ ≥ 200): dort sind schon die Achtel schnelle Noten (124 ms bei ♩ = 241)
+    const grids = bl <= 0.3 ? [{ g: 12, per: 2 }, ...GRIDS] : GRIDS;
+    for (const gr of grids) {
       if (Math.abs((step / bl) * gr.per - 1) > 0.15) continue;
       const fit = gridError(c, gr.per);
       if (!fit.distinct || fit.worst > T.worst) continue;
-      if (gr.g === 6) {
+      if (gr.g === 6 || gr.g === 12) {
         // 16tel: schnell genug und genau; ein Paar gleicher Töne braucht zusätzlich tiefen Einbruch
         if (step > T.maxStep || fit.err > T.err16) continue;
       } else {
@@ -264,8 +266,9 @@ export function markFastNotes(notes, beatSec, { attack = null, tune = null, why 
     if (!grid) return no('Raster/Tempo');
     // Töne eines schnellen Laufs sind nicht viel länger als ihr Abstand (ein gehaltener Ton mit
     // Zierwerk davor/danach oder ein Gesangs-Abfall ist kein Lauf); 32tel/16tel-Triolen strenger
-    const maxLen = (grid.g === 6 || grid.g === 8 ? 2 : 1.6) * step;
-    const needShort = grid.g === 6 || grid.g === 8 ? 0.8 : 0.9;
+    const loose = grid.g === 6 || grid.g === 8 || grid.g === 12;
+    const maxLen = (loose ? 2 : 1.6) * step;
+    const needShort = loose ? 0.8 : 0.9;
     // (der letzte Ton darf lang sein: der Lauf löst sich auf einen gehaltenen Ton auf)
     const body = c.slice(0, -1);
     if (body.filter((n) => n.end - n.start <= maxLen).length < needShort * body.length) return no('Töne zu lang');

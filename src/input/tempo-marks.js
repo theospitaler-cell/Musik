@@ -25,7 +25,9 @@ export function tempoMarksFromTiming(timing, meterBeats, measureCount) {
   // rit. am Schluss und abrupte Wechsel verwischen
   const sm = perBar;
   const marks = [];
-  let cur = median(sm.slice(0, Math.min(n, 4)));
+  // Anfangstempo: Median der ersten 8 Takte – eine gedruckte Angabe gilt für den ganzen Anfangsteil, die ersten
+  // Takte einer Aufnahme sind oft etwas schneller oder langsamer („Puttin' on the Ritz“: 4 Takte ♩ 245, 8 Takte 241)
+  let cur = median(sm.slice(0, Math.min(n, 8)));
   marks.push({ bar: 0, kind: 'tempo', bpm: Math.round(cur) });
   const rel = (x) => x / cur - 1;
   let k = 1;

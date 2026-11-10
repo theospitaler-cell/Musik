@@ -285,10 +285,13 @@ function pickMelody(notes, beat, hint, step) {
     }
     return s - THRESH;
   };
-  const trans = (a, b, gap) => {
+  const trans = (a, b, gap, alone = false) => {
     const d = Math.abs(a.midi - b.midi);
     // nach einer Pause sind Sprünge normal (neue Phrase)
     const w = gap >= 2 * beat ? 0.3 : 1;
+    // Oktavsprung auf denselben Ton, der allein an seiner Stelle steht (kein anderer Ton zur Wahl): eine echte
+    // Melodiebewegung, kein Oktavfehler der Erkennung („Puttin' on the Ritz“: C5 – C4 – F4)
+    if (alone && d === 12) return -w * 0.1;
     // Sprünge kosten: eine Melodie bleibt in ihrer Linie – das Hin und Her zu tiefen Akkordtönen
     // der Begleitung (Quinte abwärts und zurück) lohnt sich nur für deutlich gehörte Töne
     return -w * (0.09 * Math.max(0, d - 3) + (d >= 10 ? 0.5 : 0));
@@ -298,13 +301,18 @@ function pickMelody(notes, beat, hint, step) {
     const cur = [];
     const h = hintAt(g.start);
     const opts = g.notes.slice(0, 4);
+    // Oberton-Verdacht: ein Ton genau eine Oktave über einem deutlich lauteren Ton derselben Gruppe
+    const ghost = new Set(g.notes.filter((n) => g.notes.some((m) => m.midi === n.midi - 12 && (n.amp ?? 0.5) < 0.75 * (m.amp ?? 0.5))));
+    // oberster echter Ton der Gruppe (ohne Obertöne und Bass) – ein Oktavsprung dorthin ist Melodie, kein Fehler
+    // (deutlich leisere Töne darüber – unter 60 % – zählen nicht: Nachklang oder Übersprechen)
+    const realTop = (note) => !ghost.has(note) && !g.notes.some((m) => m !== note && !ghost.has(m) && m.stem !== 'bass' && m.midi > note.midi && (m.amp ?? 0.5) >= 0.6 * (note.amp ?? 0.5));
     for (let k = 0; k <= opts.length; k++) {
       const note = k < opts.length ? opts[k] : null;
-      const loc = note ? local(g, k, h) : 0;
+      const loc = note ? local(g, k, h) - (ghost.has(note) ? 0.5 : 0) : 0;
       let best = null;
       for (const p of prev) {
         let s = p.score + loc;
-        if (note && p.last) s += trans(p.last, note, note.start - (p.last.start + p.last.dur));
+        if (note && p.last) s += trans(p.last, note, note.start - (p.last.start + p.last.dur), realTop(note));
         if (!best || s > best.score) best = { score: s, note, back: p, last: note || p.last };
       }
       cur.push(best);
@@ -318,6 +326,21 @@ function pickMelody(notes, beat, hint, step) {
     node = node.back;
   }
   out.reverse();
+  // Begleitton statt Melodie: hat die KI an einer Stelle nur einen tiefen Begleitton gehört (die Melodie fehlt in
+  // ihren Noten), die Signalanalyse aber deutlich darüber einen Melodieton, der zur Linie passt (höchstens eine
+  // Oktave vom vorigen Melodieton), gilt der Ton der Signalanalyse („Puttin' on the Ritz“: A♭3 statt C5)
+  if (hs.length) {
+    for (let i = 1; i < out.length; i++) {
+      const m = out[i];
+      const h = hs.find((x) => Math.abs(x.start - m.start) <= step / 2 && x.dur >= 2 * step);
+      // (reine Oktavabstände nicht: das ist die Oktav-Unsicherheit der Signalanalyse, kein Begleitton)
+      if (!h || h.midi - m.midi < 7 || (h.midi - m.midi) % 12 === 0 || Math.abs(h.midi - out[i - 1].midi) > 12) continue;
+      // nur wenn die KI dort keinen passenden Ton hatte (sonst hätte die Auswahl ihn nehmen können)
+      const g = groups.find((x) => x.start === m.start);
+      if (g && g.notes.some((n) => Math.abs(n.midi - h.midi) <= 1)) continue;
+      out[i] = { ...m, midi: h.midi, fromHint: m.midi };
+    }
+  }
   // Oktav-Flackern: ein einzelner Ton genau eine Oktave neben beiden Nachbarn gehört in deren Lage
   for (let i = 1; i < out.length - 1; i++) {
     const a = out[i - 1].midi;

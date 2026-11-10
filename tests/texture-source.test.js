@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { orchestrate, defaultVoices } from '../src/engine/index.js';
 import { prepare, markOstinato } from '../src/engine/compose.js';
 import { mergeStemNotes, stemLevels } from '../src/input/stems.js';
-import { markFigures, simplifyLine } from '../src/input/voices.js';
+import { markFigures, simplifyLine, separateVoices } from '../src/input/voices.js';
 import { PROFILES } from '../src/engine/profiles.js';
 
 const MT = 96;
@@ -297,4 +297,39 @@ test('Tempoangabe am Anfang: erstes festes Tempo nach dem Vorlauf, Einschwingen 
   const s2 = { tempo: 90, tempoMarks: [{ bar: 0, kind: 'accel', bpm: 96 }, { bar: 20, kind: 'tempo', bpm: 110 }] };
   settleOpeningTempo(s2);
   assert.equal(s2.tempo, 96);
+});
+
+test('Melodieauswahl: echter Oktavsprung, leiser Oberton, Begleitton statt fehlender Melodie (Ritz-Thema)', () => {
+  // Referenz T. 13–14 (klingend): F4 A♭4 C5 C4♪ F4♪ | 𝄾 A♭4♪ C5 C4 F4
+  //  - Schlag 3: C4 allein über einem leisen Begleitton (A♭3) – echter Oktavsprung von C5
+  //  - Schlag 5: die KI hat nur den Begleitton A♭3 gehört, die Signalanalyse (hint) C5
+  //  - Schlag 6: C5 als leiser Oberton über lautem C4
+  const q = 24;
+  const poly = [];
+  const add = (beat, midi, amp, dur = 1, stem = 'other') => poly.push({ start: Math.round(beat * q), dur: Math.round(dur * q), midi, amp, stem });
+  for (let r = 0; r < 4; r++) {
+    const o = r * 8;
+    add(o + 0, 65, 0.55);
+    add(o + 1, 68, 0.55);
+    add(o + 2, 72, 0.55);
+    add(o + 3, 60, 0.52, 0.5);
+    add(o + 3, 56, 0.32, 0.5); // leiser Begleitton darunter
+    add(o + 3.5, 65, 0.56, 0.5);
+    add(o + 4.5, 68, 0.55, 0.5);
+    add(o + 5, 56, 0.4); // KI hört nur den Begleitton
+    add(o + 6, 72, 0.34); // Oberton …
+    add(o + 6, 60, 0.52); // … des lauteren C4
+    add(o + 7, 65, 0.55);
+    for (let b = 0; b < 8; b += 2) add(o + b, 41, 0.5, 1, 'bass');
+  }
+  const hint = [];
+  for (let r = 0; r < 4; r++) hint.push({ start: (r * 8 + 5) * q, dur: q, midi: 72 });
+  const vs = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint });
+  const at = (beat) => vs.melody.find((n) => n.start === Math.round(beat * q));
+  for (let r = 0; r < 4; r++) {
+    const o = r * 8;
+    assert.equal(at(o + 3)?.midi, 60, `Durchgang ${r + 1}: Oktavsprung C5 -> C4`);
+    assert.equal(at(o + 5)?.midi, 72, `Durchgang ${r + 1}: C5 aus der Signalanalyse statt Begleitton A♭3`);
+    assert.equal(at(o + 6)?.midi, 60, `Durchgang ${r + 1}: C4 statt leisem Oberton C5`);
+  }
 });
