@@ -84,6 +84,8 @@ export function materialFromSong(song, opts = {}) {
     drums,
     chords: song.chords && !song.chordsDetected ? transposeChordList(song.chords, semis, key ? keyCenter(key) : null).map((c) => ({ ...c, start: c.start + lead })) : null,
     sections: song.sections && !song.sectionsDetected ? song.sections.map((s) => ({ ...s, start: s.start + (lead ? 1 : 0) })) : null,
+    // Lautstärke der Formteile aus der Aufnahme (auch wenn die Form selbst neu bestimmt wird)
+    loudness: song.sections ? song.sections.filter((s) => typeof s.energy === 'number').map((s) => ({ start: s.start + (lead ? 1 : 0), length: s.length, energy: s.energy })) : null,
     key: song.keyDetected ? null : key,
     transposeShift: semis,
     drumNotes: opts.drums ? (song.drumNotes || []).map((d) => ({ ...d, start: d.start + lead })) : null,
@@ -150,7 +152,9 @@ export function orchestrate(input, opts = {}) {
       named = [];
     }
     const refrainBars = new Set();
+    // Refrain und die lautesten Formteile der Aufnahme (relative Lautstärke ≥ 0,7): dort wird die Melodie verdoppelt
     for (const s of named) if (s.name === 'Refrain') for (let b = s.start; b < s.start + s.length; b++) refrainBars.add(b);
+    for (const s of material.loudness || []) if (s.energy >= 0.7) for (let b = s.start; b < s.start + s.length; b++) refrainBars.add(b);
     const ostinatoBars = new Set(score.ctx.decode.bars.filter((b) => b.ostinato).map((b) => b.bar));
     const tex = sourceTexture({ lead: score.ctx.lead, comp: score.ctx.compRhythm || [], geo: score.ctx.geo, M: score.ctx.M, refrainBars, voices: N, ostinatoBars });
     score.texture = tex;

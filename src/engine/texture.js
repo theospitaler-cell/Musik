@@ -178,10 +178,26 @@ export function applySourceTexture(score, texture, { doubling = true, soli = tru
     if (last && last.kind === b.kind && last.z === b.bar) last.z = b.bar + 1;
     else runs.push({ kind: b.kind, a: b.bar, z: b.bar + 1 });
   }
+  // Solo-Stellen in größeren Besetzungen: Stimmen in der Lage der Melodie (z. B. 2./3. Trompete neben der
+  // 1.) pausieren, statt die Melodie mit Liegetönen in ihrer eigenen Lage zuzudecken – sie kommen im Refrain
+  // und im Tutti als Verdopplung dazu. Mindestens zwei Begleitstimmen bleiben.
+  const sameRegister = others.filter((v) => Math.abs(center(v) - leadCenter) <= 5);
+  const canRest = N >= 6 && others.length - sameRegister.length >= 2 ? sameRegister : [];
+  out.rested = 0;
   for (const r of runs) {
-    if (r.kind === 'solo') continue;
     const a = r.a * mt;
     const z = r.z * mt;
+    if (r.kind === 'solo') {
+      if (!canRest.length) continue;
+      for (const v of canRest) {
+        // Einwürfe und Gegenmelodien bleiben, Begleitklänge fallen weg
+        const before = v.events.length;
+        v.events = v.events.filter((e) => !(e.start >= a && e.start < z && (e.role === 'pad' || e.role === 'stabs')));
+        for (const e of v.events) if ((e.role === 'pad' || e.role === 'stabs') && e.start < a && endOf(e) > a) e.dur = a - e.start;
+        if (v.events.length < before) out.rested += 1;
+      }
+      continue;
+    }
     const melody = sortEvents(leadV.events.filter((e) => e.start >= a && e.start < z && e.pitches && e.pitches.length));
     if (melody.length < 2) continue;
     const wantDouble = doubling && (r.kind === 'doubled' || r.kind === 'tutti');
