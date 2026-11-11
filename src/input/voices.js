@@ -98,7 +98,11 @@ export function tidyAiNotes(ai, { minSec = TIDY_TUNE.minSec, gapSec = TIDY_TUNE.
         // Kandidat: kurzer Anfang (Splitter) bis 120 ms Lücke, oder ein gehaltener Ton mit kleinem Abriss
         const cand = n.start >= cur.start && ((gap <= joinGap && cur.end - cur.start < joinFirstMax) || (cur.end - cur.start >= holdSec && gap <= gapSec));
         const join = attack ? cand && !isNewAttack(attack(cur.start, n.start, n.midi)) : cur.end - cur.start >= holdSec && gap <= gapSec;
-        if (join) {
+        // ein kurzer, schwächerer Splitter, der allein ohnehin wegfiele (unter minSec), geht nahtlos in ein stärkeres
+        // Stück desselben Tons über: das ist der Anfang dieses Tons – sonst setzte er zu spät ein („Viva la Vida“
+        // T. 11: B3 in 105 + 127 ms zerlegt, der Anschlag-Detektor sah wegen eines Bass-Einsatzes einen neuen Ton)
+        const splinter = cur.end - cur.start < minSec && gap <= 0.015 && (cur.amp ?? 0.5) < (n.amp ?? 0.5) && !(cur.fast || n.fast);
+        if (join || splinter) {
           cur.end = Math.max(cur.end, n.end);
           cur.amp = Math.max(cur.amp ?? 0, n.amp ?? 0);
           continue;
