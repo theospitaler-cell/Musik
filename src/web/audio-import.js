@@ -1,6 +1,7 @@
 // Audio-Datei -> Song: Dekodieren (Browser) + Analyse im Web-Worker, mit Fortschritt je Aufgabe.
 import { effortOf } from '../core/effort.js';
 import { resolveStemPlan, encodeWav16, stemLevels, TONAL_STEMS } from '../input/stems.js';
+import { instrumentsFromLevels, instrumentsBySection } from '../input/instruments.js';
 
 export async function decodeAudio(bytes) {
   const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -170,9 +171,48 @@ async function separateStems(data, { stemsMode, stemsStatus, onStage, signal }) 
   }
 }
 
-// Ergebnis: Song. onStage(stage, frac 0..1, text) – stage: stems | prep | ai | spec | melody | grid | drums
+// Instrumentenerkennung (Desktop-App mit Grafikkarte, eingerichtet mit scripts/setup-instruments.mjs): Pegel je
+// Instrumentenspur -> song.instruments = { list: [{ id, name, group, db }], sections: [{ label, start, length,
+// instruments: [id] }] }. Scheitert sie, bleibt die Analyse unverändert (Hinweis in den Warnungen).
+export function instrumentsPlanned(stemsStatus) {
+  const d = typeof window !== 'undefined' ? window.notecodeDesktop : null;
+  return !!(d && d.recognizeInstruments && stemsStatus && stemsStatus.instruments && stemsStatus.instruments.ready);
+}
+
+async function addInstruments(song, data, { stemsStatus, onStage, signal }) {
+  if (!instrumentsPlanned(stemsStatus)) return song;
+  const d = window.notecodeDesktop;
+  const off = d.onInstrumentsProgress ? d.onInstrumentsProgress((p) => onStage('instruments', p.frac, p.text)) : () => {};
+  const onAbort = () => d.cancelInstruments && d.cancelInstruments();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    onStage('instruments', 0, 'Instrumente werden erkannt');
+    const res = await d.recognizeInstruments(encodeWav16(data.channels, data.sampleRate));
+    const list = instrumentsFromLevels(res.levels);
+    const t = song.timing;
+    const mtBeats = t && t.beatTicks ? (song.meter.beats * 96) / song.meter.beatType / t.beatTicks : song.meter.beats;
+    const barSec = t && t.beatSec ? (bar) => t.beatSec[Math.max(0, Math.min(t.beatSec.length - 1, Math.round(t.firstBeat + bar * mtBeats)))] : null;
+    song.instruments = { list, sections: instrumentsBySection(res.windows, { sections: song.sections || [], barSec }), model: res.model };
+    onStage('instruments', 1, '');
+  } catch (e) {
+    if (signal?.aborted || e.name === 'AbortError') throw aborted();
+    console.info('Instrumentenerkennung nicht möglich:', e.message);
+    song.warnings = [...(song.warnings || []), 'Instrumentenerkennung fehlgeschlagen: ' + String(e.message).replace(/^Error invoking remote method '[^']*': (Error: )?/, '').slice(0, 160)];
+  } finally {
+    off();
+    signal?.removeEventListener('abort', onAbort);
+  }
+  return song;
+}
+
+export async function analyzeAudio(data, opts = {}) {
+  const song = await analyzeAudioCore(data, opts);
+  return addInstruments(song, data, { stemsStatus: opts.stemsStatus, onStage: opts.onStage || (() => {}), signal: opts.signal || null });
+}
+
+// Ergebnis: Song. onStage(stage, frac 0..1, text) – stage: stems | prep | ai | spec | melody | grid | drums | instruments
 // stemsMode: 'auto' | 'force' | 'off'; stemsStatus: Zustand der Desktop-Umgebung (stems:status)
-export async function analyzeAudio(data, { title, effort = 3, onStage = () => {}, signal = null, stemsMode = 'off', stemsStatus = null } = {}) {
+async function analyzeAudioCore(data, { title, effort = 3, onStage = () => {}, signal = null, stemsMode = 'off', stemsStatus = null } = {}) {
   const cfg = effortOf(effort).analysis;
   const base = { channels: data.channels, sampleRate: data.sampleRate, title, effort };
   let acts = null;

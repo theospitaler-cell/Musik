@@ -694,6 +694,23 @@ select {
   padding: 4px 9px;
   font-size: 12px;
 }
+/* erkannte Instrumente je Gruppe */
+.analysis .instr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.analysis .instr .rt-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.analysis .instr .instr-group b {
+  font-weight: 600;
+  color: var(--muted);
+}
 .analysis .warn {
   color: var(--warn);
   margin-top: 6px;

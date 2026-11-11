@@ -18,6 +18,14 @@ contextBridge.exposeInMainWorld('notecodeDesktop', {
     ipcRenderer.on('stems:progress', fn);
     return () => ipcRenderer.removeListener('stems:progress', fn);
   },
+  // Instrumentenerkennung: Pegel je Instrumentenspur (Zustand steht in stemsStatus().instruments)
+  recognizeInstruments: (wav) => ipcRenderer.invoke('instruments:recognize', { wav }),
+  cancelInstruments: () => ipcRenderer.invoke('instruments:cancel'),
+  onInstrumentsProgress: (cb) => {
+    const fn = (_e, p) => cb(p);
+    ipcRenderer.on('instruments:progress', fn);
+    return () => ipcRenderer.removeListener('instruments:progress', fn);
+  },
   // Notenerkennung (homr): Notenblatt-Bild -> MusicXML
   omrStatus: (refresh = false) => ipcRenderer.invoke('omr:status', { refresh }),
   recognizeSheet: (image, ext = 'png') => ipcRenderer.invoke('omr:recognize', { image, ext }),

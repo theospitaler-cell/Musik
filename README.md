@@ -207,6 +207,42 @@ Das Skript installiert PyTorch **mit CUDA** vom passenden Index
 falscher Build erst beim ersten Lauf mit „no kernel image“ auf). Zum Schluss lädt es das Modell und
 trennt 2 Sekunden Probeton.
 
+### Instrumentenerkennung (Desktop-App, NVIDIA-Grafikkarte)
+
+Welche Instrumente spielen? Die Desktop-App trennt die Aufnahme zusätzlich mit dem freien Modell
+**MVSep Mega 53 Stems** (BS-Roformer, MIT-Lizenz, [ZFTurbo/Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training),
+Release v1.0.21) in 53 Instrumentenspuren – Trompete, Horn, Posaune, Tuba, Flöte, Oboe, Klarinette,
+Fagott, Saxophon, Violine, Viola, Cello, Kontrabass, Gesang, Chor, Klavier, Orgel, Gitarren, Bass,
+Pauken, Schlagzeugteile … – und misst nur die Pegel (es wird nichts gespeichert). Ein Instrument spielt
+mit, wenn seine Spur höchstens 22 dB unter der ganzen Aufnahme liegt (`src/input/instruments.js`);
+„Mundharmonika“ zählt nur ohne lautere Holzbläser (das Modell hört Rohrblatt-Klang im Blasorchester als
+Mundharmonika), Trommeln werden zu „Schlagzeug“, kleines Schlagwerk zu „Percussion“. Die Analyse zeigt
+die Instrumente je Gruppe (Blechbläser, Holzbläser, Streicher …), der Hinweis darüber die Instrumente
+je Formteil (Pegel je 3-s-Fenster).
+
+Gemessen an sechs Aufnahmen mit bekannter Besetzung (Partituren der Notenvideos):
+
+| Aufnahme | erkannt |
+|---|---|
+| „Puttin' on the Ritz“, Blechbläserquintett | Tuba, Posaune, Trompete, Horn – genau die Besetzung, nichts sonst |
+| „Gonna Fly Now“, Brass Band | Trompete/Kornett, Posaune, Tuba, Horn, Pauken, Schlagzeug, Percussion – keine Holzbläser |
+| „Viva la Vida“, Blasorchester | Flöte, Oboe, Klarinette, Saxophon, Trompete, Horn, Posaune, Tuba, Bass, Pauken, Schlagwerk |
+| James-Bond-Medley, Blasorchester | ebenso |
+| „Gonna Fly Now“, Filmaufnahme | Chor, Blech, Streicher, Klavier, Synthesizer, E-Gitarre, Bass, Schlagzeug |
+| „Viva la Vida“, Coldplay | Gesang, Chor, Violine, Cello, Kontrabass, Klavier, Bass, Pauken, Glocken, Schlagzeug |
+
+Dauer: RTX 5060 (8 GB), 3 Minuten Musik in ~80 s (Abschnitte à 5 s, halbe Genauigkeit); auf dem
+Prozessor viel zu langsam, darum nur mit Grafikkarte. **Grenze:** spielen zwei Blechbläser gleich laut
+im selben Rhythmus parallel (Ritz-Refrain T. 27–28: Horn forte eine Terz über der 1. Trompete), landet
+die lautere Linie in beiden Spuren – das Instrument der *ganzen* Aufnahme bzw. eines Formteils ist sicher,
+das einer einzelnen Note in solchen Stellen nicht.
+
+**Einrichten** (einmalig, nach `setup-demucs`, lädt ~1,4 GB):
+
+```bash
+node scripts/setup-instruments.mjs        # Pakete in ~/.notecode/demucs, Modell + Code nach ~/.notecode/instruments
+```
+
 ### Aufwand: von „Schnell“ bis „Ultra“
 
 Ein Schieberegler mit fünf Stufen (wie der Aufwand-Regler in Claude) steht **nur in den Einstellungen**

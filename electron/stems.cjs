@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, '..');
 const MODEL = 'htdemucs';
 
 // Aufruf eines Befehls; liefert { code, stdout, stderr } (nie ein Fehler: code -1 bei Startfehler)
-function run(cmd, args, { timeout = 15000, onStderr = null, signal = null, cwd = undefined } = {}) {
+function run(cmd, args, { timeout = 15000, onStderr = null, onStdout = null, signal = null, cwd = undefined } = {}) {
   return new Promise((resolve) => {
     let out = '';
     let err = '';
@@ -52,7 +52,10 @@ function run(cmd, args, { timeout = 15000, onStderr = null, signal = null, cwd =
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
     }
-    child.stdout.on('data', (d) => (out += d));
+    child.stdout.on('data', (d) => {
+      out += d;
+      if (onStdout) onStdout(String(d));
+    });
     child.stderr.on('data', (d) => {
       const s = String(d);
       err += s;

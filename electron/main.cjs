@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const stems = require('./stems.cjs');
 const omr = require('./omr.cjs');
+const instruments = require('./instruments.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const REPO = 'theospitaler-cell/Musik';
@@ -141,6 +142,8 @@ app.whenReady().then(() => {
   ipcMain.handle('stems:status', async (_e, { refresh = false } = {}) => {
     if (!refresh && stemStatus && Date.now() - stemStatusAt < 60000) return stemStatus;
     stemStatus = await stems.status();
+    // Instrumentenerkennung nutzt dieselbe Python-Umgebung
+    stemStatus.instruments = await instruments.status({ python: stemStatus.pythonCmd, cuda: stemStatus.cuda });
     stemStatusAt = Date.now();
     return stemStatus;
   });
@@ -163,6 +166,28 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('stems:cancel', () => {
     if (stemJob) stemJob.abort();
+    return true;
+  });
+  // ---- Instrumentenerkennung (Instrumenten-Spurentrennung, nur Pegel)
+  let instrJob = null;
+  ipcMain.handle('instruments:recognize', async (e, { wav }) => {
+    if (instrJob) throw new Error('Die Instrumentenerkennung läuft bereits');
+    const ctl = new AbortController();
+    instrJob = ctl;
+    try {
+      const st = stemStatus || (stemStatus = await stems.status());
+      return await instruments.recognize(new Uint8Array(wav), {
+        python: st.pythonCmd,
+        device: 'cuda',
+        signal: ctl.signal,
+        onProgress: (frac, text) => e.sender.send('instruments:progress', { frac, text }),
+      });
+    } finally {
+      instrJob = null;
+    }
+  });
+  ipcMain.handle('instruments:cancel', () => {
+    if (instrJob) instrJob.abort();
     return true;
   });
   // ---- Notenerkennung (homr): Notenblatt-Bild -> MusicXML

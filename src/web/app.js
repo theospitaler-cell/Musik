@@ -4,7 +4,8 @@ import { DIFFICULTY_LEVELS } from '../arrange/difficulty.js';
 import { loadSong, detectFormat } from '../input/index.js';
 import { arrange, usesFaithful } from '../arrange/engine.js';
 import { playAlongSources, defaultPlayParts } from '../arrange/playalong.js';
-import { decodeAudio, analyzeAudio } from './audio-import.js';
+import { decodeAudio, analyzeAudio, instrumentsPlanned } from './audio-import.js';
+import { groupInstruments, instrumentName } from '../input/instruments.js';
 import { platform, localVersion, checkUpdate, applyUpdate } from './updater.js';
 import { exportMusicXML } from '../output/musicxml.js';
 import { exportMidi } from '../output/midi.js';
@@ -1534,10 +1535,18 @@ function renderAnalysis() {
         ${S.source?.audioId ? `<button type="button" class="btn ${old ? 'primary' : 'ghost'} small" data-rt="again" title="Die Aufnahme mit der aktuellen Erkennung neu analysieren">Neu analysieren</button>` : ''}
       </div>`
     : '';
+  // erkannte Instrumente (Instrumenten-Spurentrennung, Desktop-App mit Grafikkarte) – je Gruppe, dazu je Formteil
+  const instr = s.instruments && s.instruments.list && s.instruments.list.length
+    ? (() => {
+        const per = (s.instruments.sections || []).map((x) => `${x.label} (T. ${x.start + 1}): ${x.instruments.map(instrumentName).join(', ') || '–'}`).join('\n');
+        return `<div class="instr" title="${per ? 'Je Formteil:\n' + per : ''}"><span class="rt-label">Instrumente</span> ${groupInstruments(s.instruments.list).map((g) => `<span class="instr-group"><b>${g.label}:</b> ${g.items.join(', ')}</span>`).join(' ')}</div>`;
+      })()
+    : '';
   const oldNote = old ? `<div class="warn">⚠ ${s.aiUsed === false ? 'Diese Analyse lief ohne die lokale KI' : 'Diese Analyse stammt aus einer älteren Version'} – „Neu analysieren“ liefert deutlich bessere Noten.</div>` : '';
   box.innerHTML = `<div class="a-title">${s.title}</div>
     <div class="kv"><span>${keyNameDe(s.key)}${s.keyDetected ? ' (erkannt)' : ''}</span><span>${s.meter.beats}/${s.meter.beatType}</span><span>♩ ${s.tempo || '–'}</span><span>${s.measureCount} Takte${s.pickup ? ' + Auftakt' : ''}</span><span>Form ${form}</span><span>${chordInfo}</span>${extra.map((x) => `<span>${x}</span>`).join('')}</div>
     ${partsHtml}
+    ${instr}
     ${retime}
     ${oldNote}
     ${(s.warnings || []).map((w) => `<div class="warn">⚠ ${w}</div>`).join('')}`;
@@ -1636,13 +1645,14 @@ function analysisTasks(dur, level, { read = false, stems = false } = {}) {
   t.push({ id: 'melody', label: 'Melodie, Bass & Akkorde erkennen', expect: 800 + dur * speedOf('melody', 70) });
   t.push({ id: 'grid', label: 'Noten ins Raster setzen & Form bestimmen', expect: 500 + dur * speedOf('grid', 25) });
   t.push({ id: 'drums', label: 'Schlagzeug Takt für Takt', expect: 800 + dur * speedOf('drums', 55) });
+  if (instrumentsPlanned(S.stemsStatus)) t.push({ id: 'instruments', label: 'Instrumente erkennen (Trompete, Horn, Flöte, Geige …)', expect: 12000 + dur * speedOf('instruments', 450) });
   t.push({ id: 'save', label: 'Ergebnis speichern', expect: 600 });
   return t;
 }
 
 // Meldungen der Analyse (Stufe, Anteil, Text) -> Aufgaben; abgeschlossene Aufgaben lernen ihre Dauer
 function stageRunner(pg, dur, level) {
-  const order = ['read', 'decode', 'stems', 'prep', 'ai', 'side', 'conv', 'spec', 'melody', 'grid', 'drums', 'save'].filter((id) => pg.list.get(id));
+  const order = ['read', 'decode', 'stems', 'prep', 'ai', 'side', 'conv', 'spec', 'melody', 'grid', 'drums', 'instruments', 'save'].filter((id) => pg.list.get(id));
   const t0 = {};
   const finish = (id) => {
     const t = pg.list.get(id);
@@ -2959,6 +2969,8 @@ function renderStemsStatusText() {
       : plan.reason
         ? ` Aktuell: ${plan.reason}`
         : ' Aktuell: Spurentrennung ist deaktiviert – direkte Analyse ohne Spurentrennung.';
+    const ins = S.stemsStatus.instruments;
+    if (ins) el.textContent += ins.ready ? ' Instrumentenerkennung: bereit (Grafikkarte).' : ` Instrumentenerkennung: ${ins.reason}.`;
   }
 }
 
