@@ -76,6 +76,7 @@ export function materialFromSong(song, opts = {}) {
     meter: song.meter,
     measureCount: song.measureCount + (lead ? 1 : 0),
     pickupBars: lead ? 1 : 0,
+    pickupTicks: lead ? Math.min(mt, song.pickup) : 0,
     lead: song.melody.filter((n) => n.start + lead >= 0).map(shift),
     bass: bassTrack.map(shift),
     comp: comp.map(shift),
@@ -209,10 +210,31 @@ export function orchestrate(input, opts = {}) {
   spellVoices(score);
   const arr = buildArrangement(score, { title: opts.title, composer: material.composer, N });
   arr.transposeShift = shift;
+  // Auftakt: der vorangestellte Takt ist ein Teiltakt – nichts vor dem Auftakt (keine erfundenen Liegeklänge), in
+  // den Noten als Takt 0 nur in der Länge des Auftakts („Gonna Fly Now“: Achtel-Auftakt der Kornette)
+  if (material.pickupBars && material.pickupTicks > 0 && material.pickupTicks < arr.mt) {
+    const cut = arr.mt - material.pickupTicks;
+    for (const v of arr.voices) {
+      v.events = v.events.filter((e) => e.start >= cut);
+      // Angaben vor dem Auftakt (Dynamik der weggefallenen Klänge) wandern zum ersten Ton der Stimme – es sei denn,
+      // dort steht schon eine Angabe derselben Art
+      if (v.dirs) {
+        const firstNote = v.events.find((e) => e.pitches && e.pitches.length);
+        const kept = v.dirs.filter((d) => d.t >= cut);
+        for (const d of v.dirs.filter((x) => x.t < cut)) {
+          if (!firstNote) continue;
+          if (kept.some((x) => x.kind === d.kind && x.t <= firstNote.start)) continue;
+          kept.push({ ...d, t: firstNote.start });
+        }
+        v.dirs = kept.sort((a, b) => a.t - b.t);
+      }
+    }
+    arr.pickup = material.pickupTicks;
+  }
   // Schlagzeug (optional): die erkannten Schläge der Vorlage 1:1 auf das Raster
   if (opts.drums && material.drumNotes && material.drumNotes.length) {
     const total = arr.totalBars * arr.mt;
-    const events = drumsFromNotes(material.drumNotes, { offset: 0, totalTicks: total, beat: arr.beat });
+    const events = drumsFromNotes(material.drumNotes, { offset: 0, totalTicks: total, beat: arr.beat }).filter((e) => !arr.pickup || e.start >= arr.mt - arr.pickup);
     if (events.length) arr.drums = { name: 'Schlagzeug', events, dirs: [] };
   } else if (opts.drums) arr.report.notes = [...arr.report.notes, 'Die Vorlage enthält kein erkanntes Schlagzeug – es gibt keine Drum-Stimme.'];
   // Prüfbericht im Format der Arrangement-Schicht (Regieplan/Prüfbericht der Oberfläche)

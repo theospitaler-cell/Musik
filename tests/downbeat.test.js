@@ -47,14 +47,29 @@ test('Taktanfang: ein vereinzelter Ton vor der Eins mit Stille danach ist Geräu
   assert.equal(p.melody[0].start, -24);
 });
 
+test('Taktanfang: Melodietöne nur auf dem letzten Schlag, die weiterführen, sind ein Auftakt (Gonna Fly Now)', () => {
+  // Takt 1 hat nur eine Achtel auf 3½, dann geht es auf der Eins weiter -> Auftakt, Takt 2 wird Takt 1
+  const s = song([{ start: 84, dur: 12, midi: 60 }, ...line(MT)]);
+  assert.equal(trimLeadingBars(s, MT, 4), 1);
+  assert.equal(s.pickup, 12);
+  assert.deepEqual(s.melody.slice(0, 2).map((n) => n.start), [-12, 0]);
+  // ein einzelner Ton auf dem letzten Schlag mit Pause danach (Bond-Medley: B4, dann 1½ Schläge nichts): kein Auftakt
+  const b = song([{ start: 72, dur: 12, midi: 70 }, ...line(MT + 48)]);
+  assert.equal(trimLeadingBars(b, MT, 4), 0);
+  assert.equal(b.melody[0].start, 72);
+});
+
 test('Taktanfang: Rumpeln ganz unten vor dem Einsatz zählt nicht, ein Bass-Intro schon', () => {
   // Puttin' on the Ritz: H0, G1, Es1, F1, Cis1 in drei Takten, dann Tuba F3
   const rumble = [23, 31, 27, 29, 25].map((midi, i) => ({ start: 84 + i * 40, dur: 24, midi }));
   const s = song(line(3 * MT), [{ role: 'bass', notes: rumble }]);
   assert.equal(trimLeadingBars(s, MT, 4), 3);
-  // Gonna Fly Now: F1, F1 gehalten, G1 vor dem Auftakt – auch in einer Mittelstimme
+  // Gonna Fly Now: F1, F1 gehalten, G1 vor dem Auftakt – auch in einer Mittelstimme; der Achtel-Auftakt der
+  // Kornette (letzte Achtel des Takts, führt ohne Pause weiter) steht danach vor Takt 1
   const r = song(line(MT + 84), [{ role: 'inner', notes: [{ start: 0, dur: 36, midi: 29 }] }, { role: 'bass', notes: [{ start: 36, dur: 132, midi: 29 }, { start: 168, dur: 18, midi: 31 }] }]);
-  assert.equal(trimLeadingBars(r, MT, 4), 1);
+  assert.equal(trimLeadingBars(r, MT, 4), 2);
+  assert.equal(r.pickup, 12);
+  assert.equal(r.melody[0].start, -12);
   // Bass-Intro mit Muster (zwei Takte Achtel auf E1/A1) vor der Melodie: bleibt
   const intro = Array.from({ length: 16 }, (_, i) => ({ start: i * 12, dur: 12, midi: i % 2 ? 33 : 28 }));
   const b = song(line(2 * MT), [{ role: 'bass', notes: intro }]);

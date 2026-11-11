@@ -1557,11 +1557,30 @@ export function trimLeadingBars(song, mt, beatsPerBar) {
     const sparse = lead.length <= 4 && lead.length / bars <= 1.5 && lead.every((n) => n.midi <= 33);
     if (lead.length && (lowNoise || sparse)) first = firstUpper.start;
   }
-  const k = Math.floor(first / mt);
+  let k = Math.floor(first / mt);
+  // Auftakt: stehen im ersten Takt nur Melodietöne auf dem letzten Schlag, die ohne Pause in den nächsten Takt
+  // führen, ist das ein Auftakt vor Takt 1 – kein ganzer Takt mit Pausen („Gonna Fly Now“: Achtel-Auftakt der
+  // Kornette vor dem Galopp; sonst zählten alle Takte eins zu weit, das Thema stand in Takt 6 statt 5)
+  let pickFrom = null;
+  {
+    const bt = mt / beatsPerBar;
+    const s0 = k * mt;
+    const inBar = uniq.filter((n) => n.start >= first && n.start < s0 + mt);
+    const melKeys = new Set((song.melody || []).map((n) => `${n.start}:${n.midi}`));
+    const next = uniq.find((n) => n.start >= s0 + mt);
+    if (inBar.length && next && inBar.every((n) => n.start >= s0 + mt - bt && melKeys.has(`${n.start}:${n.midi}`))) {
+      const end = Math.max(...inBar.map((n) => n.start + (n.dur || 0)));
+      if (next.start <= s0 + mt + bt && next.start - Math.min(end, s0 + mt) <= bt / 2) {
+        pickFrom = Math.min(...inBar.map((n) => n.start));
+        k += 1;
+      }
+    }
+  }
   if (k < 1 || k >= song.measureCount - 1) return 0;
   const sh = k * mt;
   const move = (list) => (list || []).filter((n) => n.start >= sh).map((n) => ({ ...n, start: n.start - sh }));
-  song.melody = move(song.melody);
+  // (die Auftakt-Töne bleiben in der Melodie, mit negativer Zeit vor Takt 1)
+  song.melody = (song.melody || []).filter((n) => n.start >= sh || (pickFrom !== null && n.start >= pickFrom)).map((n) => ({ ...n, start: n.start - sh }));
   if (song.tracks) song.tracks = song.tracks.map((t) => ({ ...t, notes: move(t.notes) }));
   if (song.compHits) song.compHits = move(song.compHits);
   if (song.drumNotes) song.drumNotes = move(song.drumNotes);

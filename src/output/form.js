@@ -27,7 +27,10 @@ export function printedMeasures(arr) {
     if (form.dsBar !== null && m.src === form.dsBar && form.skip) m.dalSegno = true;
     if (form.codaBar !== null && m.src === form.codaBar && form.skip) m.coda = true;
   }
-  out.forEach((m, i) => (m.number = i + 1));
+  // Auftakt (arr.pickup Ticks im ersten Takt): der erste gedruckte Takt ist Takt 0, ein Teiltakt (implicit)
+  const pick = arr.pickup > 0 && out.length && out[0].src === 0;
+  out.forEach((m, i) => (m.number = pick ? i : i + 1));
+  if (pick) out[0].implicit = true;
   return out;
 }
 

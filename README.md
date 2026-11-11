@@ -121,8 +121,10 @@ Die Analyse läuft im Hintergrund.
   spät; jetzt steht das Ostinato ♩♩♩♪♪ | 𝄾♪𝄾♪♩♩ wie in der Partitur). Vor dem Einsatz zählen weder ein
   vereinzelter Ton im Auftakt mit Stille danach noch Rumpeln ganz unten (wenige Töne bis A1) als Musik: die
   leeren Takte davor fallen weg. Gegen die Partituren: Ritz-Thema Takt 13/21, Refrain 27, Viva-Horn Takt 8 –
-  genau wie gedruckt (vorher 16/24/30 bzw. 9); Rocky: Auftakt und Galopp wie gedruckt, das Thema einen Takt
-  später, weil die Aufnahme den Akkord davor einen Takt länger hält.
+  genau wie gedruckt (vorher 16/24/30 bzw. 9). Stehen im ersten Takt nur Melodietöne auf dem letzten Schlag, die
+  ohne Pause weiterführen, ist das ein Auftakt („Gonna Fly Now“: Achtel der Kornette) – die Orchestrierung
+  schreibt ihn als Takt 0 (MusicXML implicit, nur Auftaktlänge, keine erfundenen Klänge davor), das Mitlesen
+  zählt ab 0. Rocky-Thema jetzt in Takt 5 und 13 wie gedruckt (vorher 7/15).
   Viva-Hornmelodie T. 8–11 (Referenz aus der Einzelstimme der Verlagsvorschau): 12/14 Töne genau (vorher 3/14 –
   mit falscher Eins standen die Töne drei Schläge versetzt). Eine Tonrepetition unter einem gehaltenen Ton gilt
   nur noch als Begleitung, wenn die Signalanalyse den gehaltenen Ton hört – hört sie die Tonrepetition (und

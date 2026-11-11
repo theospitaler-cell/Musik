@@ -2159,7 +2159,7 @@ function restorePages() {
   t.pages = null;
   // Mitlaufen: Takte der wiederhergestellten Seiten neu verknüpfen
   S.measureEls = $$('g.measure', box);
-  if (S.follower && S.printed) S.follower.attach(S.printed.length);
+  if (S.follower && S.printed) S.follower.attach(S.printed.length, S.printed[0] ? S.printed[0].number : 1);
   return true;
 }
 
@@ -2202,7 +2202,7 @@ async function renderNotes(onProgress = null) {
       box.appendChild(div);
     }
     S.measureEls = $$('g.measure', box);
-    S.follower.attach(S.printed.length);
+    S.follower.attach(S.printed.length, S.printed[0] ? S.printed[0].number : 1);
     if (S.player) updatePosition(S.player.displayPosition(), S.player.perf.secToBar(S.player.displayPosition()));
     tab.pagesKey = key;
     own?.done();

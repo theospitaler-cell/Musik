@@ -8,6 +8,8 @@ export const demoSong = (id = 'saints') => parseABC(DEMOS.find((d) => d.id === i
 export function measureDurations(xml) {
   const root = parseXML(xml);
   const out = [];
+  // Auftakt (implicit="yes"): kürzer als ein voller Takt, aber in allen Stimmen gleich lang wie die erste
+  const pickupDur = new Map();
   for (const part of root.all('part')) {
     let divisions = 24;
     let beats = 4;
@@ -32,7 +34,12 @@ export function measureDurations(xml) {
           pos += d;
         }
       }
-      const expected = (beats * divisions * 4) / beatType;
+      let expected = (beats * divisions * 4) / beatType;
+      if (m.attrs.implicit === 'yes') {
+        const first = Object.values(voices)[0];
+        if (!pickupDur.has(m.attrs.number) && first > 0 && first < expected) pickupDur.set(m.attrs.number, first);
+        expected = pickupDur.get(m.attrs.number) ?? expected;
+      }
       for (const [v, d] of Object.entries(voices)) out.push({ part: part.attrs.id, measure: m.attrs.number, voice: v, dur: d, expected });
     }
   }

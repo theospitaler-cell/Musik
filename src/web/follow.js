@@ -16,21 +16,22 @@ export class ScoreFollower {
     this.watchUser();
   }
 
-  // Nach jedem Notensatz: gedruckter Takt (Index) -> SVG-Takt
-  attach(printedCount) {
+  // Nach jedem Notensatz: gedruckter Takt (Index) -> SVG-Takt. first: Nummer des ersten gedruckten Takts
+  // (0 bei einem Auftakt, sonst 1)
+  attach(printedCount, first = 1) {
     this.clear();
     const els = [...this.box.querySelectorAll('g.measure')];
     const byN = new Map();
     for (const el of els) {
       const n = parseInt(el.getAttribute('data-n'), 10);
-      if (n > 0 && !byN.has(n)) byN.set(n, el);
+      if (n >= first && !byN.has(n)) byN.set(n, el);
     }
-    if (!byN.size) els.forEach((el, i) => byN.set(i + 1, el)); // ohne Taktnummern: Reihenfolge
+    if (!byN.size) els.forEach((el, i) => byN.set(i + first, el)); // ohne Taktnummern: Reihenfolge
     this.slots = new Array(printedCount).fill(null);
     this.starts = new Map();
     let cur = null;
     for (let i = 0; i < printedCount; i++) {
-      const el = byN.get(i + 1);
+      const el = byN.get(i + first);
       if (el) {
         cur = { el, start: i, len: 1 };
         this.starts.set(el, i);

@@ -5,7 +5,7 @@ import { XmlWriter } from '../core/xml.js';
 import { spelled, lofLetter, lofAlter, lofPc } from '../theory/pitch.js';
 import { buildChord, kindXml, kindText } from '../theory/chords.js';
 import { chordAt } from '../model/song.js';
-import { layoutVoice, meterInfo, singleValueDur } from './notation.js';
+import { layoutVoice, meterInfo, singleValueDur, splitDuration } from './notation.js';
 import { fitOctave } from '../arrange/instruments.js';
 import { KIT } from '../arrange/gen/drums.js';
 import { pageLayout } from './layout.js';
@@ -97,6 +97,21 @@ export function barGeom(arr) {
     },
     changed: (m) => !!(G && m > 0 && G.changes[m]),
   };
+}
+
+// Auftakt-Takt (Takt 0, arr.pickup Ticks): nur die Elemente ab dem Auftakt – ohne Töne dort eine Pause in
+// Auftaktlänge (MusicXML: Teiltakt mit implicit="yes")
+function pickupItems(items, arr, mi) {
+  const cut = arr.mt - arr.pickup;
+  const kept = [];
+  for (const it of items) {
+    if (it.measureRest) continue;
+    if (it.start >= cut) kept.push(it);
+    // Pause über den Auftaktbeginn hinweg: ab dort neu zerlegen
+    else if (it.kind === 'rest' && it.start + it.dur > cut) kept.push(...splitDuration(cut, it.start + it.dur - cut, mi, true).map((p) => ({ kind: 'rest', ...p })));
+  }
+  if (kept.some((it) => it.kind !== 'rest')) return kept;
+  return splitDuration(cut, arr.pickup, mi, true).map((p) => ({ kind: 'rest', ...p }));
 }
 
 function emptyBars(events, totalBars, mt, geo = null) {
@@ -614,6 +629,10 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
   const staffEvents = grand ? splitStaves(events) : null;
   const measures = layoutVoice(grand ? staffEvents.hi : events, arr.meter, total, geo.grid ? geo : null);
   const measuresLow = grand ? layoutVoice(staffEvents.lo, arr.meter, total, geo.grid ? geo : null) : null;
+  if (arr.pickup > 0 && measures.length) {
+    measures[0] = pickupItems(measures[0], arr, geo.mi(0));
+    if (measuresLow) measuresLow[0] = pickupItems(measuresLow[0], arr, geo.mi(0));
+  }
   const emptySrc = emptyBars(v.events, total, mt, geo.grid ? geo : null);
   const emptyPrinted = printed.map((pm) => emptySrc[pm.src] && !pm.startRepeat && !pm.endRepeat && !pm.segno && !pm.coda && !pm.toCoda && !pm.dalSegno);
   const blockStarts = new Set(arr.blocks.map((b) => b.startBar));
@@ -660,7 +679,7 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
   for (let k = 0; k < printed.length; k++) {
     const pm = printed[k];
     const m = pm.src;
-    w.open('measure', { number: pm.number });
+    w.open('measure', pm.implicit ? { number: pm.number, implicit: 'yes' } : { number: pm.number });
     if (k === 0) {
       w.open('print');
       w.el('measure-numbering', 'system');
@@ -808,7 +827,7 @@ function writeVoicePart(w, arr, ps, { isPart, concert, layout, chords, first, us
       // unteres System: zurück an den Taktanfang
       const low = measuresLow[m].map((it) => (it.tieStart && it.kind === 'note' && (!nextPm || nextPm.src !== m + 1) && it.start + it.dur >= geo.len(m) ? { ...it, tieStart: false } : it));
       w.open('backup');
-      w.el('duration', geo.len(m));
+      w.el('duration', m === 0 && arr.pickup > 0 ? arr.pickup : geo.len(m));
       w.close('backup');
       writeMeasureItems(w, low, { pre: [], dirs: [], harmonies: [], mi, keyFifths: pk.fifths, cue: false, isDrum: false, voice: 2, staff: 2, instRef: null });
     }
@@ -1191,6 +1210,10 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle
   const dv = drumVoices(arr.drums.events, geo);
   const m1 = layoutVoice(dv[1], arr.meter, total, geo.grid ? geo : null);
   const m2 = layoutVoice(dv[2], arr.meter, total, geo.grid ? geo : null);
+  if (arr.pickup > 0 && m1.length) {
+    m1[0] = pickupItems(m1[0], arr, geo.mi(0));
+    m2[0] = pickupItems(m2[0], arr, geo.mi(0));
+  }
   const combined = m1.map((x, i) => [...x, ...m2[i]]);
   const emptySrc = combined.map((items) => !items.some((it) => it.kind === 'note'));
   const emptyPrinted = printed.map((pm) => emptySrc[pm.src] && !pm.startRepeat && !pm.endRepeat && !pm.segno && !pm.coda);
@@ -1241,7 +1264,7 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle
   for (let k = 0; k < printed.length; k++) {
     const pm = printed[k];
     const m = pm.src;
-    w.open('measure', { number: pm.number });
+    w.open('measure', pm.implicit ? { number: pm.number, implicit: 'yes' } : { number: pm.number });
     if (k === 0) {
       w.open('print');
       w.el('measure-numbering', 'system');
@@ -1324,7 +1347,7 @@ function writeDrumPart(w, arr, ps, { isPart, first, useSimile = false, drumStyle
       const hasFeet = m2[m].some((x) => x.kind === 'note');
       if (hasFeet) {
         w.open('backup');
-        w.el('duration', mt);
+        w.el('duration', m === 0 && arr.pickup > 0 ? arr.pickup : mt);
         w.close('backup');
         writeMeasureItems(w, m2[m], { pre: [], dirs: [], harmonies: [], mi, keyFifths: 0, cue: false, isDrum: true, voice: 2, instRef: ps.pid, drumMap: DRUM_DISPLAY, hideRests: true });
       }
