@@ -121,9 +121,15 @@ Die Analyse läuft im Hintergrund.
   Ton der Signalanalyse (keine reine Oktave). Unter einem gehaltenen Melodieton (Signalanalyse) zählen neue
   tiefere Einsätze als Begleitung; eine von der KI zerstückelte Haltenote wird wieder ein Ton. Gemessen
   (Referenz-Noten von Hand gelesen): Ritz-Thema 23/24, Wiederholung 21/24, Rocky-Thema 8/10 (vorher 5/10).
-  Grenzen: Töne, die die KI gar nicht hört (Glissando-Achtel, Sechzehntel-Auftakt nach gehaltener Note),
-  eine lautere Gegenstimme in derselben Lage und eine lautere Oktavverdopplung (dort folgt die Erkennung dem
-  Lauteren – auch die Signalanalyse).
+  Oberton nur, wenn der obere Ton den Rhythmus des unteren hat – klingt er weiter, während der untere neu
+  anschlägt, spielt ihn ein eigenes Instrument. Eine Tonrepetition (≥ 4 dichte Anschläge) unter einem darüber
+  gehaltenen Ton ist Begleitung, auch wenn sie lauter ist („Gonna Fly Now“ T. 15–18: Kornett A4/E4 gehalten,
+  Baritone im Galopp eine Oktave tiefer – 3/10 statt 1/10 Töne genau, die Haltetöne in der Kornett-Lage).
+  Grenzen: Töne, die die KI gar nicht hört (Glissando-Achtel, Sechzehntel-Auftakt nach gehaltener Note) und
+  eine lautere Gegenstimme in derselben Lage im selben Rhythmus (Ritz-Refrain: Horn lauter als die Trompeten).
+  Das Instrument selbst lässt sich in diesen Aufnahmen nicht messen: Obertonverlauf (Trompete allein streut
+  −3 … −27 dB/Oktave) und Stereoposition (Melodie −0,20 … +0,53, Horn −0,38 … +0,56) überlappen vollständig;
+  dafür bräuchte es ein trainiertes Mehrinstrumenten-Modell.
 - **Rhythmusfiguren**: dieselbe Sechzehntel-Figur (Galopp ♪♬, umgekehrt ♬♪) mindestens dreimal mit Lücken
   von höchstens drei Schlägen bleibt im Sechzehntel-Raster – sonst vereinfacht die Lesbarkeit sie zu Achteln
   (Einleitung von „Gonna Fly Now“). Zufällige Splitter wiederholen sich nicht so genau.
@@ -138,7 +144,13 @@ Die Analyse läuft im Hintergrund.
   Schein-Tempi durch Synkopen-Figuren aus, z. B. punktierte Achtel = 4/3 des Tempos); bei
   gleichmäßigem Tempo bleibt er am Raster. Tempokurve über das ganze Stück – auch **Tempowechsel**, **rit.** und **accel.**;
   in den Noten stehen neue Metronomangaben, „rit.“ und „a tempo“, die Wiedergabe folgt genau der
-  Aufnahme. Shuffles werden im 12/8-Takt notiert (♩. = …).
+  Aufnahme. Shuffles werden im 12/8-Takt notiert (♩. = …). Die Kurve misst jede Sekunde über 8 s (ein
+  2-s-Fenster wurde gemessen: 15 statt 6 von 144 Abschnitten falsch). Medleys: eine verwandte Lage (3:4,
+  2:3) über ≥ 24 s klar stärker ist ein echter Wechsel (Bond-Medley: Goldfinger ♩ = 104 statt 131–137);
+  halbes/doppeltes Tempo nach einem Wechsel entscheidet die Vorliebe für mittlere Tempi (96 → 132 nicht als
+  66). Neue Tempoangaben werden über die Takte 3–10 nach dem Wechsel gemessen, lange gleichmäßige
+  Abschnitte gelten schon ab 7 % als neues Tempo, das Anfangstempo erst nach dem stillen Vorlauf. Gegen die
+  Bond-Partitur: 125 / 104 / 138 / 154 / 133 (Partitur 126 / 104 / 2 × 69 / 2 × 76 / 132).
 - **Schlagzeug**: Harmonisch/Perkussiv-Trennung, dann NMF-Zerlegung in Bass Drum, Snare,
   Hi-Hat/Ride/Crash und Toms (Klangprofile passen sich dem Lied an), Ghost-Notes, offene Hi-Hat,
   Fills und Crashes wie gespielt.
