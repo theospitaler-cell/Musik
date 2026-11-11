@@ -415,6 +415,23 @@ test('Melodieauswahl: Tonrepetition der Melodie unter einem Holzbläser-Liegekla
   assert.ok(!at(2.2, 2.6).some((m) => m === 79 || m === 75), `keine Holzbläser G5/Es5 auf 2¼/2½ – erkannt: ${at(0, 4)}`);
 });
 
+test('Melodieauswahl: Wiederanschlag auf der Eins bleibt ein neuer Ton (Viva la Vida T. 8–9, G4 auf 3, G4 auf der Eins)', () => {
+  // KI: G4 ab 3¼ (ein Schlag), dann G4 eine Sechzehntel nach der Eins (drei Schläge) – die Signalanalyse hört ein
+  // durchgehendes G4. Partitur: G4 (Viertel) auf 3, G4 (punktierte Halbe) auf der Eins. Vorher: ein langer Ton.
+  const q = 24;
+  const poly = [
+    { start: 3 * q, dur: 6, midi: 67, amp: 0.49, stem: 'other' },
+    { start: 3.25 * q, dur: q, midi: 67, amp: 0.69, stem: 'other' },
+    { start: 4.25 * q, dur: 3 * q, midi: 67, amp: 0.7, stem: 'other' },
+    { start: 3.25 * q, dur: q, midi: 51, amp: 0.3, stem: 'other' },
+    { start: 8 * q, dur: q, midi: 68, amp: 0.6, stem: 'other' },
+  ];
+  const hint = [{ start: 3.25 * q, dur: 3.75 * q, midi: 67 }];
+  const vs = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint });
+  const g4 = vs.melody.filter((n) => n.midi === 67);
+  assert.ok(g4.some((n) => n.start >= 4 * q && n.start <= 4.25 * q), `neuer G4 auf der Eins – erkannt: ${vs.melody.map((n) => `${n.midi}@${n.start / q}`)}`);
+});
+
 test('Melodieauswahl: Oktave unter einem gehaltenen, gehörten Ton ist Begleitung (Rocky T. 17–18, H4 über H3-Galopp)', () => {
   // Echte Rohnoten: Kornett H4 ab Schlag 3¼ (¾ Schlag), die Signalanalyse hält H4 zwei Schläge; darunter lauter die
   // Baritone auf H3 (3½, 3¾). Dann Kornett E4 auf der Eins des nächsten Takts – die Signalanalyse hält H4 dort noch.

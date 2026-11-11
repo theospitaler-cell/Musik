@@ -230,7 +230,7 @@ function pickBass(notes, beat, mt, step) {
 //  - Laufen zwei Stimmen im gleichen Rhythmus parallel (Terzen/Sexten), führt die obere.
 //  - Ohne Hinweis gilt der oberste deutliche Ton – aber nicht der oberste Ton eines dichten
 //    Akkord-Einwurfs (Gitarre/Klavier), und nie ein Sprung zu einzelnen hohen Tönen.
-function pickMelody(notes, beat, hint, step) {
+function pickMelody(notes, beat, hint, step, mt = 0) {
   const groups = onsetGroups(notes);
   if (!groups.length) return [];
   const ampRef = median(notes.map((n) => n.amp)) || 0.5;
@@ -411,11 +411,14 @@ function pickMelody(notes, beat, hint, step) {
   // Zusammengefasst wird eine Folge solcher Stücke nur, wenn eines davon mindestens einen Schlag lang ist – ein
   // Galopp besteht nur aus kurzen Tönen und bleibt, auch wenn die Signalanalyse ihn als einen Ton hört.
   // (die Folge reicht nur so weit wie derselbe Ton der Signalanalyse – ein dort neu einsetzender Ton bleibt eigen)
+  // (und nicht über einen Taktstrich, wenn dort – bis eine Sechzehntel danach – neu angesetzt wird und die Folge schon
+  // einen Schlag vorher begann: das ist ein neuer Ton auf der Eins, „Viva la Vida“ T. 8–9: G4 auf 3, G4 auf der Eins)
+  const onDownbeat = (n, from) => mt > 0 && n.start - from >= beat && ((n.start % mt) + mt) % mt <= step;
   for (let i = 0; i < out.length; i++) {
     const h = hs.find((x) => (x.midi - out[i].midi) % 12 === 0 && x.start <= out[i].start + step / 2 && x.start + x.dur > out[i].start);
     if (!h) continue;
     let j = i;
-    while (j + 1 < out.length && out[j + 1].midi === out[i].midi && out[j + 1].start - (out[j].start + out[j].dur) <= step / 2 && out[j + 1].start + Math.min(out[j + 1].dur, beat) - step / 2 <= h.start + h.dur) j++;
+    while (j + 1 < out.length && out[j + 1].midi === out[i].midi && out[j + 1].start - (out[j].start + out[j].dur) <= step / 2 && out[j + 1].start + Math.min(out[j + 1].dur, beat) - step / 2 <= h.start + h.dur && !onDownbeat(out[j + 1], out[i].start)) j++;
     if (j > i && out.slice(i, j + 1).some((n) => n.dur >= beat)) {
       out[i].dur = out[j].start + out[j].dur - out[i].start;
       out.splice(i + 1, j - i);
@@ -686,7 +689,7 @@ export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint
   let upper = notes.filter((n) => !isBass(n) && (stemmed ? n.stem !== 'bass' : n.midi > b.top));
   // Stücke ohne eigene Oberstimme (nur Bass + Akkorde): dann ist alles über dem Bass Kandidat
   if (upper.length < 0.15 * notes.length) upper = notes.filter((n) => !isBass(n));
-  let melody = legato(pickMelody(upper, beat, hint, step), step);
+  let melody = legato(pickMelody(upper, beat, hint, step, mt), step);
   const parallel = new Set();
   // Eine Stimme, die im Rhythmus der Melodie mitläuft (gleicher Einsatz, gleiche Länge), ist eine
   // Parallelstimme – kein Bass, auch wenn sie gerade der tiefste gehörte Ton ist
@@ -703,7 +706,7 @@ export function separateVoices(notes, { beat = DIV, mt = 4 * DIV, step = 6, hint
       bassSet.clear();
       for (const n of b.line) bassSet.add(keyOf(n));
       upper = notes.filter((n) => !isBass(n) && (n.midi > b.top || drop.has(keyOf(n))));
-      melody = legato(pickMelody(upper, beat, hint, step), step);
+      melody = legato(pickMelody(upper, beat, hint, step, mt), step);
     }
   }
   const melSet = new Set(melody.map(keyOf));

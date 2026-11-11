@@ -125,13 +125,13 @@ Die Analyse läuft im Hintergrund.
   ohne Pause weiterführen, ist das ein Auftakt („Gonna Fly Now“: Achtel der Kornette) – die Orchestrierung
   schreibt ihn als Takt 0 (MusicXML implicit, nur Auftaktlänge, keine erfundenen Klänge davor), das Mitlesen
   zählt ab 0. Rocky-Thema jetzt in Takt 5 und 13 wie gedruckt (vorher 7/15).
-  Viva-Hornmelodie T. 8–11 (Referenz aus der Einzelstimme der Verlagsvorschau): 12/14 Töne genau (vorher 3/14 –
+  Viva-Hornmelodie T. 8–11 (Referenz aus der Einzelstimme der Verlagsvorschau): 13/14 Töne genau (vorher 3/14 –
   mit falscher Eins standen die Töne drei Schläge versetzt). Eine Tonrepetition unter einem gehaltenen Ton gilt
   nur noch als Begleitung, wenn die Signalanalyse den gehaltenen Ton hört – hört sie die Tonrepetition (und
   singt dort niemand), ist sie die Melodie und der lange Ton darüber ein Liegeklang (Horn G4 G4 G4 G4 unter
   einem Holzbläser-C5). Kurze Abstecher nach unten (F4 – B3 – F4) bleiben, wenn die Signalanalyse den Ton genau
-  so hört. Es fehlen ein Wiederanschlag (G4 auf der Eins nach G4 – nicht von einer zerstückelten Haltenote zu
-  unterscheiden) und ein B3, das die KI nicht hört.
+  so hört. Ein Ton gleicher Höhe, der bis eine Sechzehntel nach der Eins neu ansetzt, wird nicht mehr mit
+  dem Ton davor zusammengefasst (G4 auf 3, G4 auf der Eins). Es fehlt ein B3, das die KI nicht hört.
 - **Melodieauswahl gegen Referenz-Noten geprüft** (Trompete 1 „Puttin' on the Ritz“, Ton für Ton): ein
   Oktavsprung auf den obersten echten Ton seiner Gruppe ist Melodie (C5 – C4 – F4), ein leiser Ton eine Oktave
   über einem lauteren ist Oberton, und wo die KI nur einen tiefen Begleitton hörte, gilt der deutlich höhere
