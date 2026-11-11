@@ -42,3 +42,16 @@ test('Tempoangaben: neues Tempo über den ganzen Abschnitt gemessen, lange Absch
   assert.ok(marks.some((m) => m.kind === 'tempo' && Math.abs(m.bar - 63) <= 2 && Math.abs(m.bpm - 152) <= 2), `152 ab Takt 64 fehlt: ${JSON.stringify(marks)}`);
   assert.ok(marks.some((m) => m.kind === 'tempo' && Math.abs(m.bar - 93) <= 2 && Math.abs(m.bpm - 132) <= 2), `132 ab Takt 94 fehlt: ${JSON.stringify(marks)}`);
 });
+
+test('Tempowechsel 120 -> 96 -> 132: nach dem Wechsel das ganze Tempo, nicht das halbe', async () => {
+  const { synthSong } = await import('./synth-audio.js');
+  const { transcribe } = await import('../src/input/audio.js');
+  const tempo = (i) => (i < 32 ? 120 : i < 80 ? 96 : 132);
+  const s = synthSong({ groove: 'rock8', bars: 32, bpm: 120, tempo });
+  const song = transcribe(s.audio, { title: 'Wechsel' });
+  const marks = (song.tempoMarks || []).map((m) => `${m.kind}${m.bpm}@${m.bar}`);
+  assert.ok(song.tempoMarks.some((m) => m.kind === 'tempo' && Math.abs(m.bpm - 132) <= 3), `132 fehlt: ${marks}`);
+  const got = song.timing.beatSec;
+  const hit = s.beatSec.filter((t) => got.some((g) => Math.abs(g - t) <= 0.05)).length / s.beatSec.length;
+  assert.ok(hit >= 0.95, `Schläge getroffen ${hit.toFixed(2)}`);
+});

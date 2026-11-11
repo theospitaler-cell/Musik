@@ -686,13 +686,23 @@ export function tempoCurve(os) {
     const direct = cands.map((bpm) => A((60 * FR) / bpm));
     const gDirect = Math.max(A(globalLag * 0.98), A(globalLag), A(globalLag * 1.02));
     const gStill = gDirect >= 0.6 * Math.max(...direct);
+    // halbes/doppeltes Tempo im selben Fenster (beide im Suchbereich): wie beim Grundtempo entscheidet die
+    // Vorliebe für mittlere Tempi – sonst gewinnt nach einem Wechsel oft die Hälfte (Bass Drum 1 + 3 und Snare
+    // 2 + 4 wiederholen sich alle zwei Schläge: 96 -> 132 wurde als 66 erkannt)
+    const octLoser = s.map((v, k) => {
+      for (const f of [2, 0.5]) {
+        const p = cands.findIndex((b) => Math.abs(Math.log(b / (cands[k] * f))) < 0.02);
+        if (p >= 0 && s[p] >= 0.6 * v && s[p] * tempoPrior(cands[p]) > v * tempoPrior(cands[k])) return true;
+      }
+      return false;
+    });
     wins.push({
       c,
       raw: s.map((v) => v / mx),
       s: s.map((v, k) => {
         const r = Math.log2(cands[k] / gBest);
         const metric = [Math.log2(3 / 4), Math.log2(4 / 3), Math.log2(2 / 3), Math.log2(3 / 2)].some((x) => Math.abs(r - x) < 0.06);
-        return v / mx + 0.15 * Math.exp(-0.5 * Math.pow(r / 0.08, 2)) - (metric && gStill ? 0.3 : 0);
+        return v / mx + 0.15 * Math.exp(-0.5 * Math.pow(r / 0.08, 2)) - (metric && gStill ? 0.3 : 0) - (octLoser[k] ? 0.3 : 0);
       }),
     });
   }

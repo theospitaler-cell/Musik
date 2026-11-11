@@ -365,3 +365,28 @@ test('Melodieauswahl: gehaltene Melodienote bleibt, Begleitung darunter und Übe
   const got = vs.melody.filter((n) => n.start >= 7.25 * q && n.start < 12 * q).map((n) => n.midi);
   assert.deepEqual(got, [67, 69, 71], `G4, A4 (gehalten), H4 – erkannt: ${got}`);
 });
+
+test('Melodieauswahl: gehaltener Kornett-Ton über dem lauteren Galopp eine Oktave tiefer (Rocky T. 17)', () => {
+  // Echte Rohnoten der Brassband-Aufnahme (zweites Thema): Kornett A4 gehalten (zwei Stücke 1 + 1½ Schläge), darunter
+  // lauter der Galopp der Baritone auf A3 (Sechzehntel) – auch die Signalanalyse hört A3. Referenz-Kornett: A4
+  // (punktierte Halbe), dann H4. Vorher wurde daraus A3 A3 A3 … (Galopp als Melodie, A4 als „Oberton“).
+  const q = 24;
+  const poly = [];
+  const raw = [
+    [0, 57, 0.66, 0.25], [0, 50, 0.52, 0.5], [0.25, 69, 0.45, 1], [0.25, 57, 0.73, 1], [0.25, 53, 0.36, 0.5], [0.25, 38, 0.45, 1.25],
+    [0.5, 50, 0.46, 0.25], [0.75, 88, 0.35, 0.5], [0.75, 53, 0.38, 0.25], [0.75, 50, 0.6, 0.75], [1, 65, 0.42, 0.25], [1, 53, 0.54, 0.5],
+    [1.25, 69, 0.48, 1.5], [1.25, 57, 0.68, 0.25], [1.5, 65, 0.37, 0.5], [1.5, 57, 0.68, 0.75], [1.75, 53, 0.42, 1], [1.75, 38, 0.65, 0.5],
+    [2, 65, 0.4, 0.25], [2, 50, 0.39, 1.25], [2.25, 57, 0.71, 0.25], [2.25, 38, 0.58, 1.25], [2.5, 64, 0.32, 0.25], [2.5, 57, 0.68, 0.25],
+    [2.75, 57, 0.61, 0.25], [2.75, 53, 0.45, 1], [3, 65, 0.34, 0.75], [3, 57, 0.53, 0.5], [3.25, 71, 0.52, 0.75], [3.5, 59, 0.69, 0.25],
+    [3.75, 59, 0.61, 0.25],
+  ];
+  for (const [b, m, a, d] of raw) poly.push({ start: Math.round(b * q), dur: Math.round(d * q), midi: m, amp: a, stem: 'other' });
+  const hint = [
+    { start: 0, dur: 1.25 * q, midi: 57 },
+    { start: 1.25 * q, dur: 2 * q, midi: 57 },
+    { start: 3.25 * q, dur: 2 * q, midi: 71 },
+  ];
+  const vs = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint });
+  const held = vs.melody.filter((n) => n.start >= 0.2 * q && n.start < 2.7 * q).map((n) => n.midi);
+  assert.ok(held.includes(69) && !held.includes(57), `gehalten A4, kein Galopp A3 – erkannt: ${held}`);
+});

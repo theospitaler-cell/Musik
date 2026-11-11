@@ -283,6 +283,8 @@ function pickMelody(notes, beat, hint, step) {
       // darum den vollen Bonus; nur die Oktave darunter bekommt keinen, deutlich tiefere Töne einen Abzug)
       const d = n.midi - h;
       if (d === 0) s += 0.9;
+      // die Oktave darüber, selbst gehalten: die Signalanalyse hört bei Oktavverdopplung oft den tieferen Ton
+      else if (d === 12 && n.dur >= beat) s += 0.9;
       else if (d <= -3 && d % 12 !== 0 && !(n.stem === 'vocals' && !n.weak)) s -= 0.4;
     } else if (h !== null) {
       const d = n.midi - h;
@@ -305,7 +307,8 @@ function pickMelody(notes, beat, hint, step) {
     // Oktavsprung auf denselben Ton, der allein an seiner Stelle steht (kein anderer Ton zur Wahl): eine echte
     // Melodiebewegung, kein Oktavfehler der Erkennung („Puttin' on the Ritz“: C5 – C4 – F4) – aber nur, wenn der
     // vorige Ton zu Ende ist (klingt er noch, ist der neue Ton eine andere Stimme)
-    if (alone && d === 12 && gap >= -step / 2) return -w * 0.1;
+    // (nicht in eine Tonrepetition hinein: der Galopp eine Oktave unter der gehaltenen Melodie ist Begleitung)
+    if (alone && d === 12 && gap >= -step / 2 && !figure.has(b)) return -w * 0.1;
     // Ton deutlich unter einem Melodieton, der noch mindestens einen Schlag weiterklingt: Begleitung unter einer
     // gehaltenen Melodienote („Gonna Fly Now“: A4 drei Schläge, darunter C4, A3, D3 der Begleitung)
     // (nicht bei Gesang: gesungene Töne klingen in den KI-Noten oft lang aus, der nächste Ton setzt darunter ein)
@@ -314,20 +317,58 @@ function pickMelody(notes, beat, hint, step) {
     // der Begleitung (Quinte abwärts und zurück) lohnt sich nur für deutlich gehörte Töne
     return -w * (0.09 * Math.max(0, d - 3) + (d >= 10 ? 0.5 : 0));
   };
+  const byMidi = new Map();
+  for (const n of notes) {
+    if (!byMidi.has(n.midi)) byMidi.set(n.midi, []);
+    byMidi.get(n.midi).push(n);
+  }
+  // Begleitfigur unter einer gehaltenen Melodienote: mindestens 4 kurze Anschläge desselben Tons dicht hintereinander
+  // (Galopp, Tonrepetition), während darüber ein anderer Ton durchklingt. Jeder Anschlag für sich wäre lauter als der
+  // gehaltene Ton – zusammengezählt gewänne die Figur immer gegen die eine lange Note („Gonna Fly Now“ T. 17: Kornett
+  // A4 drei Schläge, darunter der Galopp der Baritone auf A3). (Nicht der eigene Oberton – gleicher Einsatz, gleiche
+  // Länge, genau eine Oktave höher – und nicht bei Gesang.)
+  const underHeld = new Set();
+  const figure = new Set();
+  for (const list of byMidi.values()) {
+    const shorts = list.filter((x) => x.dur <= beat).sort((a, b) => a.start - b.start);
+    for (let i = 0; i < shorts.length; i++) {
+      let j = i;
+      while (j + 1 < shorts.length && shorts[j + 1].start - shorts[j].start <= beat) j++;
+      if (j - i + 1 >= 4 && shorts[j].start - shorts[i].start <= 0.75 * beat * (j - i)) {
+        for (const x of shorts.slice(i, j + 1)) {
+          figure.add(x);
+          if (x.stem === 'vocals' && !x.weak) continue;
+          const over = notes.some((u) => u.midi >= x.midi + 3 && u.dur >= beat && u.stem !== 'bass' && u.start <= x.start + step / 2 && u.start + u.dur >= x.start + x.dur - step / 2 && (u.amp ?? 0.5) >= 0.5 * (x.amp ?? 0.5) && !(u.midi === x.midi + 12 && Math.abs(u.start - x.start) <= step / 2 && Math.abs(u.dur - x.dur) < beat / 2));
+          if (over) underHeld.add(x);
+        }
+      }
+      i = j;
+    }
+  }
   let prev = [{ score: 0, note: null, back: undefined, last: null }];
   for (const g of groups) {
     const cur = [];
     const h = hintAt(g.start);
     const held = h !== null && heldHint;
     const opts = g.notes.slice(0, 4);
-    // Oberton-Verdacht: ein Ton genau eine Oktave über einem deutlich lauteren Ton derselben Gruppe
-    const ghost = new Set(g.notes.filter((n) => g.notes.some((m) => m.midi === n.midi - 12 && (n.amp ?? 0.5) < 0.75 * (m.amp ?? 0.5))));
+    // Oberton-Verdacht: ein Ton genau eine Oktave über einem deutlich lauteren Ton derselben Gruppe – aber nur, wenn
+    // er dessen Rhythmus hat. Ein Oberton endet mit seinem Grundton und setzt mit ihm neu ein; klingt der obere Ton
+    // weiter, während der untere neu anschlägt (oder schon aus ist), spielt ihn ein eigenes Instrument („Gonna Fly
+    // Now“: Kornett A4 drei Schläge gehalten, darunter lauter der Galopp der Baritone auf A3)
+    // (ebenso, wenn derselbe Ton nahtlos weitergeht und dort sicher eigenständig ist – lang und ohne gleich langen
+    // Ton eine Oktave darunter: dann ist es dieselbe Stimme, der erste Teil nur zufällig gleich lang wie die Begleitung)
+    const free = (o) => o.dur >= beat && !(byMidi.get(o.midi - 12) || []).some((q) => Math.abs(q.start - o.start) <= step / 2 && q.dur >= o.dur - beat / 2);
+    const ownRhythm = (n, m) =>
+      n.dur >= m.dur + beat / 2 ||
+      (byMidi.get(m.midi) || []).some((o) => o !== m && o.start > n.start + step / 2 && o.start < n.start + n.dur - step) ||
+      (byMidi.get(n.midi) || []).some((o) => o !== n && Math.abs(o.start - (n.start + n.dur)) <= step / 2 && free(o));
+    const ghost = new Set(g.notes.filter((n) => g.notes.some((m) => m.midi === n.midi - 12 && (n.amp ?? 0.5) < 0.75 * (m.amp ?? 0.5) && !ownRhythm(n, m))));
     // oberster echter Ton der Gruppe (ohne Obertöne und Bass) – ein Oktavsprung dorthin ist Melodie, kein Fehler
     // (deutlich leisere Töne darüber – unter 60 % – zählen nicht: Nachklang oder Übersprechen)
     const realTop = (note) => !ghost.has(note) && !g.notes.some((m) => m !== note && !ghost.has(m) && m.stem !== 'bass' && m.midi > note.midi && (m.amp ?? 0.5) >= 0.6 * (note.amp ?? 0.5));
     for (let k = 0; k <= opts.length; k++) {
       const note = k < opts.length ? opts[k] : null;
-      const loc = note ? local(g, k, h, held) - (ghost.has(note) ? 0.5 : 0) : 0;
+      const loc = note ? local(g, k, h, held) - (ghost.has(note) ? 0.5 : 0) - (underHeld.has(note) ? 1.2 : 0) : 0;
       let best = null;
       for (const p of prev) {
         let s = p.score + loc;
@@ -387,11 +428,17 @@ function pickMelody(notes, beat, hint, step) {
     }
   }
   // Oktav-Flackern: ein einzelner Ton genau eine Oktave neben beiden Nachbarn gehört in deren Lage
+  // (nicht, wenn an der Stelle beide Oktaven gehört wurden und der gewählte Ton lang ist – dann war es eine Wahl
+  // zwischen zwei Stimmen, kein Oktavfehler der Erkennung)
   for (let i = 1; i < out.length - 1; i++) {
     const a = out[i - 1].midi;
     const b = out[i].midi;
     const c = out[i + 1].midi;
-    if (Math.abs(a - c) <= 5 && Math.abs(b - a) >= 9 && Math.abs(b - 12 * Math.round((b - a) / 12) - a) <= 5) out[i].midi = b - 12 * Math.round((b - a) / 12);
+    const to = b - 12 * Math.round((b - a) / 12);
+    if (Math.abs(a - c) <= 5 && Math.abs(b - a) >= 9 && Math.abs(to - a) <= 5) {
+      const both = out[i].dur >= beat && notes.some((x) => x.midi === to && Math.abs(x.start - out[i].start) <= step / 2);
+      if (!both) out[i].midi = to;
+    }
   }
   // Begleit-Einsprengsel: ein kurzer Ton, der zwischen zwei Melodietönen mindestens eine Quinte
   // nach unten ausschert, gehört zur Begleitung
