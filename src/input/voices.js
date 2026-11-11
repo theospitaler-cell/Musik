@@ -334,6 +334,10 @@ function pickMelody(notes, beat, hint, step) {
   // gehaltene Ton – zusammengezählt gewänne die Figur immer gegen die eine lange Note („Gonna Fly Now“ T. 17: Kornett
   // A4 drei Schläge, darunter der Galopp der Baritone auf A3). (Nicht der eigene Oberton – gleicher Einsatz, gleiche
   // Länge, genau eine Oktave höher – und nicht bei Gesang.)
+  // Hört die Signalanalyse aber die Tonrepetition selbst (ihre Tonklasse während der Figur) und nicht den gehaltenen
+  // Ton, ist die Tonrepetition die Melodie und der lange Ton darüber ein Liegeklang der Begleitung („Viva la Vida“
+  // T. 8: Horn G4 G4 G4 G4 unter einem Holzbläser-C5 – die Signalanalyse hört G4)
+  const hintHas = (midi, a, b) => hs.some((h) => (h.midi - midi) % 12 === 0 && h.start < b && h.start + h.dur > a);
   const underHeld = new Set();
   const figure = new Set();
   for (const list of byMidi.values()) {
@@ -342,10 +346,16 @@ function pickMelody(notes, beat, hint, step) {
       let j = i;
       while (j + 1 < shorts.length && shorts[j + 1].start - shorts[j].start <= beat) j++;
       if (j - i + 1 >= 4 && shorts[j].start - shorts[i].start <= 0.75 * beat * (j - i)) {
-        for (const x of shorts.slice(i, j + 1)) {
+        const run = shorts.slice(i, j + 1);
+        // (nicht, wo gesungen wird: dort folgt die Signalanalyse dem Gesang, der oft dieselbe Tonklasse hat)
+        const r0 = run[0].start;
+        const r1 = run[run.length - 1].start + run[run.length - 1].dur;
+        const sung = notes.some((v) => v.stem === 'vocals' && !v.weak && v.start < r1 && v.start + v.dur > r0);
+        const runHeard = !sung && run.some((x) => hintHas(x.midi, x.start, x.start + x.dur));
+        for (const x of run) {
           figure.add(x);
           if (x.stem === 'vocals' && !x.weak) continue;
-          const over = notes.some((u) => u.midi >= x.midi + 3 && u.dur >= beat && u.stem !== 'bass' && u.start <= x.start + step / 2 && u.start + u.dur >= x.start + x.dur - step / 2 && (u.amp ?? 0.5) >= 0.5 * (x.amp ?? 0.5) && !(u.midi === x.midi + 12 && Math.abs(u.start - x.start) <= step / 2 && Math.abs(u.dur - x.dur) < beat / 2));
+          const over = notes.some((u) => u.midi >= x.midi + 3 && u.dur >= beat && u.stem !== 'bass' && u.start <= x.start + step / 2 && u.start + u.dur >= x.start + x.dur - step / 2 && (u.amp ?? 0.5) >= 0.5 * (x.amp ?? 0.5) && !(u.midi === x.midi + 12 && Math.abs(u.start - x.start) <= step / 2 && Math.abs(u.dur - x.dur) < beat / 2) && !(runHeard && !hintHas(u.midi, x.start, x.start + x.dur)));
           if (over) underHeld.add(x);
         }
       }

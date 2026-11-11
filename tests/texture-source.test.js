@@ -391,6 +391,30 @@ test('Melodieauswahl: gehaltener Kornett-Ton über dem lauteren Galopp eine Okta
   assert.ok(held.includes(69) && !held.includes(57), `gehalten A4, kein Galopp A3 – erkannt: ${held}`);
 });
 
+test('Melodieauswahl: Tonrepetition der Melodie unter einem Holzbläser-Liegeklang (Viva la Vida T. 8, Horn G4)', () => {
+  // Echte Rohnoten (Blasorchester): Horn + Altsax G4 auf 1½, 2, 3, 3¼, dann gehalten; darüber ein langes C5 und
+  // kurze G5/Es5 der Holzbläser. Die Signalanalyse hört ab Schlag 2 G4. Partitur (Hornstimme): G4 G4 G4 | G4.
+  // Vorher galt die Tonrepetition als Begleitung unter dem gehaltenen C5 (−1,2) -> G5 G5 Es5 statt G4 G4.
+  const q = 24;
+  const raw = [
+    [-0.25, 79, 0.43, 0.75], [-0.25, 75, 0.6, 0.5], [-0.25, 72, 0.45, 3.25], [0.25, 75, 0.5, 1], [0.5, 79, 0.34, 1], [0.5, 51, 0.45, 0.75],
+    [1.5, 67, 0.53, 0.5], [1.5, 60, 0.47, 0.5], [1.5, 51, 0.45, 1], [2, 67, 0.64, 1], [2, 60, 0.41, 1.25], [2.25, 79, 0.39, 0.75],
+    [2.5, 75, 0.58, 0.75], [3, 67, 0.49, 0.25], [3, 51, 0.3, 0.25], [3.25, 75, 0.5, 0.75], [3.25, 67, 0.69, 1], [3.75, 51, 0.38, 0.75],
+    [4.25, 67, 0.7, 3], [4.25, 63, 0.35, 0.25],
+  ];
+  const poly = raw.map(([b, m, a, d]) => ({ start: Math.round((b + 4) * q), dur: Math.round(d * q), midi: m, amp: a, stem: 'other' }));
+  const hint = [
+    { start: Math.round(3.75 * q), dur: Math.round(2.25 * q), midi: 75 },
+    { start: 6 * q, dur: q, midi: 67 },
+    { start: 7 * q, dur: Math.round(0.25 * q), midi: 67 },
+    { start: Math.round(7.25 * q), dur: Math.round(3.75 * q), midi: 67 },
+  ];
+  const vs = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint });
+  const at = (t0, t1) => vs.melody.filter((n) => n.start >= (t0 + 4) * q && n.start < (t1 + 4) * q).map((n) => n.midi);
+  assert.ok(at(1.4, 1.6).includes(67) && at(1.9, 2.1).includes(67), `G4 auf 1½ und 2 – erkannt: ${at(0, 4)}`);
+  assert.ok(!at(2.2, 2.6).some((m) => m === 79 || m === 75), `keine Holzbläser G5/Es5 auf 2¼/2½ – erkannt: ${at(0, 4)}`);
+});
+
 test('Melodieauswahl: Oktave unter einem gehaltenen, gehörten Ton ist Begleitung (Rocky T. 17–18, H4 über H3-Galopp)', () => {
   // Echte Rohnoten: Kornett H4 ab Schlag 3¼ (¾ Schlag), die Signalanalyse hält H4 zwei Schläge; darunter lauter die
   // Baritone auf H3 (3½, 3¾). Dann Kornett E4 auf der Eins des nächsten Takts – die Signalanalyse hält H4 dort noch.
