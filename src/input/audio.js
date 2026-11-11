@@ -647,6 +647,25 @@ export function relatedTempoRuns(wins, path, cands) {
   }
 }
 
+// Umgekehrt: springt die Kurve nur kurz in eine verwandte Lage des vorigen Tempos (4:3, 3:2 …), sind es Triolen
+// im alten Tempo, kein Wechsel – ein echter Tempowechsel hält länger als vier, fünf Takte (≥ 10 s) an (Bond-Medley:
+// Viertel-Triolen vor dem rit. ♩126 -> „164“). Nicht am Stückende: dort kann ein echter Wechsel kurz sein.
+export function relatedExcursions(path, cands) {
+  const near = (a, b, tol) => Math.abs(Math.log(a / b)) < tol;
+  let w = 1;
+  while (w < path.length) {
+    const p = path[w - 1];
+    if (!RELATED.some((x) => near(cands[path[w]] / cands[p], x, 0.04))) {
+      w++;
+      continue;
+    }
+    let z = w;
+    while (z + 1 < path.length && near(cands[path[z + 1]], cands[path[w]], 0.04)) z++;
+    if (z < path.length - 1 && z - w + 1 < 10) for (let q = w; q <= z; q++) path[q] = p;
+    w = z + 1;
+  }
+}
+
 // Tempokurve: globales Tempo + örtliches Tempo je Fenster (Viterbi über die Fenster,
 // Sprünge kosten, bleiben aber möglich – für Tempowechsel zwischen Formteilen und rit.)
 export function tempoCurve(os) {
@@ -758,6 +777,7 @@ export function tempoCurve(os) {
     }
   }
   relatedTempoRuns(wins, path, cands);
+  relatedExcursions(path, cands);
   // je Frame interpolieren
   for (let t = 0; t < n; t++) {
     const x = (t - wins[0].c) / H;

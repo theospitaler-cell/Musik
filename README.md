@@ -158,7 +158,11 @@ Die Analyse läuft im Hintergrund.
   halbes/doppeltes Tempo nach einem Wechsel entscheidet die Vorliebe für mittlere Tempi (96 → 132 nicht als
   66). Neue Tempoangaben werden über die Takte 3–10 nach dem Wechsel gemessen, lange gleichmäßige
   Abschnitte gelten schon ab 7 % als neues Tempo, das Anfangstempo erst nach dem stillen Vorlauf. Gegen die
-  Bond-Partitur: 125 / 104 / 138 / 154 / 133 (Partitur 126 / 104 / 2 × 69 / 2 × 76 / 132).
+  Bond-Partitur: 125 / 104 / 138 / 154 / 133 (Partitur 126 / 104 / 2 × 69 / 2 × 76 / 132). Umgekehrt ist
+  ein Sprung in eine verwandte Lage, der keine 10 s anhält, eine Triolenfigur im alten Tempo (Bond T. 34–36:
+  Viertel-Triolen vor dem rit. – vorher „♩ = 164“). Grenze: die Schluss-Triolen (T. 164–166, ♩ 138) stehen
+  noch als „♩ = 194“ – am Stückende ist ein kurzer echter Wechsel davon nicht zu unterscheiden (eine Regel
+  dafür hat künstliche Wechsel kurz vor dem Ende verdorben: Schläge 99,6 → 82,6 %).
 - **Schlagzeug**: Harmonisch/Perkussiv-Trennung, dann NMF-Zerlegung in Bass Drum, Snare,
   Hi-Hat/Ride/Crash und Toms (Klangprofile passen sich dem Lied an), Ghost-Notes, offene Hi-Hat,
   Fills und Crashes wie gespielt.

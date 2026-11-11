@@ -2,7 +2,7 @@
 // Andante ♩ = 76 → Meno mosso ♩ = 66 / Double time ♩ = 132 → ♩ = 138)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { relatedTempoRuns } from '../src/input/audio.js';
+import { relatedTempoRuns, relatedExcursions } from '../src/input/audio.js';
 import { tempoMarksFromTiming } from '../src/input/tempo-marks.js';
 
 const CANDS = [];
@@ -25,6 +25,19 @@ test('Tempokurve: langer Abschnitt im Verhältnis 3:4 ist ein Tempowechsel, eine
   const bpmAt = (w) => Math.round(CANDS[path[w]]);
   for (const w of [32, 50, 70, 87]) assert.ok(Math.abs(bpmAt(w) - 52) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 52`);
   for (const w of [10, 100, 112, 118, 130]) assert.ok(Math.abs(bpmAt(w) - 69) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 69`);
+});
+
+test('Tempokurve: kurzer Sprung in die 4:3-Lage (Triolen) bleibt im alten Tempo, ein Wechsel ab 10 s nicht', () => {
+  // Bond-Medley vor dem rit.: Viertel-Triolen bei ♩126 (halber Puls 63) ließen die Kurve 8 s auf 84 springen
+  const path = [...Array(30).fill(idx(63)), ...Array(8).fill(idx(84)), ...Array(20).fill(idx(63)), ...Array(15).fill(idx(84)), ...Array(20).fill(idx(63))];
+  relatedExcursions(path, CANDS);
+  const bpmAt = (w) => Math.round(CANDS[path[w]]);
+  for (const w of [31, 34, 37]) assert.ok(Math.abs(bpmAt(w) - 63) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 63`);
+  for (const w of [59, 65, 72]) assert.ok(Math.abs(bpmAt(w) - 84) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 84 (echter Wechsel, 15 s)`);
+  // am Stückende bleibt auch ein kurzer Wechsel stehen
+  const end = [...Array(30).fill(idx(96)), ...Array(6).fill(idx(128))];
+  relatedExcursions(end, CANDS);
+  assert.ok(Math.abs(Math.round(CANDS[end[33]]) - 128) <= 1, `Schluss: ${Math.round(CANDS[end[33]])}`);
 });
 
 test('Tempoangaben: neues Tempo über den ganzen Abschnitt gemessen, lange Abschnitte schon ab 7 %', () => {
