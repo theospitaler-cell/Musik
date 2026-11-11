@@ -34,10 +34,17 @@ test('Tempokurve: kurzer Sprung in die 4:3-Lage (Triolen) bleibt im alten Tempo,
   const bpmAt = (w) => Math.round(CANDS[path[w]]);
   for (const w of [31, 34, 37]) assert.ok(Math.abs(bpmAt(w) - 63) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 63`);
   for (const w of [59, 65, 72]) assert.ok(Math.abs(bpmAt(w) - 84) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 84 (echter Wechsel, 15 s)`);
-  // am Stückende bleibt auch ein kurzer Wechsel stehen
+  // am Stückende bleibt ein kurzer Wechsel mit Puls bis zum Schluss stehen …
+  const winsOf = (pulse) => pulse.map((mx) => ({ mx }));
   const end = [...Array(30).fill(idx(96)), ...Array(6).fill(idx(128))];
-  relatedExcursions(end, CANDS);
+  relatedExcursions(end, CANDS, winsOf(Array(36).fill(1)));
   assert.ok(Math.abs(Math.round(CANDS[end[33]]) - 128) <= 1, `Schluss: ${Math.round(CANDS[end[33]])}`);
+  // … mündet der Sprung nach oben dagegen in Schlussakkorde ohne Puls, sind es Schluss-Triolen im alten Tempo
+  // (Bond T. 164–166: Viertel-Triolen bei ♩138, dann ausgehaltene Akkorde – vorher „♩ = 194“)
+  const fig = [...Array(40).fill(idx(69)), ...Array(11).fill(idx(92))];
+  const pulse = [...Array(40).fill(1), 0.84, 0.85, 0.93, 0.72, 0.5, 0.4, 0.41, 0.38, 0.34, 0.18, 0.1];
+  relatedExcursions(fig, CANDS, winsOf(pulse));
+  for (const w of [41, 45, 50]) assert.ok(Math.abs(Math.round(CANDS[fig[w]]) - 69) <= 1, `Fenster ${w}: ${Math.round(CANDS[fig[w]])} statt 69`);
 });
 
 test('Tempoangaben: neues Tempo über den ganzen Abschnitt gemessen, lange Abschnitte schon ab 7 %', () => {

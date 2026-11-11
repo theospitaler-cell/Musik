@@ -650,18 +650,29 @@ export function relatedTempoRuns(wins, path, cands) {
 // Umgekehrt: springt die Kurve nur kurz in eine verwandte Lage des vorigen Tempos (4:3, 3:2 …), sind es Triolen
 // im alten Tempo, kein Wechsel – ein echter Tempowechsel hält länger als vier, fünf Takte (≥ 10 s) an (Bond-Medley:
 // Viertel-Triolen vor dem rit. ♩126 -> „164“). Nicht am Stückende: dort kann ein echter Wechsel kurz sein.
-export function relatedExcursions(path, cands) {
+export function relatedExcursions(path, cands, wins = null) {
   const near = (a, b, tol) => Math.abs(Math.log(a / b)) < tol;
+  // typische Pulsstärke eines Fensters (Median über das Stück)
+  const medMx = wins ? [...wins.map((x) => x.mx)].sort((a, b) => a - b)[Math.floor(wins.length / 2)] : 0;
   let w = 1;
   while (w < path.length) {
     const p = path[w - 1];
-    if (!RELATED.some((x) => near(cands[path[w]] / cands[p], x, 0.04))) {
+    const r = cands[path[w]] / cands[p];
+    if (!RELATED.some((x) => near(r, x, 0.04))) {
       w++;
       continue;
     }
     let z = w;
     while (z + 1 < path.length && near(cands[path[z + 1]], cands[path[w]], 0.04)) z++;
-    if (z < path.length - 1 && z - w + 1 < 10) for (let q = w; q <= z; q++) path[q] = p;
+    const len = z - w + 1;
+    // Stückende: ein Sprung nach OBEN, der in ausgehaltene Schlussakkorde ohne Puls mündet und davor keine 10 s
+    // Puls hat, ist eine Triolen-Schlussfigur im alten Tempo (Bond T. 164–166: Viertel-Triolen bei ♩138, dann
+    // Schlussakkorde -> „194“). Ein echter Wechsel kurz vor dem Ende hat bis zum Schluss Puls.
+    const pulsed = (q) => !wins || !(wins[q].mx < 0.35 * medMx);
+    let np = 0;
+    for (let q = w; q <= z; q++) if (pulsed(q)) np++;
+    const endFigure = wins && z === path.length - 1 && r > 1 && np < 10 && !pulsed(z);
+    if ((z < path.length - 1 && len < 10) || endFigure) for (let q = w; q <= z; q++) path[q] = p;
     w = z + 1;
   }
 }
@@ -717,6 +728,7 @@ export function tempoCurve(os) {
     });
     wins.push({
       c,
+      mx,
       raw: s.map((v) => v / mx),
       s: s.map((v, k) => {
         const r = Math.log2(cands[k] / gBest);
@@ -777,7 +789,7 @@ export function tempoCurve(os) {
     }
   }
   relatedTempoRuns(wins, path, cands);
-  relatedExcursions(path, cands);
+  relatedExcursions(path, cands, wins);
   // je Frame interpolieren
   for (let t = 0; t < n; t++) {
     const x = (t - wins[0].c) / H;

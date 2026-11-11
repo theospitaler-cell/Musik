@@ -160,9 +160,11 @@ Die Analyse läuft im Hintergrund.
   Abschnitte gelten schon ab 7 % als neues Tempo, das Anfangstempo erst nach dem stillen Vorlauf. Gegen die
   Bond-Partitur: 125 / 104 / 138 / 154 / 133 (Partitur 126 / 104 / 2 × 69 / 2 × 76 / 132). Umgekehrt ist
   ein Sprung in eine verwandte Lage, der keine 10 s anhält, eine Triolenfigur im alten Tempo (Bond T. 34–36:
-  Viertel-Triolen vor dem rit. – vorher „♩ = 164“). Grenze: die Schluss-Triolen (T. 164–166, ♩ 138) stehen
-  noch als „♩ = 194“ – am Stückende ist ein kurzer echter Wechsel davon nicht zu unterscheiden (eine Regel
-  dafür hat künstliche Wechsel kurz vor dem Ende verdorben: Schläge 99,6 → 82,6 %).
+  Viertel-Triolen vor dem rit. – vorher „♩ = 164“). Am Stückende gilt das für einen Sprung nach oben, der in
+  Schlussakkorde ohne Puls mündet und davor keine 10 s Puls hat (Bond T. 164–166: Schluss-Triolen bei ♩138 –
+  vorher „♩ = 194“); ein echter Wechsel kurz vor dem Ende hat bis zum Schluss Puls und bleibt (künstliche
+  Wechsel weiter 99,6 % der Schläge). Ob das alte Tempo „mitklingt“, trennt Triolen nicht von echten Wechseln
+  (beim echten Goldfinger-Wechsel klingt es stärker mit als bei den Schluss-Triolen).
 - **Schlagzeug**: Harmonisch/Perkussiv-Trennung, dann NMF-Zerlegung in Bass Drum, Snare,
   Hi-Hat/Ride/Crash und Toms (Klangprofile passen sich dem Lied an), Ghost-Notes, offene Hi-Hat,
   Fills und Crashes wie gespielt.
