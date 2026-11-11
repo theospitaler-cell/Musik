@@ -446,6 +446,23 @@ function pickMelody(notes, beat, hint, step, mt = 0) {
       if (g && g.notes.some((n) => Math.abs(n.midi - h.midi) <= 1)) continue;
       out[i] = { ...m, midi: h.midi, fromHint: m.midi };
     }
+    // Melodieton, den die KI gar nicht gehört hat: mitten in einer Phrase (der vorige Ton ist höchstens einen halben
+    // Schlag vorher zu Ende, der nächste folgt spätestens 2½ Schläge danach) bleibt die Melodie stumm, die
+    // Signalanalyse hört dort aber mindestens einen Schlag lang einen Ton, der zur Linie passt (höchstens eine Quinte
+    // von beiden Nachbarn) – dann gilt ihr Ton („Puttin' on the Ritz“ T. 31: B4 auf der Eins nach dem Refrain-Lauf)
+    // (nur, wenn die KI dort keinen Ton derselben Tonklasse hatte – sonst hat die Auswahl ihn bewusst verworfen)
+    for (const h of hs) {
+      if (h.dur < beat || out.some((n) => n.start < h.start + step && n.start + n.dur > h.start + step / 2)) continue;
+      let pi = -1;
+      while (pi + 1 < out.length && out[pi + 1].start < h.start) pi++;
+      const p = out[pi];
+      const x = out[pi + 1];
+      if (!p || !x || h.start - (p.start + p.dur) > beat / 2 || x.start - h.start > 2.5 * beat) continue;
+      if (Math.abs(h.midi - p.midi) > 7 || Math.abs(h.midi - x.midi) > 7) continue;
+      const g = groups.find((q) => Math.abs(q.start - h.start) <= step / 2);
+      if (g && g.notes.some((n) => (n.midi - h.midi) % 12 === 0)) continue;
+      out.splice(pi + 1, 0, { start: h.start, dur: Math.min(h.dur, x.start - h.start), midi: h.midi, amp: p.amp, fromHint: true });
+    }
   }
   // Oktav-Flackern: ein einzelner Ton genau eine Oktave neben beiden Nachbarn gehört in deren Lage
   // (nicht, wenn an der Stelle beide Oktaven gehört wurden und der gewählte Ton lang ist – dann war es eine Wahl

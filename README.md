@@ -145,6 +145,10 @@ Die Analyse läuft im Hintergrund.
   Begleitung, wenn die KI den gehaltenen Ton selbst hört und er dort noch klingt (T. 19: Kornett H4, Baritone
   H3); ist er laut KI schon vorbei, zählt ein neuer tieferer Ton nicht mehr als Begleitung (die Signalanalyse
   hält Töne oft zu lang) – zusammen 5/10 statt 1/10 Töne genau, 8/10 mit Oktavfehlern.
+  Bleibt die Melodie mitten in einer Phrase stumm (voriger Ton höchstens ½ Schlag vorher aus, nächster
+  spätestens 2½ Schläge danach), hört die Signalanalyse dort aber mindestens einen Schlag lang einen Ton, der
+  zur Linie passt (höchstens eine Quinte von beiden Nachbarn, die KI ohne diese Tonklasse), gilt ihr Ton
+  (Ritz-Refrain T. 31: B4 auf der Eins – Refrain T. 27–31 jetzt 10/18, alle anderen Referenzen unverändert).
   Grenzen: Töne, die die KI gar nicht hört (Glissando-Achtel, Sechzehntel-Auftakt nach gehaltener Note) und
   eine lautere Gegenstimme im selben Rhythmus (Ritz-Refrain T. 27–28: laut Partitur spielt das Horn *forte*
   eine Terz ÜBER der 1. Trompete – hörbar führt dort das Horn).

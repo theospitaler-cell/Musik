@@ -334,6 +334,32 @@ test('Melodieauswahl: echter Oktavsprung, leiser Oberton, Begleitton statt fehle
   }
 });
 
+test('Melodieauswahl: Melodieton, den nur die Signalanalyse hört, füllt die Lücke mitten in der Phrase (Ritz-Refrain T. 30–31)', () => {
+  // Echte Kandidaten der Aufnahme: Refrain-Lauf F5 Es5 Des5 C5, dann auf der Eins nur Begleitung (Es3, G3, Cis4) –
+  // das B4 der Trompete fehlt in den KI-Noten, die Signalanalyse hört es zwei Schläge lang. Partitur: B4 auf der Eins.
+  const q = 24;
+  const poly = [];
+  const add = (beat, midi, amp, dur = 1, stem = 'other') => poly.push({ start: Math.round(beat * q), dur: Math.round(dur * q), midi, amp, stem });
+  add(0, 77, 0.57); add(0, 65, 0.48); add(0, 51, 0.47, 0.5, 'bass');
+  add(1, 75, 0.6);
+  add(2, 73, 0.4); add(2, 61, 0.52, 0.5); add(2, 58, 0.25, 0.5); add(2, 53, 0.58, 1.5);
+  add(3, 72, 0.46); add(3, 60, 0.34, 0.5);
+  add(4, 61, 0.47, 0.5); add(4, 55, 0.29, 0.5); add(4, 51, 0.65);
+  add(5, 51, 0.55, 0.5);
+  add(5.5, 65, 0.38, 2.5); add(5.5, 61, 0.53, 1.5); add(5.5, 55, 0.55); add(5.5, 51, 0.67);
+  add(6, 67, 0.32, 0.5);
+  add(6.5, 55, 0.45); add(6.5, 51, 0.58, 0.5); add(6.5, 39, 0.34);
+  add(7, 70, 0.45); add(7, 61, 0.37, 0.5); add(7, 58, 0.35);
+  const hint = [[0, 1, 65], [1, 1, 75], [2, 1, 61], [3, 1, 72], [4, 2, 70], [6.5, 1.5, 70]].map(([b, d, midi]) => ({ start: b * q, dur: d * q, midi }));
+  const vs = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint });
+  const at = (beat) => vs.melody.find((n) => n.start === Math.round(beat * q));
+  assert.deepEqual([0, 1, 2, 3].map((b) => at(b)?.midi), [77, 75, 73, 72], 'Refrain-Lauf F5 Es5 Des5 C5');
+  assert.equal(at(4)?.midi, 70, 'B4 auf der Eins aus der Signalanalyse');
+  // … aber nicht, wenn der Ton der Signalanalyse nicht zur Linie passt (Oktave daneben: mehr als eine Quinte weg)
+  const far = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint: hint.map((h) => (h.start === 4 * q ? { ...h, midi: 82 } : h)) });
+  assert.equal(far.melody.find((n) => n.start === 4 * q), undefined, 'kein B5 aus einer Oktav-Unsicherheit');
+});
+
 test('Melodieauswahl: gehaltene Melodienote bleibt, Begleitung darunter und Übersprechen der Gesangsspur nicht (Rocky-Thema)', () => {
   // Echte Rohnoten der Brassband-Aufnahme von „Gonna Fly Now“ (Schlag 7–12, klingend): G4 auf 7¼ klingt bis 8,
   // darunter ein G3; dann A4 drei Schläge gehalten (lautester Ton, auch laut Signalanalyse), darunter setzt die
