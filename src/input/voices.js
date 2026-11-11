@@ -258,6 +258,11 @@ function pickMelody(notes, beat, hint, step) {
     return h.midi;
   };
   let heldHint = false;
+  // klingt der gehaltene Hinweis-Ton laut KI an dieser Stelle noch (dieselbe Tonhöhe, schon vorher begonnen)?
+  const heldSounds = (h, n) => (byMidi.get(h) || []).some((o) => o.start < n.start - step / 2 && o.start + o.dur > n.start + step / 2);
+  // … oder hat die KI ihn gehört und er ist schon vorbei (die Signalanalyse hält Töne oft zu lang: „Gonna Fly Now“
+  // T. 20: H4 bis zum Taktende, der Hinweis noch einen Schlag weiter über das neue E4)
+  const heldGone = (h, n) => !heldSounds(h, n) && (byMidi.get(h) || []).some((o) => o.start + o.dur <= n.start + step / 2 && o.start + o.dur >= n.start - beat);
   const THRESH = 0.9;
   const local = (g, k, h, held = false) => {
     const n = g.notes[k];
@@ -285,7 +290,9 @@ function pickMelody(notes, beat, hint, step) {
       if (d === 0) s += 0.9;
       // die Oktave darüber, selbst gehalten: die Signalanalyse hört bei Oktavverdopplung oft den tieferen Ton
       else if (d === 12 && n.dur >= beat) s += 0.9;
-      else if (d <= -3 && d % 12 !== 0 && !(n.stem === 'vocals' && !n.weak)) s -= 0.4;
+      // (die Oktave darunter nur, wenn der gehaltene Ton selbst gehört wurde und hier noch klingt – dann ist sie eine
+      // andere Stimme darunter, keine Oktav-Unsicherheit: „Gonna Fly Now“ T. 19: Kornett H4, darunter der Galopp auf H3)
+      else if (d <= -3 && !(n.stem === 'vocals' && !n.weak) && (d % 12 !== 0 ? !heldGone(h, n) : heldSounds(h, n))) s -= 0.4;
     } else if (h !== null) {
       const d = n.midi - h;
       // die Signalanalyse irrt sich oft um eine Oktave – die Oktavlage entscheidet die Linie

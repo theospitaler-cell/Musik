@@ -124,12 +124,20 @@ Die Analyse läuft im Hintergrund.
   Oberton nur, wenn der obere Ton den Rhythmus des unteren hat – klingt er weiter, während der untere neu
   anschlägt, spielt ihn ein eigenes Instrument. Eine Tonrepetition (≥ 4 dichte Anschläge) unter einem darüber
   gehaltenen Ton ist Begleitung, auch wenn sie lauter ist („Gonna Fly Now“ T. 15–18: Kornett A4/E4 gehalten,
-  Baritone im Galopp eine Oktave tiefer – 3/10 statt 1/10 Töne genau, die Haltetöne in der Kornett-Lage).
+  Baritone im Galopp eine Oktave tiefer). Die Oktave unter einem gehaltenen Ton der Signalanalyse ist nur dann
+  Begleitung, wenn die KI den gehaltenen Ton selbst hört und er dort noch klingt (T. 19: Kornett H4, Baritone
+  H3); ist er laut KI schon vorbei, zählt ein neuer tieferer Ton nicht mehr als Begleitung (die Signalanalyse
+  hält Töne oft zu lang) – zusammen 5/10 statt 1/10 Töne genau, 8/10 mit Oktavfehlern.
   Grenzen: Töne, die die KI gar nicht hört (Glissando-Achtel, Sechzehntel-Auftakt nach gehaltener Note) und
-  eine lautere Gegenstimme in derselben Lage im selben Rhythmus (Ritz-Refrain: Horn lauter als die Trompeten).
+  eine lautere Gegenstimme im selben Rhythmus (Ritz-Refrain T. 27–28: laut Partitur spielt das Horn *forte*
+  eine Terz ÜBER der 1. Trompete – hörbar führt dort das Horn).
   Das Instrument selbst lässt sich in diesen Aufnahmen nicht messen: Obertonverlauf (Trompete allein streut
-  −3 … −27 dB/Oktave) und Stereoposition (Melodie −0,20 … +0,53, Horn −0,38 … +0,56) überlappen vollständig;
-  dafür bräuchte es ein trainiertes Mehrinstrumenten-Modell.
+  −3 … −27 dB/Oktave) und Stereoposition (Melodie −0,20 … +0,53, Horn −0,38 … +0,56) überlappen vollständig.
+  Auch freie trainierte Modelle helfen nicht (gemessen): YourMT3+ (Mehrinstrumenten-Transkription) nennt das
+  Blechquintett Violine/Cello/Klarinette und hört von 93 Referenztönen 61 (Basic Pitch auf den Demucs-Spuren
+  84, beide zusammen 85); AST (AudioSet) erkennt die Instrumentengruppe eines ganzen Stücks, ist in 3-s-Fenstern
+  aber unsicher und kennt keine Tuba; Klangfarbe Ton für Ton (Horn allein 3. Teilton −13 dB, Trompete −4 dB)
+  überlappt und kippt dort, wo sich Teiltöne beider Instrumente decken. Nichts davon ist eingebaut.
 - **Rhythmusfiguren**: dieselbe Sechzehntel-Figur (Galopp ♪♬, umgekehrt ♬♪) mindestens dreimal mit Lücken
   von höchstens drei Schlägen bleibt im Sechzehntel-Raster – sonst vereinfacht die Lesbarkeit sie zu Achteln
   (Einleitung von „Gonna Fly Now“). Zufällige Splitter wiederholen sich nicht so genau.

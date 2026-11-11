@@ -390,3 +390,27 @@ test('Melodieauswahl: gehaltener Kornett-Ton über dem lauteren Galopp eine Okta
   const held = vs.melody.filter((n) => n.start >= 0.2 * q && n.start < 2.7 * q).map((n) => n.midi);
   assert.ok(held.includes(69) && !held.includes(57), `gehalten A4, kein Galopp A3 – erkannt: ${held}`);
 });
+
+test('Melodieauswahl: Oktave unter einem gehaltenen, gehörten Ton ist Begleitung (Rocky T. 17–18, H4 über H3-Galopp)', () => {
+  // Echte Rohnoten: Kornett H4 ab Schlag 3¼ (¾ Schlag), die Signalanalyse hält H4 zwei Schläge; darunter lauter die
+  // Baritone auf H3 (3½, 3¾). Dann Kornett E4 auf der Eins des nächsten Takts – die Signalanalyse hält H4 dort noch.
+  // Referenz: H4, dann E4. Vorher: H3 H3 (die Oktave unter dem gehaltenen Hinweis bekam keinen Abzug), E4 fehlte.
+  const q = 24;
+  const raw = [
+    [3, 65, 0.34, 0.75], [3, 57, 0.53, 0.5], [3.25, 71, 0.52, 0.75], [3.5, 59, 0.69, 0.25], [3.75, 59, 0.61, 0.25],
+    [4, 64, 0.49, 0.25], [4, 59, 0.38, 0.5], [4, 55, 0.31, 0.5], [4, 52, 0.45, 0.5], [4, 48, 0.38, 0.5],
+    [4.25, 64, 0.46, 0.5], [4.5, 60, 0.46, 0.75], [4.5, 55, 0.48, 0.25], [4.5, 52, 0.6, 0.5], [4.5, 48, 0.46, 0.5],
+    [4.75, 55, 0.55, 1.5], [5, 64, 0.47, 0.5], [5, 52, 0.59, 0.75], [5, 48, 0.54, 0.25], [5.25, 59, 0.53, 0.25],
+  ];
+  const poly = raw.map(([b, m, a, d]) => ({ start: Math.round(b * q), dur: Math.round(d * q), midi: m, amp: a, stem: 'other' }));
+  const hint = [
+    { start: 3 * q, dur: 0.25 * q, midi: 57 },
+    { start: 3.25 * q, dur: 2 * q, midi: 71 },
+    { start: 5.25 * q, dur: 0.75 * q, midi: 64 },
+  ];
+  const vs = separateVoices(poly, { beat: q, mt: 4 * q, step: 6, hint });
+  const at = (t0, t1) => vs.melody.filter((n) => n.start >= t0 * q && n.start < t1 * q).map((n) => n.midi);
+  assert.ok(at(3.2, 3.3).includes(71), `H4 auf 3¼ – erkannt: ${at(3, 4)}`);
+  assert.ok(!at(3.4, 4).includes(59), `kein H3-Galopp unter H4 – erkannt: ${at(3, 4)}`);
+  assert.ok(at(4, 4.3).includes(64), `E4 auf der Eins – erkannt: ${at(4, 5)}`);
+});
