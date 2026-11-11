@@ -457,13 +457,16 @@ function pickMelody(notes, beat, hint, step) {
       if (!both) out[i].midi = to;
     }
   }
+  // (beide Regeln nicht für Töne, die die Signalanalyse genau so hört – Ton und Einsatz: dann ist der Abstecher
+  // Teil der Melodie, „Viva la Vida“ T. 10: F4 – B3 – F4)
+  const hintExact = (n) => hs.some((h) => h.midi === n.midi && Math.abs(h.start - n.start) <= step);
   // Begleit-Einsprengsel: ein kurzer Ton, der zwischen zwei Melodietönen mindestens eine Quinte
   // nach unten ausschert, gehört zur Begleitung
   for (let i = 1; i < out.length - 1; i++) {
     const p = out[i - 1];
     const n = out[i];
     const x = out[i + 1];
-    if (n.dur > 2 * step || n.start - p.start > 2 * beat || x.start - n.start > 2 * beat) continue;
+    if (n.dur > 2 * step || n.start - p.start > 2 * beat || x.start - n.start > 2 * beat || hintExact(n)) continue;
     if (p.midi - n.midi >= 7 && x.midi - n.midi >= 7) out.splice(i--, 1);
   }
   // … ebenso ein kurzer Abstecher von ein bis zwei Tönen (höchstens ein Schlag), nach dem die
@@ -475,7 +478,7 @@ function pickMelody(notes, beat, hint, step) {
       if (!x) continue;
       const run = out.slice(i, i + len);
       if (Math.abs(p.midi - x.midi) > 2 || x.start - run[0].start > beat) continue;
-      if (run.every((n) => p.midi - n.midi >= 5 && x.midi - n.midi >= 5)) {
+      if (run.every((n) => p.midi - n.midi >= 5 && x.midi - n.midi >= 5 && !hintExact(n))) {
         out.splice(i, len);
         i--;
         break;

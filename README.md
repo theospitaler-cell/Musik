@@ -123,11 +123,13 @@ Die Analyse läuft im Hintergrund.
   leeren Takte davor fallen weg. Gegen die Partituren: Ritz-Thema Takt 13/21, Refrain 27, Viva-Horn Takt 8 –
   genau wie gedruckt (vorher 16/24/30 bzw. 9); Rocky: Auftakt und Galopp wie gedruckt, das Thema einen Takt
   später, weil die Aufnahme den Akkord davor einen Takt länger hält.
-  Viva-Hornmelodie T. 8–11 (Referenz aus der Einzelstimme der Verlagsvorschau): 11/14 Töne genau (vorher 3/14 –
+  Viva-Hornmelodie T. 8–11 (Referenz aus der Einzelstimme der Verlagsvorschau): 12/14 Töne genau (vorher 3/14 –
   mit falscher Eins standen die Töne drei Schläge versetzt). Eine Tonrepetition unter einem gehaltenen Ton gilt
   nur noch als Begleitung, wenn die Signalanalyse den gehaltenen Ton hört – hört sie die Tonrepetition (und
   singt dort niemand), ist sie die Melodie und der lange Ton darüber ein Liegeklang (Horn G4 G4 G4 G4 unter
-  einem Holzbläser-C5).
+  einem Holzbläser-C5). Kurze Abstecher nach unten (F4 – B3 – F4) bleiben, wenn die Signalanalyse den Ton genau
+  so hört. Es fehlen ein Wiederanschlag (G4 auf der Eins nach G4 – nicht von einer zerstückelten Haltenote zu
+  unterscheiden) und ein B3, das die KI nicht hört.
 - **Melodieauswahl gegen Referenz-Noten geprüft** (Trompete 1 „Puttin' on the Ritz“, Ton für Ton): ein
   Oktavsprung auf den obersten echten Ton seiner Gruppe ist Melodie (C5 – C4 – F4), ein leiser Ton eine Oktave
   über einem lauteren ist Oberton, und wo die KI nur einen tiefen Begleitton hörte, gilt der deutlich höhere
