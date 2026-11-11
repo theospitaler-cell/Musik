@@ -1,0 +1,44 @@
+// Tempowechsel in Medleys (gemessen am Bond-Medley, Partitur: ♩ = 126 → „Slower“ ♩ = 104 → half time ♩ = 69 →
+// Andante ♩ = 76 → Meno mosso ♩ = 66 / Double time ♩ = 132 → ♩ = 138)
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { relatedTempoRuns } from '../src/input/audio.js';
+import { tempoMarksFromTiming } from '../src/input/tempo-marks.js';
+
+const CANDS = [];
+for (let b = 40; b <= 220; b *= 1.01) CANDS.push(b);
+const idx = (bpm) => CANDS.reduce((best, c, i) => (Math.abs(Math.log(c / bpm)) < Math.abs(Math.log(CANDS[best] / bpm)) ? i : best), 0);
+
+test('Tempokurve: langer Abschnitt im Verhältnis 3:4 ist ein Tempowechsel, eine kurze Figur nicht', () => {
+  const nW = 140;
+  const wins = [];
+  for (let w = 0; w < nW; w++) {
+    const raw = CANDS.map(() => 0.1);
+    const long = w >= 30 && w < 90; // 60 s „Goldfinger“ (♩ = 104, im halben Puls 52)
+    const short = w >= 110 && w < 120; // 10 s Triolen-Figur
+    raw[idx(69)] = long || short ? 0.6 : 1;
+    raw[idx(52)] = long || short ? 1 : 0.3;
+    wins.push({ raw });
+  }
+  const path = new Array(nW).fill(idx(69));
+  relatedTempoRuns(wins, path, CANDS);
+  const bpmAt = (w) => Math.round(CANDS[path[w]]);
+  for (const w of [32, 50, 70, 87]) assert.ok(Math.abs(bpmAt(w) - 52) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 52`);
+  for (const w of [10, 100, 112, 118, 130]) assert.ok(Math.abs(bpmAt(w) - 69) <= 1, `Fenster ${w}: ${bpmAt(w)} statt 69`);
+});
+
+test('Tempoangaben: neues Tempo über den ganzen Abschnitt gemessen, lange Abschnitte schon ab 7 %', () => {
+  // je Takt ein Tempo: 20 Takte 126, accel. (130, 140, 146), 40 Takte 138, 30 Takte 152, 20 Takte 132
+  const bars = [...Array(20).fill(126), 130, 140, 146, 145, 143, ...Array(38).fill(138), ...Array(30).fill(152), ...Array(20).fill(132)];
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+  const beatSec = [0];
+  for (const bpm of bars) for (let b = 0; b < 4; b++) beatSec.push(beatSec[beatSec.length - 1] + 60 / (bpm * (1 + 0.012 * rnd())));
+  const { marks } = tempoMarksFromTiming({ beatSec, firstBeat: 0 }, 4, bars.length);
+  const tempos = marks.filter((m) => m.kind === 'tempo' || m.kind === 'atempo').map((m) => m.bpm);
+  assert.ok(Math.abs(tempos[0] - 126) <= 1, `Anfang ${tempos[0]}`);
+  const after = marks.find((m) => m.bar >= 20 && m.bar <= 26 && (m.kind === 'tempo' || m.kind === 'atempo'));
+  assert.ok(after && Math.abs(after.bpm - 138) <= 2, `nach dem accel. ${after && after.bpm} statt 138 (${JSON.stringify(marks)})`);
+  assert.ok(marks.some((m) => m.kind === 'tempo' && Math.abs(m.bar - 63) <= 2 && Math.abs(m.bpm - 152) <= 2), `152 ab Takt 64 fehlt: ${JSON.stringify(marks)}`);
+  assert.ok(marks.some((m) => m.kind === 'tempo' && Math.abs(m.bar - 93) <= 2 && Math.abs(m.bpm - 132) <= 2), `132 ab Takt 94 fehlt: ${JSON.stringify(marks)}`);
+});

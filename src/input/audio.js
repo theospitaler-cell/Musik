@@ -584,6 +584,69 @@ export function dominantPeriod(A, n) {
   return top.l + (d < 0 ? (0.5 * (a - c)) / d : 0);
 }
 
+// Echte Tempowechsel im Verhältnis 3:4 oder 2:3 (Medley: ♩ = 138 -> „Slower“ ♩ = 104): die Fenster-Bewertung
+// hält solche Lagen für Fehl-Lagen einer Synkopen-/Triolenfigur (das alte Tempo „klingt noch“, weil drei
+// Achtel des neuen genau einen alten Schlag ergeben) und bleibt beim alten Tempo. Ist die verwandte Lage über
+// einen langen Abschnitt (≥ 24 s) klar stärker – in fast jedem Fenster, im Mittel um ≥ 0,2 –, ist es ein
+// Tempowechsel. Eine Figur reicht dafür nicht: sie wechselt sich mit dem Grundrhythmus ab.
+const RELATED = [3 / 4, 4 / 3, 2 / 3, 3 / 2];
+export function relatedTempoRuns(wins, path, cands) {
+  const nW = wins.length;
+  if (nW < 24) return;
+  const near = (w, bpm) => {
+    let arg = -1;
+    for (let k = 0; k < cands.length; k++) {
+      if (Math.abs(Math.log(cands[k] / bpm)) > 0.03) continue;
+      if (arg < 0 || wins[w].raw[k] > wins[w].raw[arg]) arg = k;
+    }
+    return arg;
+  };
+  for (const r of RELATED) {
+    const kr = new Int32Array(nW).fill(-1);
+    const gain = new Float32Array(nW).fill(-1);
+    for (let w = 0; w < nW; w++) {
+      const k = near(w, cands[path[w]] * r);
+      if (k < 0) continue;
+      kr[w] = k;
+      gain[w] = wins[w].raw[k] - wins[w].raw[path[w]];
+    }
+    let w = 0;
+    while (w < nW) {
+      if (gain[w] <= 0.08) {
+        w++;
+        continue;
+      }
+      // Lauf: klar stärkere Fenster, kurze Lücken (≤ 3 Fenster, nicht deutlich schwächer) erlaubt
+      let z = w;
+      let gap = 0;
+      for (let q = w + 1; q < nW; q++) {
+        if (gain[q] > 0.08) {
+          z = q;
+          gap = 0;
+        } else if (gain[q] > -0.1 && kr[q] >= 0 && ++gap <= 3) continue;
+        else break;
+      }
+      const len = z - w + 1;
+      let sum = 0;
+      let pos = 0;
+      for (let q = w; q <= z; q++) {
+        sum += gain[q];
+        if (gain[q] > 0.08) pos++;
+      }
+      if (len >= 24 && sum / len >= 0.2 && pos >= 0.8 * len) {
+        // geglättet: Median der verwandten Lage über ±2 Fenster
+        const ks = [];
+        for (let q = w; q <= z; q++) ks.push(kr[q] >= 0 ? kr[q] : path[q]);
+        for (let q = w; q <= z; q++) {
+          const nb = ks.slice(Math.max(0, q - w - 2), q - w + 3).sort((a, b) => a - b);
+          path[q] = nb[Math.floor(nb.length / 2)];
+        }
+      }
+      w = z + 1;
+    }
+  }
+}
+
 // Tempokurve: globales Tempo + örtliches Tempo je Fenster (Viterbi über die Fenster,
 // Sprünge kosten, bleiben aber möglich – für Tempowechsel zwischen Formteilen und rit.)
 export function tempoCurve(os) {
@@ -625,6 +688,7 @@ export function tempoCurve(os) {
     const gStill = gDirect >= 0.6 * Math.max(...direct);
     wins.push({
       c,
+      raw: s.map((v) => v / mx),
       s: s.map((v, k) => {
         const r = Math.log2(cands[k] / gBest);
         const metric = [Math.log2(3 / 4), Math.log2(4 / 3), Math.log2(2 / 3), Math.log2(3 / 2)].some((x) => Math.abs(r - x) < 0.06);
@@ -683,6 +747,7 @@ export function tempoCurve(os) {
       w = z + 1;
     }
   }
+  relatedTempoRuns(wins, path, cands);
   // je Frame interpolieren
   for (let t = 0; t < n; t++) {
     const x = (t - wins[0].c) / H;
@@ -1889,12 +1954,6 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
     if (vocal.filter((x) => x >= 0.2).length >= 0.1 * measureCount) fin.vocal = vocal;
   }
   if (aiInfo) fin.warnings.push(`Lokale KI (Basic Pitch): ${aiInfo.notes} Noten gehört – Melodie, Bass${aiTracks.length > 1 ? ' und Mittelstimmen' : ''} als eigene Spuren.`);
-  // Tempowechsel, rit./accel. aus den echten Schlagzeiten
-  const tm = tempoMarksFromTiming(fin.timing, m, measureCount);
-  fin.tempoMarks = tm.marks.map((x) => ({ ...x, bpm: Math.round(shuffle12 ? x.bpm * 1.5 : x.bpm) }));
-  // Tempoangabe am Anfang = Anfangstempo (wie in gedruckten Noten), nicht der Durchschnitt
-  if (tm.marks.length > 1 && fin.tempoMarks[0]) fin.tempo = fin.tempoMarks[0].bpm;
-  if (tm.marks.length > 1) fin.warnings.push(`Tempo ändert sich im Stück (${tm.marks.filter((x) => x.kind !== 'tempo' || x.bar > 0).map((x) => `Takt ${x.bar + 1}: ${x.kind === 'rit' ? 'rit.' : x.kind === 'accel' ? 'accel.' : x.kind === 'atempo' ? 'a tempo' : (shuffle12 ? '♩. = ' + Math.round(x.bpm / 1.5) : '♩ = ' + x.bpm)}`).join(', ')}).`);
   if (shuffle12) fin.warnings.push('Shuffle erkannt – notiert im 12/8-Takt (Triolen-Feeling).');
   if (halfTimeFixed) fin.warnings.push(`Tempo auf ${Math.round(bpm)} verdoppelt: das Schlagzeug und die schnellen Noten passen zum doppelten Tempo (mit „Tempo ÷2“ im Projekt umkehrbar).`);
   fin.duration = mono.length / SR;
@@ -1946,7 +2005,15 @@ export function transcribe(mono, { title = 'Audio-Import', onProgress = () => {}
   }
   // Stille am Anfang der Aufnahme (Vorlauf, Titelbild eines Videos): leere Takte vor dem ersten Ton fallen weg
   trimLeadingBars(fin, mt, m);
+  // Tempowechsel, rit./accel. aus den echten Schlagzeiten – erst nach dem Entfernen des Vorlaufs: in den stillen
+  // Takten eines Titelbilds rät der Schlag-Tracker, das verfälschte das Anfangstempo (Bond-Medley 128 statt 126)
+  // und die Taktzahlen der Hinweise
+  const tm = tempoMarksFromTiming(fin.timing, m, fin.measureCount);
+  fin.tempoMarks = tm.marks.map((x) => ({ ...x, bpm: Math.round(shuffle12 ? x.bpm * 1.5 : x.bpm) }));
   settleOpeningTempo(fin);
+  // Tempoangabe am Anfang = Anfangstempo (wie in gedruckten Noten), nicht der Durchschnitt
+  if (fin.tempoMarks.length > 1 && fin.tempoMarks[0]) fin.tempo = fin.tempoMarks[0].bpm;
+  if (fin.tempoMarks.length > 1) fin.warnings.push(`Tempo ändert sich im Stück (${fin.tempoMarks.filter((x) => x.kind !== 'tempo' || x.bar > 0).map((x) => `Takt ${x.bar + 1}: ${x.kind === 'rit' ? 'rit.' : x.kind === 'accel' ? 'accel.' : x.kind === 'atempo' ? 'a tempo' : (shuffle12 ? '♩. = ' + Math.round(x.bpm / 1.5) : '♩ = ' + x.bpm)}`).join(', ')}).`);
   // Stand der Analyse: ältere, gespeicherte Analysen lassen sich in der App neu berechnen
   fin.analysisVersion = ANALYSIS_VERSION;
   fin.aiUsed = hasAi;

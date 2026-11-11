@@ -30,6 +30,28 @@ export function tempoMarksFromTiming(timing, meterBeats, measureCount) {
   let cur = median(sm.slice(0, Math.min(n, 8)));
   marks.push({ bar: 0, kind: 'tempo', bpm: Math.round(cur) });
   const rel = (x) => x / cur - 1;
+  // Neues Tempo genauer: nach einem Wechsel (oder einem accel. davor) sind die ersten Takte oft noch nicht
+  // eingeschwungen – gemessen wird über den ganzen gleichmäßigen Abschnitt (bis 16 Takte, je Takt ±4 % um den
+  // laufenden Median). Bond-Medley: nach dem accel. 3 Takte 144, der Abschnitt danach 138 (Partitur ♩ = 69,
+  // halbes Tempo) – mit 144 als Bezug fielen die späteren Wechsel (152, 132) unter die Schwelle.
+  const settle = (mark, from) => {
+    // Takte 3–10 nach dem Wechsel; gilt, wenn mindestens 6 davon innerhalb ±4 % um ihren Median liegen
+    const seg = sm.slice(from + 2, Math.min(n, from + 10));
+    if (seg.length < 6) return;
+    const md = median(seg);
+    if (seg.filter((x) => Math.abs(x / md - 1) <= 0.04).length >= 6 && Math.abs(md / cur - 1) <= 0.08) {
+      cur = md;
+      mark.bpm = Math.round(cur);
+    }
+  };
+  // lang gleichmäßig in einem anderen Tempo (≥ 8 Takte, je Takt ±5 %): schon ab 7 % ein neues Tempo
+  // (Andante ♩ = 76 nach ♩ = 69 im Medley: 10 %, Meno mosso 66 nach 76: 13 %)
+  const longSteady = (from) => {
+    if (from + 8 > n) return null;
+    const seg = sm.slice(from, from + 8);
+    const md = median(seg);
+    return seg.every((x) => Math.abs(x / md - 1) < 0.05) ? md : null;
+  };
   let k = 1;
   while (k < n) {
     // stetige Änderung: mindestens 2 Takte in dieselbe Richtung, zusammen ≥ 10 %
@@ -46,7 +68,9 @@ export function tempoMarksFromTiming(timing, meterBeats, measureCount) {
     // abrupter Wechsel (innerhalb von höchstens 2 Takten, danach gleichmäßig neues Tempo)
     if (z - k + 1 <= 2 && after !== null && Math.abs(after / cur - 1) >= 0.1 && Math.abs(total) >= 0.08) {
       cur = after;
-      marks.push({ bar: k, kind: 'tempo', bpm: Math.round(cur) });
+      const mk = { bar: k, kind: 'tempo', bpm: Math.round(cur) };
+      marks.push(mk);
+      settle(mk, z + 1);
       k = z + 1;
       continue;
     }
@@ -61,7 +85,9 @@ export function tempoMarksFromTiming(timing, meterBeats, measureCount) {
         if (Math.abs(after / cur - 1) < 0.05) marks.push({ bar: z + 1, kind: 'atempo', bpm: Math.round(cur) });
         else {
           cur = after;
-          marks.push({ bar: z + 1, kind: 'tempo', bpm: Math.round(cur) });
+          const mk = { bar: z + 1, kind: 'tempo', bpm: Math.round(cur) };
+          marks.push(mk);
+          settle(mk, z + 1);
         }
       }
       k = z + 1;
@@ -69,9 +95,12 @@ export function tempoMarksFromTiming(timing, meterBeats, measureCount) {
     }
     // dauerhafter Sprung: ab hier mindestens 4 Takte gleichmäßig in einem anderen Tempo
     const w = steady(k, 4);
-    if (w !== null && Math.abs(rel(w)) >= 0.1 && Math.abs(rel(sm[k])) >= 0.06) {
-      cur = w;
-      marks.push({ bar: k, kind: 'tempo', bpm: Math.round(cur) });
+    const w8 = longSteady(k);
+    if ((w !== null && Math.abs(rel(w)) >= 0.1 && Math.abs(rel(sm[k])) >= 0.06) || (w8 !== null && Math.abs(rel(w8)) >= 0.07 && Math.abs(rel(sm[k])) >= 0.05)) {
+      cur = w !== null && Math.abs(rel(w)) >= 0.1 ? w : w8;
+      const mk = { bar: k, kind: 'tempo', bpm: Math.round(cur) };
+      marks.push(mk);
+      settle(mk, k);
     }
     k++;
   }
