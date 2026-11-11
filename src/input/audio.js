@@ -934,7 +934,20 @@ export function findMeter(bc, cues = {}) {
   if (beatsPer === 4) {
     const sp = snarePhase();
     if (cues.debug) cues.debug({ snare: sp, barBeats: cues.barBeats });
-    if (sp && sp.phases.length === 1) return { beats: 4, phase: sp.phases[0], snare: sp.type };
+    if (sp && sp.phases.length === 1) {
+      // Half-Time (ein betonter Schlag im Mittenband = Snare auf 3) – aber nicht gegen die Harmonik: passt eine
+      // andere Lage nach Bass-Drum, Basswechsel und Akkordwechseln klar besser (Abstand ≥ 4 in Standardabweichungen),
+      // sind die „Snare“-Schläge Akzente der Begleitung (Blasorchester ohne Backbeat: „Viva la Vida“, Akkord-Akzente
+      // ♩♩♩♪♪ – die Eins lag einen Schlag zu spät, Partitur und Bass belegen die Lage davor; Abstand dort 5,7)
+      // (Grundmerkmale ohne die Snare selbst; „tiefer Grundton“ und Becken nicht: ein Ostinato hat auf jedem
+      // Schlag einen Basston, Becken sind ohne Schlagzeug Rauschen)
+      const keys = { kick: 1.2, bass: 1, nov: 1.2, onset: 0.3 };
+      const all = evalMeter(4, keys).all;
+      const ph = sp.phases[0];
+      const best = all.indexOf(Math.max(...all));
+      if (all[best] - all[ph] >= 4) return { beats: 4, phase: best, snare: 'accent' };
+      return { beats: 4, phase: ph, snare: sp.type };
+    }
     if (sp) {
       // Backbeat: nur zwei Lagen möglich – davon die mit mehr Bass-Drum/Harmoniewechsel auf der "1"
       const keys = { kick: 1.2, bass: 1, nov: 1.2, crash: 0.4, fill: 0.3, root: 1.5 };
@@ -1504,12 +1517,46 @@ export function settleOpeningTempo(song) {
 // Leere Takte vor dem ersten Ton entfernen (Melodie, Spuren, Akkordanschläge; das Schlagzeug allein zählt
 // nicht als Einzähler). Alle Zeiten rücken um ganze Takte vor, der Zeitbezug zur Datei bleibt erhalten.
 export function trimLeadingBars(song, mt, beatsPerBar) {
-  const starts = [];
-  for (const n of song.melody || []) starts.push(n.start);
-  for (const t of song.tracks || []) for (const n of t.notes || []) starts.push(n.start);
-  for (const n of song.compHits || []) starts.push(n.start);
-  if (!starts.length) return 0;
-  const first = Math.min(...starts);
+  const all = [];
+  const bassNotes = new Set();
+  for (const n of song.melody || []) all.push(n);
+  for (const t of song.tracks || []) for (const n of t.notes || []) {
+    all.push(n);
+    if (t.role === 'bass') bassNotes.add(n);
+  }
+  for (const n of song.compHits || []) all.push(n);
+  if (!all.length) return 0;
+  all.sort((a, b) => a.start - b.start);
+  // ein, zwei vereinzelte Töne im Auftakt (vor Takt 1), nach denen mindestens ein halber Takt Stille kommt, sind
+  // Geräusch vor dem Einsatz – ein echter Auftakt führt ohne Pause in die Eins (Blasorchester-Aufnahme „Viva la
+  // Vida“: ein D4 vor der Eins, dann Stille bis zum zweiten Takt – die Takte zählten eins zu weit, Partitur-Takt 8
+  // stand als Takt 9). (Dieselbe Note kann in Melodie und Melodie-Spur stehen: gleiche Einsätze zählen einmal.)
+  const uniq = all.filter((n, i) => !all.slice(0, i).some((m) => m.start === n.start && m.midi === n.midi));
+  let first = uniq[0].start;
+  for (const c of [2, 1]) {
+    if (uniq.length <= c + 8) continue;
+    const head = uniq.slice(0, c);
+    const end = Math.max(...head.map((n) => n.start + (n.dur || 0)));
+    if (head.every((n) => n.start < 0) && uniq[c].start - end >= mt / 2) {
+      first = uniq[c].start;
+      break;
+    }
+  }
+  // vor dem ersten Ton von Melodie/Mittelstimmen nur „Basstöne“, davon mindestens die Hälfte unter E1: das ist
+  // Geräusch (Schnipsen, Rumpeln), keine Basslinie – ein Bass-Intro liegt in der Lage des Basses
+  // („Puttin' on the Ritz“: H0, G1, Es1, F1, Cis1 in drei Takten vor dem Tuba-Einsatz F3 – Takte zählten 3 zu weit)
+  // (ebenso wenige vereinzelte Töne ganz unten – höchstens vier, im Schnitt höchstens 1,5 je Takt, alle bis A1 –,
+  // „Gonna Fly Now“: F1, F1 (gehalten), G1 vor dem Achtel-Auftakt der Kornette; ein echtes Intro mit Bass oder
+  // Liegeklängen liegt höher oder hat ein Muster mit mehr Tönen)
+  {
+    const melStart = new Set((song.melody || []).map((n) => `${n.start}:${n.midi}`));
+    const firstUpper = uniq.find((n) => n.start >= first && melStart.has(`${n.start}:${n.midi}`)) || uniq.find((n) => !bassNotes.has(n) && n.start >= first);
+    const lead = firstUpper ? uniq.filter((n) => n.start >= first && n.start < firstUpper.start) : [];
+    const bars = Math.max(1, Math.ceil((firstUpper ? firstUpper.start - first : 0) / mt));
+    const lowNoise = lead.length >= 3 && lead.every((n) => bassNotes.has(n)) && lead.filter((n) => n.midi < 28).length >= lead.length / 2;
+    const sparse = lead.length <= 4 && lead.length / bars <= 1.5 && lead.every((n) => n.midi <= 33);
+    if (lead.length && (lowNoise || sparse)) first = firstUpper.start;
+  }
   const k = Math.floor(first / mt);
   if (k < 1 || k >= song.measureCount - 1) return 0;
   const sh = k * mt;
@@ -1543,6 +1590,9 @@ export function trimLeadingBars(song, mt, beatsPerBar) {
   if (song.timing) song.timing = { ...song.timing, firstBeat: song.timing.firstBeat + k * beatsPerBar };
   song.measureCount -= k;
   song.trimmedBars = k;
+  // Auftakt neu: vereinzelte Töne davor sind weggefallen
+  const pick = (song.melody || []).filter((n) => n.start < 0);
+  song.pickup = pick.length ? -Math.min(...pick.map((n) => n.start)) : 0;
   return k;
 }
 

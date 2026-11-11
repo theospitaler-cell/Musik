@@ -115,6 +115,16 @@ Die Analyse läuft im Hintergrund.
 - **Tempo- und Tonartangabe am Anfang**: das erste feste Tempo nach dem entfernten Vorlauf (ein Einschwingen
   davor ohne Zeichen); Tonart aus den gehörten Stimmen, bei Dur/Moll auf demselben Grundton gilt der Anfang
   (Medley: f-Moll am Anfang, F-Dur in der Mitte → f-Moll wie die Partitur).
+- **Takt-Eins und Taktzählung wie in der Partitur**: Half-Time („Snare“ nur auf einem Schlag) entscheidet die
+  Eins nicht mehr gegen die Harmonik – passt eine andere Lage nach Bass-Drum, Bass- und Akkordwechseln klar
+  besser, sind die Schläge Akzente der Begleitung („Viva la Vida“, Blasorchester: die Eins lag einen Schlag zu
+  spät; jetzt steht das Ostinato ♩♩♩♪♪ | 𝄾♪𝄾♪♩♩ wie in der Partitur). Vor dem Einsatz zählen weder ein
+  vereinzelter Ton im Auftakt mit Stille danach noch Rumpeln ganz unten (wenige Töne bis A1) als Musik: die
+  leeren Takte davor fallen weg. Gegen die Partituren: Ritz-Thema Takt 13/21, Refrain 27, Viva-Horn Takt 8 –
+  genau wie gedruckt (vorher 16/24/30 bzw. 9); Rocky: Auftakt und Galopp wie gedruckt, das Thema einen Takt
+  später, weil die Aufnahme den Akkord davor einen Takt länger hält.
+  Viva-Hornmelodie T. 8–11 (Referenz aus der Einzelstimme der Verlagsvorschau): 9/14 Töne genau (vorher 3/14 –
+  mit falscher Eins standen die Töne drei Schläge versetzt).
 - **Melodieauswahl gegen Referenz-Noten geprüft** (Trompete 1 „Puttin' on the Ritz“, Ton für Ton): ein
   Oktavsprung auf den obersten echten Ton seiner Gruppe ist Melodie (C5 – C4 – F4), ein leiser Ton eine Oktave
   über einem lauteren ist Oberton, und wo die KI nur einen tiefen Begleitton hörte, gilt der deutlich höhere
